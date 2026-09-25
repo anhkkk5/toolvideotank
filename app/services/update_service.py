@@ -17,7 +17,7 @@ import urllib.request
 import zipfile
 from typing import Any, Callable
 
-from app.version import APP_VERSION, GITHUB_REPO
+from app.version import APP_VERSION, GITHUB_REPO, UPDATE_CONFIG_URL
 
 
 def parse_version_tuple(ver_str: str) -> tuple[int, ...]:
@@ -38,13 +38,13 @@ class UpdateService:
         self.repo = GITHUB_REPO
 
     def check_for_updates(self) -> dict[str, Any]:
-        """Kiểm tra bản cập nhật mới nhất từ GitHub Releases API."""
-        url = f"https://api.github.com/repos/{self.repo}/releases/latest"
+        """Kiểm tra bản cập nhật mới nhất từ cấu hình phát hành (Gist / Server)."""
+        url = f"{UPDATE_CONFIG_URL}?t={int(time.time())}" if UPDATE_CONFIG_URL else f"https://api.github.com/repos/{self.repo}/releases/latest"
         req = urllib.request.Request(
             url,
             headers={
                 "User-Agent": "TankVideo-AutoUpdater",
-                "Accept": "application/vnd.github.v3+json",
+                "Cache-Control": "no-cache",
             },
         )
         try:
@@ -55,45 +55,36 @@ class UpdateService:
         except Exception as exc:
             return {"has_update": False, "error": str(exc)}
 
-        tag_name = str(data.get("tag_name", "") or "").strip()
-        latest_ver_clean = tag_name.lstrip("vV")
+        latest_version = str(data.get("version") or data.get("tag_name") or "").strip()
+        latest_ver_clean = latest_version.lstrip("vV")
         current_ver_clean = self.current_version.lstrip("vV")
 
         has_update = parse_version_tuple(latest_ver_clean) > parse_version_tuple(current_ver_clean)
 
-        assets = list(data.get("assets") or [])
-        patch_asset = None
-        # Ưu tiên tìm file patch nhỏ (dưới 100MB)
-        for asset in assets:
-            name = str(asset.get("name", "")).lower()
-            if name.endswith(".zip") and ("patch" in name or "update" in name or "tankvideo" in name):
-                patch_asset = asset
-                break
-        if not patch_asset and assets:
+        download_url = str(data.get("download_url") or "").strip()
+        if not download_url:
+            assets = list(data.get("assets") or [])
             for asset in assets:
                 if str(asset.get("name", "")).lower().endswith(".zip"):
-                    patch_asset = asset
+                    download_url = asset.get("browser_download_url", "")
                     break
+            if not download_url:
+                download_url = data.get("html_url", "")
 
-        download_url = ""
-        size_mb = 0.0
-        if patch_asset:
-            download_url = patch_asset.get("browser_download_url", "")
-            size_mb = round(float(patch_asset.get("size", 0)) / (1024 * 1024), 1)
-        else:
-            download_url = data.get("html_url", f"https://github.com/{self.repo}/releases/latest")
+        size_mb = float(data.get("size_mb", 0) or 0)
+        title = data.get("name") or data.get("title") or f"Bản cập nhật v{latest_version}"
+        body = data.get("notes") or data.get("body") or "Bản cập nhật tối ưu hiệu năng và tính năng mới."
 
         return {
             "has_update": has_update,
             "current_version": self.current_version,
-            "latest_version": tag_name or latest_ver_clean,
-            "title": data.get("name", f"Bản cập nhật {tag_name}"),
-            "body": data.get("body", "Bản cập nhật cải tiến hiệu năng và tính năng mới."),
-            "published_at": data.get("published_at", ""),
+            "latest_version": latest_version or latest_ver_clean,
+            "title": title,
+            "body": body,
             "download_url": download_url,
-            "is_direct_zip": bool(patch_asset and download_url.endswith(".zip")),
+            "is_direct_zip": bool(download_url.endswith(".zip")),
             "size_mb": size_mb,
-            "release_url": data.get("html_url", ""),
+            "release_url": download_url,
         }
 
     def download_and_install_patch(

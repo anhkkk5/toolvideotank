@@ -201,6 +201,8 @@ class UpdateDialog(QDialog):
         self.update_btn.setEnabled(True)
         if info.get("is_direct_zip"):
             self.update_btn.setText("🚀 Cập nhật tự động (1-Click)")
+        elif "drive.google.com" in download_url:
+            self.update_btn.setText("🌐 Tải từ Google Drive")
         else:
             self.update_btn.setText("🌐 Mở trang tải về")
 
