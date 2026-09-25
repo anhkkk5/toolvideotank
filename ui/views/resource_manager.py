@@ -20,9 +20,9 @@ from services import ResourceDownloadService
 
 
 _STATUS_STYLES = {
-    "installed": ("Ready", "#3ddc97", "#1b3b2c"),
-    "partial":   ("Partial", "#f0b347", "#3b2f12"),
-    "missing":   ("Missing", "#ff6b6b", "#3b1a1a"),
+    "installed": ("Sẵn sàng", "#3ddc97", "#1b3b2c"),
+    "partial":   ("Một phần", "#f0b347", "#3b2f12"),
+    "missing":   ("Chưa tải", "#ff6b6b", "#3b1a1a"),
 }
 
 
@@ -56,7 +56,7 @@ def _open_folder_dialog(gui_parent, path: str) -> None:
         os.makedirs(target, exist_ok=True)
         os.startfile(os.path.abspath(target))
     except Exception as exc:
-        QMessageBox.critical(gui_parent, "Error", f"Could not open folder:\n{exc}")
+        QMessageBox.critical(gui_parent, "Lỗi", f"Không thể mở thư mục:\n{exc}")
 
 
 def open_resource_manager(workspace_root: str = None, parent=None,
@@ -67,7 +67,7 @@ def open_resource_manager(workspace_root: str = None, parent=None,
     service = ResourceDownloadService(workspace_root)
 
     dialog = QDialog(parent)
-    dialog.setWindowTitle("Manage Resources")
+    dialog.setWindowTitle("Quản lý tài nguyên")
     dialog.setModal(True)
     dialog.resize(820, 580)
     dialog.setStyleSheet("""
@@ -95,14 +95,14 @@ def open_resource_manager(workspace_root: str = None, parent=None,
     layout.setContentsMargins(18, 18, 18, 18)
     layout.setSpacing(12)
 
-    title = QLabel("Manage Resources", dialog)
+    title = QLabel("Quản lý tài nguyên AI & Runtime", dialog)
     title.setObjectName("resourceTitle")
     layout.addWidget(title)
 
     hint = QLabel(
-        "Each resource shows its target folder and download link. "
-        "Use 'Download' for supported resources or download the file yourself "
-        "and drop it into the target folder. Use 'Refresh' to re-check status.",
+        "Mỗi tài nguyên hiển thị thư mục đích và nút tải tương ứng. "
+        "Bấm nút 'Tải ...' để tải tự động hoặc tải thủ công rồi sao chép vào thư mục đích. "
+        "Bấm 'Làm mới' sau khi sao chép để cập nhật trạng thái.",
         dialog,
     )
     hint.setObjectName("resourceHint")
@@ -139,10 +139,10 @@ def open_resource_manager(workspace_root: str = None, parent=None,
             return
         if active:
             button.setEnabled(False)
-            button.setText(str(message or "Downloading..."))
+            button.setText(str(message or "Đang tải..."))
         else:
             button.setEnabled(bool(row.get("download_supported", False)))
-            button.setText(str(row.get("download_label", "Download")))
+            button.setText(str(row.get("download_label", "Tải xuống")))
 
     def _on_download_progress(percent: int, message: str):
         resource_id = active_resource_id[0]
@@ -154,9 +154,9 @@ def open_resource_manager(workspace_root: str = None, parent=None,
         except (TypeError, ValueError):
             value = -1
         if value >= 0:
-            _set_download_button(row, active=True, message=f"Downloading... {max(0, min(100, value))}%")
+            _set_download_button(row, active=True, message=f"Đang tải... {max(0, min(100, value))}%")
         else:
-            _set_download_button(row, active=True, message="Downloading...")
+            _set_download_button(row, active=True, message="Đang tải...")
 
     def _on_download_finished(resource_id: str, error: str):
         download_worker[0] = None
@@ -169,8 +169,8 @@ def open_resource_manager(workspace_root: str = None, parent=None,
             from PySide6.QtWidgets import QMessageBox
             QMessageBox.warning(
                 dialog,
-                "Resource Download Failed",
-                f"Could not download {resource_id}.\n\n{error}",
+                "Tải tài nguyên thất bại",
+                f"Không thể tải {resource_id}.\n\n{error}",
             )
             return
         _refresh()
@@ -188,18 +188,68 @@ def open_resource_manager(workspace_root: str = None, parent=None,
             from PySide6.QtWidgets import QMessageBox
             QMessageBox.information(
                 dialog,
-                "Download in Progress",
-                "Another resource is already downloading. Please wait for it to finish.",
+                "Đang có tiến trình tải",
+                "Một tài nguyên khác đang được tải về. Vui lòng đợi hoàn tất.",
             )
             return
         row = dialog._resource_rows.get(rid)
         if row is None or not row.get("download_supported", False):
             return
+
+        if rid == "voice:vieneu":
+            if service.is_resource_installed("voice:vieneu"):
+                from PySide6.QtWidgets import QMessageBox
+                QMessageBox.information(
+                    dialog,
+                    "VieNeu TTS đã sẵn sàng",
+                    "Gói giọng đọc VieNeu AI Neural (Cô gái hoạt ngôn & Thanh niên tự tin) đã được cài đặt và SẴN SÀNG sử dụng trên máy tính của bạn!\n\n"
+                    "Bạn có thể sử dụng ngay 2 giọng đọc này khi tạo dự án và vào màn hình Lồng tiếng mà không cần tải lại.",
+                    QMessageBox.Ok,
+                )
+                return
+
+            try:
+                from app.services.license_service import LicenseService
+                lic = LicenseService(workspace_root)
+                is_valid, _ = lic.is_license_valid()
+                if not is_valid:
+                    from PySide6.QtWidgets import QMessageBox
+                    ans = QMessageBox.question(
+                        dialog,
+                        "Tài nguyên VIP (VieNeu AI Neural)",
+                        "Gói VieNeu TTS (~4.5 GB) dành cho tài khoản VIP.\n\n"
+                        "Bạn có muốn mở hộp thoại kích hoạt bản quyền VIP trước khi tải không?",
+                        QMessageBox.Yes | QMessageBox.No,
+                        QMessageBox.Yes,
+                    )
+                    if ans == QMessageBox.Yes:
+                        from ui.dialogs.login_license_dialog import LoginLicenseDialog
+                        dlg = LoginLicenseDialog(dialog, workspace_root=workspace_root)
+                        dlg.exec()
+            except Exception:
+                pass
+
+            from PySide6.QtWidgets import QMessageBox
+            ans = QMessageBox.question(
+                dialog,
+                "Tải gói VieNeu AI (~4.5 GB)",
+                "Gói VieNeu Neural TTS có dung lượng lớn (~4.5 GB) trên Google Drive.\n\n"
+                "Để tải với tốc độ cao nhất và an toàn nhất, phần mềm sẽ mở link Google Drive trên trình duyệt của bạn.\n\n"
+                "Sau khi tải xong file 'vieneu_runtime_full.zip', hãy giải nén vào thư mục lưu trữ rồi bấm nút 'Làm mới'.\n\n"
+                "Bạn có muốn mở trang tải về ngay bây giờ không?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes,
+            )
+            if ans == QMessageBox.Yes:
+                _open_url("https://drive.google.com/file/d/1hMVIr-E0xSeKg8kEeU4EvbZYwlODkHoB/view?usp=sharing")
+            return
+
         try:
             from worker_adapters.processing_workers import ResourceDownloadWorker
+
         except Exception as exc:
             from PySide6.QtWidgets import QMessageBox
-            QMessageBox.warning(dialog, "Resource Download", f"Download worker is unavailable:\n\n{exc}")
+            QMessageBox.warning(dialog, "Tải tài nguyên", f"Tiến trình tải không khả dụng:\n\n{exc}")
             return
 
         download_state["running"] = True
@@ -220,13 +270,14 @@ def open_resource_manager(workspace_root: str = None, parent=None,
 
         header_row = QHBoxLayout()
         header_row.setSpacing(8)
-        name_label = QLabel(str(item.get("name", item.get("id", "Resource"))), dialog)
+        name_label = QLabel(str(item.get("name", item.get("id", "Tài nguyên"))), dialog)
         name_label.setStyleSheet("color: #f8fbff; font-weight: 700; font-size: 14px; background-color: transparent;")
         header_row.addWidget(name_label, 1)
 
         required_for = str(item.get("required_for", "") or "").strip()
         if required_for:
-            required_label = QLabel(f"Required for {required_for}", dialog)
+            req_text = "Chế độ GPU" if "GPU" in required_for else required_for
+            required_label = QLabel(f"Bắt buộc cho {req_text}", dialog)
             required_label.setStyleSheet(
                 "color: #ffd28a; font-size: 10px; font-weight: 700; "
                 "background-color: #4a3520; border: 1px solid #8b6734; "
@@ -252,11 +303,27 @@ def open_resource_manager(workspace_root: str = None, parent=None,
 
         target_dir = str(item.get("target_dir", "")).strip()
         if target_dir:
+            display_dir = target_dir
+            lower_dir = target_dir.lower()
+            if "models" in lower_dir:
+                idx = lower_dir.find("models")
+                display_dir = os.path.join("TankVideo", target_dir[idx:])
+            else:
+                try:
+                    from app.runtime_paths import workspace_root
+                    ws = workspace_root()
+                    if lower_dir.startswith(ws.lower()):
+                        rel = os.path.relpath(target_dir, ws)
+                        display_dir = os.path.join("TankVideo", rel)
+                except Exception:
+                    pass
+            display_dir = display_dir.replace("CapCap", "TankVideo").replace("capcap", "TankVideo")
+
             path_row = QHBoxLayout()
             path_row.setSpacing(6)
-            path_label = QLabel("Target folder:", dialog)
+            path_label = QLabel("Thư mục lưu:", dialog)
             path_label.setStyleSheet("color: #8ea3bb; font-size: 11px; background-color: transparent;")
-            path_value = QLabel(target_dir, dialog)
+            path_value = QLabel(display_dir, dialog)
             path_value.setStyleSheet("color: #d7e3f4; font-size: 11px; font-family: monospace; background-color: transparent;")
             path_value.setTextInteractionFlags(Qt.TextSelectableByMouse)
             path_value.setWordWrap(True)
@@ -268,7 +335,7 @@ def open_resource_manager(workspace_root: str = None, parent=None,
         if expected:
             file_row = QHBoxLayout()
             file_row.setSpacing(6)
-            file_caption = QLabel("Expected file:", dialog)
+            file_caption = QLabel("Tệp yêu cầu:", dialog)
             file_caption.setStyleSheet("color: #8ea3bb; font-size: 11px; background-color: transparent;")
             file_value = QLabel(expected, dialog)
             file_value.setStyleSheet("color: #d7e3f4; font-size: 11px; font-family: monospace; background-color: transparent;")
@@ -283,46 +350,60 @@ def open_resource_manager(workspace_root: str = None, parent=None,
         button_row.addStretch(1)
 
         download_url = str(item.get("download_url", "")).strip()
-        download_btn = QPushButton("Open Download Page", dialog)
+        resource_id = str(item.get("id", "") or "").strip()
+        download_btn = QPushButton("Mở trang tải về", dialog)
         download_btn.setObjectName("primaryBtn")
-        download_btn.setEnabled(bool(download_url))
-        if download_url:
-            download_btn.setToolTip(download_url)
-        download_btn.clicked.connect(
-            lambda _checked=False, url=download_url: _open_url(url)
-        )
+        if resource_id == "voice:vieneu" and not download_url:
+            download_btn.setEnabled(True)
+            download_btn.setToolTip("Liên hệ Admin để nhận quyền truy cập Google Drive tải gói VieNeu")
+            def _open_vieneu_drive():
+                from PySide6.QtWidgets import QMessageBox
+                QMessageBox.information(
+                    dialog,
+                    "Tải gói VieNeu Neural TTS",
+                    "Gói VieNeu AI (Cô gái hoạt ngôn & Thanh niên tự tin) được lưu trữ trên Google Drive bảo mật.\n\n"
+                    "👉 Sau khi đăng ký tài khoản VIP, bạn sẽ được Admin cấp quyền tải trực tiếp vào địa chỉ Gmail của bạn.\n\n"
+                    "Sau khi tải về, hãy giải nén file vào thư mục lưu trữ (bấm nút 'Mở thư mục lưu') rồi bấm 'Làm mới'.",
+                )
+            download_btn.clicked.connect(_open_vieneu_drive)
+        else:
+            download_btn.setEnabled(bool(download_url))
+            if download_url:
+                download_btn.setToolTip(download_url)
+            download_btn.clicked.connect(
+                lambda _checked=False, url=download_url: _open_url(url)
+            )
         button_row.addWidget(download_btn)
 
         resource_id = str(item.get("id", "") or "").strip()
-        # Every resource with a service-side download handler gets a one-click
-        # action.  The existing Open Download Page action remains available as
-        # a manual/alternative path.
         download_supported = bool(
             item.get("auto_download_supported", False)
             and service.supports_auto_download(resource_id)
         )
         resource_download_btn = None
         download_label = {
-            "whisper:base": "Download Whisper",
-            "whisper:small": "Download Whisper",
-            "whisper:medium": "Download Whisper",
-            "cuda:whisper": "Download GPU Pack",
-            "sensevoice:model": "Download SenseVoice",
-            "ocr:engine": "Download Rapid OCR",
-            "diarization:segmentation": "Download Speaker Model",
-            "diarization:embedding": "Download Speaker Model",
-            "voice:pack": "Download Voices",
-            "voice:pack-en": "Download Voices",
-        }.get(resource_id, "Download")
+            "whisper:base": "Tải Whisper Base",
+            "whisper:small": "Tải Whisper Small",
+            "whisper:medium": "Tải Whisper Medium",
+            "cuda:whisper": "Tải gói tăng tốc GPU",
+            "sensevoice:model": "Tải SenseVoice",
+            "ocr:engine": "Tải Rapid OCR",
+            "diarization:segmentation": "Tải mô hình người nói",
+            "diarization:embedding": "Tải mô hình người nói",
+            "voice:pack": "Tải giọng đọc Tiếng Việt",
+            "voice:pack-en": "Tải giọng đọc Tiếng Anh",
+            "voice:vieneu": "Tải gói VieNeu TTS",
+        }.get(resource_id, "Tải xuống")
+
         if download_supported:
             resource_download_btn = QPushButton(download_label, dialog)
-            resource_download_btn.setToolTip("Download this resource into the target folder")
+            resource_download_btn.setToolTip("Tải tài nguyên này tự động vào thư mục lưu")
             resource_download_btn.clicked.connect(
                 lambda _checked=False, rid=item["id"]: _start_download(rid)
             )
             button_row.addWidget(resource_download_btn)
 
-        open_folder_btn = QPushButton("Open Storage Folder", dialog)
+        open_folder_btn = QPushButton("Mở thư mục lưu", dialog)
         open_folder_btn.setEnabled(bool(target_dir))
         open_folder_btn.clicked.connect(
             lambda _checked=False, p=target_dir: _open_folder_dialog(dialog, p)
@@ -405,27 +486,19 @@ def open_resource_manager(workspace_root: str = None, parent=None,
         voice_items = [r for r in resources if r.get("kind") == "voice"]
 
         if cpu_items:
-            cpu_card, cpu_layout = _make_section("CPU Resource", expanded=True)
+            cpu_card, cpu_layout = _make_section("Tài nguyên CPU", expanded=True)
             for item in cpu_items:
                 _add_card(item, cpu_layout)
             content_layout.addWidget(cpu_card)
 
         if gpu_items:
-            # GPU resources remain relevant in CPU Mode: users need a clear
-            # place to find the GPU Acceleration Pack before switching modes.
-            # Previously this header was conditionally removed based on the
-            # process environment, which made "GPU Resource" appear to vanish
-            # after launcher/device-state refreshes.
-            # Keep GPU resources expanded by default so the GPU Acceleration
-            # Pack is immediately discoverable, even when the launcher starts
-            # in CPU mode.  Users can still collapse the section manually.
-            gpu_card, gpu_layout = _make_section("GPU Resource", expanded=True)
+            gpu_card, gpu_layout = _make_section("Tài nguyên GPU", expanded=True)
             for item in gpu_items:
                 _add_card(item, gpu_layout)
             content_layout.addWidget(gpu_card)
 
         if speaker_items:
-            speaker_card, speaker_layout = _make_section("Speaker Detection Resources", expanded=False)
+            speaker_card, speaker_layout = _make_section("Mô hình nhận diện người nói", expanded=False)
             for item in speaker_items:
                 _add_card(item, speaker_layout)
             content_layout.addWidget(speaker_card)
@@ -440,18 +513,18 @@ def open_resource_manager(workspace_root: str = None, parent=None,
     footer_row = QHBoxLayout()
     footer_row.setSpacing(8)
     footer_hint = QLabel(
-        "Tip: target folders are created automatically when you open them.",
+        "Mẹo: Các thư mục lưu trữ sẽ tự động được tạo khi bạn bấm mở.",
         dialog,
     )
     footer_hint.setObjectName("resourceHint")
     footer_hint.setWordWrap(True)
     footer_row.addWidget(footer_hint, 1)
 
-    refresh_btn = QPushButton("Refresh", dialog)
+    refresh_btn = QPushButton("Làm mới", dialog)
     refresh_btn.clicked.connect(_refresh)
     footer_row.addWidget(refresh_btn)
 
-    close_btn = QPushButton("Close", dialog)
+    close_btn = QPushButton("Đóng", dialog)
     close_btn.clicked.connect(dialog.accept)
     footer_row.addWidget(close_btn)
 

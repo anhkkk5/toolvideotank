@@ -71,6 +71,15 @@ class SegmentService:
                 source_speaker = str(base_model.metadata.get("speaker", "") or "").strip()
                 if source_speaker and "speaker" not in seg:
                     model.metadata["speaker"] = source_speaker
+                # Translation providers normally return text/timing only.
+                # Character identity belongs to the source cue and must cross
+                # this boundary intact for confidence badges and TTS casting.
+                for key in (
+                    "audio_speaker", "speaker_confidence", "character_id",
+                    "character_gender", "character_confidence", "character_source",
+                ):
+                    if key in base_model.metadata and key not in seg:
+                        model.metadata[key] = base_model.metadata.get(key)
                 source_highlights = base_model.metadata.get("manual_highlights")
                 if source_highlights and "manual_highlights" not in seg:
                     model.metadata["manual_highlights"] = list(source_highlights)

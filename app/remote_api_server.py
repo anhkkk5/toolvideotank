@@ -12,6 +12,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import threading
 
 os.environ.setdefault("CAPCAP_RUNTIME_PROFILE", "local")
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".env")), override=False)
+except Exception:
+    pass
 
 
 def _configure_worker_text_streams() -> None:

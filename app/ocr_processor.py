@@ -100,6 +100,13 @@ _OCR_HANDLE_RE = re.compile(r"@\s*[A-Za-z0-9_\-\u3400-\u9fff]{1,24}")
 _OCR_WATERMARK_PATTERNS = [
     re.compile(r"[\u3400-\u9fff]{1,6}漫(?:剧|居|刷)"),
     re.compile(r"专店"),
+    re.compile(r"剧情(?:需要)?\s*请勿模仿"),
+    re.compile(r"请勿模仿"),
+    re.compile(r"全剧(?:纯属)?虚构"),
+    re.compile(r"请勿当真"),
+    re.compile(r"仅供娱乐"),
+    re.compile(r"谨防上当受骗"),
+    re.compile(r"备注\s*[:：].*"),
 ]
 
 
@@ -212,9 +219,13 @@ def _load_ocr_engine():
         # derives it from its installed-package path, which is unreliable in
         # a PyInstaller bundle and can surface as a generic "No such file or
         # directory" error in the OCR Translator worker.
+        cpu_threads = min(8, max(2, os.cpu_count() or 4))
         base_params = {
             "Global.log_level": "error",
             "Global.model_root_dir": models_dir,
+            "Det.limit_type": "max",
+            "Det.limit_side_len": int(os.getenv("OCR_DET_LIMIT_SIDE_LEN", "960")),
+            "EngineConfig.onnxruntime.intra_op_num_threads": cpu_threads,
         }
         if variant == "PP-OCRv4":
             # RapidOCR 3.x defaults to PP-OCRv6.  Select the legacy model
@@ -270,11 +281,19 @@ def crop_subtitle_region(image, region="bottom"):
             pass
     effective_region = (os.getenv("OCR_SUBTITLE_REGION") or region or "bottom").strip().lower()
     if effective_region == "bottom":
-        ratio = float(os.getenv("OCR_CROP_RATIO", "0.25"))
-        top = int(h * (1.0 - ratio))
-        return image[top:h, 0:w]
+        if h > w:
+            # Vertical short-drama video (9:16): dialogue subtitles are placed in the lower-middle band (56% to 74% height)
+            # This precisely avoids bottom receipts, letters, TikTok progress bars, and chest clothing prints.
+            top = int(h * float(os.getenv("OCR_VERTICAL_TOP_RATIO", "0.56")))
+            bottom = int(h * float(os.getenv("OCR_VERTICAL_BOTTOM_RATIO", "0.74")))
+            return image[top:bottom, 0:w]
+        else:
+            ratio = float(os.getenv("OCR_CROP_RATIO", "0.28"))
+            top = int(h * (1.0 - ratio))
+            bottom = int(h * 0.96)
+            return image[top:bottom, 0:w]
     elif effective_region == "top":
-        ratio = float(os.getenv("OCR_CROP_RATIO", "0.25"))
+        ratio = float(os.getenv("OCR_CROP_RATIO", "0.28"))
         return image[0:int(h * ratio), 0:w]
     else:
         return image
@@ -302,45 +321,75 @@ def _sanitize_ocr_line(text: str) -> str:
     cleaned = _OCR_HANDLE_RE.sub(" ", cleaned)
     for pattern in _OCR_WATERMARK_PATTERNS:
         cleaned = pattern.sub(" ", cleaned)
+    cleaned = re.sub(r"^\d+[\.\s、:：]+", "", cleaned)
     cleaned = " ".join(cleaned.split()).strip(" -_.,;:!?|/\\[]{}()<>'\"`~")
     if not cleaned:
         return ""
 
-    # Preserve short and ASCII text. "OK", names, numbers, single-word
-    # captions and one-character interjections can all be valid on-screen
-    # subtitles. Watermark/handle patterns above remain the only explicit
-    # OCR text suppression.
+    # Check if text has any valid dialogue characters (Chinese/CJK or Latin letters)
+    has_cjk = bool(re.search(r"[\u4e00-\u9fff\u3400-\u4dbf]", cleaned))
+    has_letters = bool(re.search(r"[A-Za-z\u00C0-\u024F\u1EA0-\u1EF9]", cleaned))
+    if not has_cjk and not has_letters:
+        # Standalone numbers (e.g. "96", "100%"), timestamps, or punctuation without words
+        return ""
+
+    if has_cjk:
+        # Common Chinese OCR glyph misrecognitions:
+        # '7' or 'J' attached to or right after a Chinese character is almost always an OCR misread of '了'
+        # e.g., '咋7' -> '咋了', '来7' -> '来了', '对J' -> '对了', '太7' -> '太了'
+        cleaned = re.sub(r"(?<=[\u4e00-\u9fff\u3400-\u4dbf])\s*[7J](?=[^\d]|$)", "了", cleaned)
+
+    # Filter out non-dialogue text (food receipts, medication deliveries, address headers, letter salutations)
+    if re.search(r"(?:份餐具|外卖|送药|医药也快|A栋|a栋|To\s*[\u4e00-\u9fff]|排骨.*必涌泉)", cleaned):
+        return ""
+
+    # Discard isolated single Chinese character (unless common modal particles/interjections)
+    if has_cjk and len(cleaned) == 1:
+        if cleaned not in {"啊", "哦", "喂", "嗯", "好", "对", "走", "行", "没", "你", "我"}:
+            return ""
+
+    if not has_cjk:
+        # Isolated English words/letters are almost always clothing prints or background logos (CALIFORN, SOSTINE, SOS, R, V)
+        words = cleaned.split()
+        if len(words) < 3:
+            return ""
+
+    # Discard single punctuation or single non-cjk noise characters
+    if len(cleaned) == 1 and not has_cjk and not cleaned.isalnum():
+        return ""
+
     return cleaned
 
 
 def _is_blank_region(image):
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     lap = cv2.Laplacian(gray, cv2.CV_64F)
-    if float(lap.var()) < 30.0:
+    if float(lap.var()) < 15.0:
         return True
     bright_ratio = float(np.sum(gray > 180)) / gray.size
-    # Small, single-character white subtitles can occupy only about 0.1% of a
-    # bottom crop.  The previous 0.2% cutoff labelled those valid subtitle
-    # frames as blank before RapidOCR was allowed to inspect them.
-    if bright_ratio > 0.0005:
+    # Small, single-character white subtitles can occupy only about 0.05% of a
+    # expanded crop.
+    if bright_ratio > 0.0003:
         return False
     return True
 
 
-def ocr_frame(engine, image, profiling=None):
+def ocr_frame(engine, image, profiling=None, return_details=False):
     """OCR one frame and optionally accumulate lightweight aggregate timings."""
     preprocess_started = time.perf_counter()
     h, w = image.shape[:2]
+    orig_w, orig_h = w, h
     if w > MAX_CROP_WIDTH:
         scale = MAX_CROP_WIDTH / w
         new_w = MAX_CROP_WIDTH
         new_h = int(h * scale)
         image = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+        w, h = new_w, new_h
     if profiling is not None:
         profiling["crop_preprocess"] += time.perf_counter() - preprocess_started
 
     inference_started = time.perf_counter()
-    result = engine(image, use_cls=False, text_score=0.6, box_thresh=0.5)
+    result = engine(image, use_cls=False, text_score=0.40, box_thresh=0.30)
     inference_elapsed = time.perf_counter() - inference_started
     if profiling is not None:
         profiling["ocr_inference"] += inference_elapsed
@@ -348,12 +397,62 @@ def ocr_frame(engine, image, profiling=None):
 
     postprocess_started = time.perf_counter()
     texts = []
-    for raw_text in (result.txts or []):
+    details = []
+    
+    raw_txts = getattr(result, "txts", None)
+    if raw_txts is None:
+        raw_txts = []
+    elif not isinstance(raw_txts, (list, tuple)):
+        raw_txts = list(raw_txts)
+
+    raw_boxes = getattr(result, "boxes", None)
+    if raw_boxes is None:
+        raw_boxes = []
+    elif hasattr(raw_boxes, "tolist"):
+        raw_boxes = raw_boxes.tolist()
+    elif not isinstance(raw_boxes, (list, tuple)):
+        raw_boxes = list(raw_boxes)
+
+    raw_scores = getattr(result, "scores", None)
+    if raw_scores is None:
+        raw_scores = []
+    elif hasattr(raw_scores, "tolist"):
+        raw_scores = raw_scores.tolist()
+    elif not isinstance(raw_scores, (list, tuple)):
+        raw_scores = list(raw_scores)
+
+    for idx, raw_text in enumerate(raw_txts):
         cleaned = _sanitize_ocr_line(raw_text)
         if cleaned:
             texts.append(cleaned)
+            box = raw_boxes[idx] if idx < len(raw_boxes) else None
+            score = float(raw_scores[idx]) if idx < len(raw_scores) else 0.8
+            
+            norm_box = None
+            if box is not None and len(box) >= 4:
+                try:
+                    xs = [pt[0] for pt in box]
+                    ys = [pt[1] for pt in box]
+                    norm_box = [
+                        round(float(min(xs)) / max(1.0, float(w)), 4),
+                        round(float(min(ys)) / max(1.0, float(h)), 4),
+                        round(float(max(xs)) / max(1.0, float(w)), 4),
+                        round(float(max(ys)) / max(1.0, float(h)), 4),
+                    ]
+                except Exception:
+                    norm_box = None
+            
+            details.append({
+                "text": cleaned,
+                "bbox": norm_box or [0.1, 0.7, 0.9, 0.95],
+                "confidence": round(score, 3)
+            })
+
     if profiling is not None:
         profiling["postprocess"] += time.perf_counter() - postprocess_started
+        
+    if return_details:
+        return texts, details
     return texts
 
 
@@ -457,8 +556,8 @@ def transcribe_video_ocr(video_path, *, region="bottom", fps=None, ocr_engine=No
             if end_seconds is not None:
                 sampling_duration = max(0.0, float(end_seconds) - max(0.0, float(start_seconds or 0.0)))
             if sampling_duration <= 15:
-                fps = 4.0
-            elif sampling_duration <= 180:
+                fps = 3.0
+            elif sampling_duration <= 60:
                 fps = 1.5
             elif sampling_duration <= 360:
                 fps = 1.0
@@ -535,9 +634,10 @@ def transcribe_video_ocr(video_path, *, region="bottom", fps=None, ocr_engine=No
                     blank_skip_count += 1
                     texts = []
                 else:
-                    texts = ocr_frame(ocr_engine, cropped, profiling=profiling)
+                    texts, details = ocr_frame(ocr_engine, cropped, profiling=profiling, return_details=True)
                     ocr_count += 1
                     prev_hash = cur_hash
+                    prev_details = details
 
             step += 1
 
@@ -552,9 +652,19 @@ def transcribe_video_ocr(video_path, *, region="bottom", fps=None, ocr_engine=No
                     end_ts = max(seg_start + frame_interval, timestamp - frame_interval * 0.5)
                     combined = " ".join(seg_text_lines).strip()
                     if combined:
-                        segments.append({"start": seg_start, "end": end_ts, "text": combined, "words": []})
+                        seg_bbox = seg_details[0]["bbox"] if seg_details and "bbox" in seg_details[0] else [0.1, 0.7, 0.9, 0.95]
+                        seg_conf = seg_details[0]["confidence"] if seg_details and "confidence" in seg_details[0] else 0.85
+                        segments.append({
+                            "start": seg_start,
+                            "end": end_ts,
+                            "text": combined,
+                            "words": [],
+                            "bbox": seg_bbox,
+                            "ocr_confidence": seg_conf,
+                        })
                     seg_start = None
                     seg_text_lines = []
+                    seg_details = []
                     prev_texts = None
                 profiling["temporal"] += time.perf_counter() - temporal_started
                 continue
@@ -567,9 +677,19 @@ def transcribe_video_ocr(video_path, *, region="bottom", fps=None, ocr_engine=No
                 end_ts = max(seg_start + frame_interval, timestamp - frame_interval * 0.5)
                 combined = " ".join(seg_text_lines).strip()
                 if combined:
-                    segments.append({"start": seg_start, "end": end_ts, "text": combined, "words": []})
+                    seg_bbox = seg_details[0]["bbox"] if seg_details and "bbox" in seg_details[0] else [0.1, 0.7, 0.9, 0.95]
+                    seg_conf = seg_details[0]["confidence"] if seg_details and "confidence" in seg_details[0] else 0.85
+                    segments.append({
+                        "start": seg_start,
+                        "end": end_ts,
+                        "text": combined,
+                        "words": [],
+                        "bbox": seg_bbox,
+                        "ocr_confidence": seg_conf,
+                    })
             seg_start = 0.0 if step == 1 else timestamp - frame_interval * 0.5
             seg_text_lines = texts
+            seg_details = details if 'details' in locals() and details else []
             prev_texts = texts
             profiling["temporal"] += time.perf_counter() - temporal_started
     finally:
@@ -583,21 +703,25 @@ def transcribe_video_ocr(video_path, *, region="bottom", fps=None, ocr_engine=No
             if end_seconds is not None:
                 video_duration = min(video_duration, float(end_seconds))
             end_ts = max(seg_start + frame_interval, video_duration)
-            # A range transcription must never extend its final cue beyond
-            # the range merely to satisfy the normal minimum-duration rule.
             if end_seconds is not None:
                 end_ts = min(end_ts, float(end_seconds))
+            seg_bbox = seg_details[0]["bbox"] if 'seg_details' in locals() and seg_details and "bbox" in seg_details[0] else [0.1, 0.7, 0.9, 0.95]
+            seg_conf = seg_details[0]["confidence"] if 'seg_details' in locals() and seg_details and "confidence" in seg_details[0] else 0.85
             segments.append({
                 "start": seg_start,
                 "end": end_ts,
                 "text": combined,
                 "words": [],
+                "bbox": seg_bbox,
+                "ocr_confidence": seg_conf,
             })
 
     # The temporal loop already keeps identical sampled frames in one cue.
     # Only exact consecutive OCR output is extended below; do not perform a
     # second fuzzy/short-text deduplication pass that can hide valid lines.
-    merged = _merge_adjacent(segments)
+    # Adaptive max_gap based on sampling interval (e.g. 1.0s -> 1.2s, 0.67s -> 0.87s, 0.5s -> 0.7s)
+    adaptive_max_gap = max(0.7, frame_interval + 0.2)
+    merged = _merge_adjacent(segments, max_gap=adaptive_max_gap)
     profiling["temporal"] += time.perf_counter() - final_temporal_started
     print(f"[OCR] Extracted {len(merged)} subtitle segments from {total_steps} frames (OCR: {ocr_count}, skip: {skip_count})")
     inference_samples = profiling["ocr_inference_samples"]
@@ -627,7 +751,25 @@ def transcribe_video_ocr(video_path, *, region="bottom", fps=None, ocr_engine=No
     return merged
 
 
-def _merge_adjacent(segments, max_gap=0.5):
+def _normalize_ocr_compare_text(text: str) -> str:
+    return re.sub(r"[\s\.,?!:;\"'，。？！：；…—_~`/\\[\]()（）{}]+", "", str(text or "")).strip().lower()
+
+
+def _are_ocr_texts_near_duplicate(text1: str, text2: str, min_similarity: float = 0.90) -> bool:
+    t1 = _normalize_ocr_compare_text(text1)
+    t2 = _normalize_ocr_compare_text(text2)
+    if not t1 or not t2:
+        return False
+    if t1 == t2:
+        return True
+    len_diff = abs(len(t1) - len(t2))
+    if len_diff > 1:
+        return False
+    import difflib
+    return difflib.SequenceMatcher(None, t1, t2).ratio() >= min_similarity
+
+
+def _merge_adjacent(segments, max_gap=0.87):
     if not segments:
         return []
     merged = []
@@ -639,10 +781,15 @@ def _merge_adjacent(segments, max_gap=0.5):
         if not seg["text"]:
             continue
         gap = seg["start"] - current["end"]
-        # A fuzzy OCR match may represent a genuinely new subtitle line.
-        # Extend only the exact same text displayed on successive frames.
-        if gap <= max_gap and seg["text"] == current["text"]:
-            current["end"] = seg["end"]
+        # Extend identical or near-duplicate subtitles occurring within adaptive max_gap
+        if gap <= max_gap and _are_ocr_texts_near_duplicate(seg["text"], current["text"]):
+            current["end"] = max(current["end"], seg["end"])
+            if len(seg["text"]) > len(current["text"]):
+                current["text"] = seg["text"]
+            if "bbox" in seg and "bbox" not in current:
+                current["bbox"] = seg["bbox"]
+            if "ocr_confidence" in seg:
+                current["ocr_confidence"] = max(float(current.get("ocr_confidence", 0.0) or 0.0), float(seg["ocr_confidence"]))
         else:
             if current.get("text"):
                 merged.append(current)

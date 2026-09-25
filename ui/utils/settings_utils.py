@@ -104,7 +104,7 @@ def load_user_settings(gui):
     gui.auto_preview_frame_cb.setChecked(auto_preview_enabled)
     # Subtitle style controls retain their UI defaults for a new session.
     if hasattr(gui, "speaker_diarization_cb"):
-        gui.speaker_diarization_cb.setChecked(False)
+        gui.speaker_diarization_cb.setChecked(True)
         if hasattr(gui, "update_speaker_diarization_availability"):
             gui.update_speaker_diarization_availability()
     if hasattr(gui, "speaker_diarization_speakers_combo"):

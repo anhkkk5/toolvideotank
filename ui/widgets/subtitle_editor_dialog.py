@@ -43,7 +43,7 @@ class SubtitleEditorDialog(QDialog):
         self._matches: list[tuple[int, int, int]] = []
         self._match_index = -1
 
-        self.setWindowTitle("Subtitle Editor")
+        self.setWindowTitle("Chỉnh sửa phụ đề")
         self.setModal(True)
         self.resize(1120, 700)
         self.setMinimumSize(860, 520)
@@ -69,42 +69,42 @@ class SubtitleEditorDialog(QDialog):
         root.setContentsMargins(16, 16, 16, 16)
         root.setSpacing(10)
 
-        title = QLabel("Subtitle Editor")
+        title = QLabel("Trình chỉnh sửa phụ đề")
         title.setStyleSheet("font-size: 18px; font-weight: 700; color: #f5f9ff;")
         root.addWidget(title)
         hint = QLabel(
-            "Review translated subtitles in one place. Update preserves timing, speakers, styles, and other metadata. "
-            "Only changed lines need new TTS audio."
+            "Xem lại và chỉnh sửa phụ đề đã dịch tập trung tại một nơi. Cập nhật sẽ giữ nguyên mốc thời gian, người nói, kiểu dáng và siêu dữ liệu khác. "
+            "Chỉ những dòng thay đổi nội dung mới cần tạo lại giọng đọc TTS."
         )
         hint.setWordWrap(True)
         root.addWidget(hint)
 
         find_row = QHBoxLayout()
-        find_row.addWidget(QLabel("Find"))
+        find_row.addWidget(QLabel("Tìm"))
         self.find_edit = QLineEdit(self)
-        self.find_edit.setPlaceholderText("Word, phrase, name, or terminology")
+        self.find_edit.setPlaceholderText("Từ, cụm từ, tên hoặc thuật ngữ")
         find_row.addWidget(self.find_edit, 1)
-        self.match_label = QLabel("0 matches")
+        self.match_label = QLabel("0 kết quả")
         find_row.addWidget(self.match_label)
-        previous_btn = QPushButton("Previous")
-        next_btn = QPushButton("Next")
+        previous_btn = QPushButton("Trước")
+        next_btn = QPushButton("Tiếp")
         find_row.addWidget(previous_btn)
         find_row.addWidget(next_btn)
         root.addLayout(find_row)
 
         replace_row = QHBoxLayout()
-        replace_row.addWidget(QLabel("Replace with"))
+        replace_row.addWidget(QLabel("Thay thế bằng"))
         self.replace_edit = QLineEdit(self)
-        self.replace_edit.setPlaceholderText("Replacement text")
+        self.replace_edit.setPlaceholderText("Nội dung thay thế")
         replace_row.addWidget(self.replace_edit, 1)
-        replace_one_btn = QPushButton("Replace")
-        replace_all_btn = QPushButton("Replace All")
+        replace_one_btn = QPushButton("Thay thế")
+        replace_all_btn = QPushButton("Thay tất cả")
         replace_row.addWidget(replace_one_btn)
         replace_row.addWidget(replace_all_btn)
         root.addLayout(replace_row)
 
         self.table = QTableWidget(len(self._original_segments), 6, self)
-        self.table.setHorizontalHeaderLabels(["#", "Start", "End", "Original", "Translated text", "Delete"])
+        self.table.setHorizontalHeaderLabels(["STT", "Bắt đầu", "Kết thúc", "Gốc", "Văn bản dịch", "Xóa"])
         self.table.setSelectionBehavior(QAbstractItemView.SelectItems)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed)
@@ -123,16 +123,16 @@ class SubtitleEditorDialog(QDialog):
         root.addWidget(self.table, 1)
 
         actions = QHBoxLayout()
-        delete_btn = QPushButton("Delete Selected")
+        delete_btn = QPushButton("Xóa các dòng chọn")
         delete_btn.setObjectName("danger")
-        undo_delete_btn = QPushButton("Restore Selected")
-        rewrite_btn = QPushButton("AI Rewrite…")
+        undo_delete_btn = QPushButton("Khôi phục dòng chọn")
+        rewrite_btn = QPushButton("AI viết lại…")
         actions.addWidget(delete_btn)
         actions.addWidget(undo_delete_btn)
         actions.addWidget(rewrite_btn)
         actions.addStretch(1)
-        cancel_btn = QPushButton("Cancel")
-        update_btn = QPushButton("Update")
+        cancel_btn = QPushButton("Hủy")
+        update_btn = QPushButton("Cập nhật")
         update_btn.setObjectName("primary")
         actions.addWidget(cancel_btn)
         actions.addWidget(update_btn)
@@ -206,7 +206,7 @@ class SubtitleEditorDialog(QDialog):
                     break
                 self._matches.append((row, found, len(needle)))
                 start = found + max(1, len(needle))
-        self.match_label.setText(f"{len(self._matches)} match{'es' if len(self._matches) != 1 else ''}")
+        self.match_label.setText(f"{len(self._matches)} kết quả")
         if self._matches:
             self._select_match(1)
 
@@ -218,7 +218,7 @@ class SubtitleEditorDialog(QDialog):
         item = self.table.item(row, self._TEXT_COLUMN)
         self.table.setCurrentCell(row, self._TEXT_COLUMN)
         self.table.scrollToItem(item, QAbstractItemView.PositionAtCenter)
-        self.match_label.setText(f"{self._match_index + 1} / {len(self._matches)} matches")
+        self.match_label.setText(f"{self._match_index + 1} / {len(self._matches)} kết quả")
 
     def _replace_current(self):
         if not self._matches:
@@ -247,7 +247,7 @@ class SubtitleEditorDialog(QDialog):
                 item.setText(value)
                 replaced += count
         self._refresh_matches()
-        self.match_label.setText(f"Replaced {replaced} occurrence{'s' if replaced != 1 else ''}")
+        self.match_label.setText(f"Đã thay thế {replaced} vị trí")
 
     def _open_rewrite(self):
         if self._on_rewrite is None:
@@ -267,7 +267,7 @@ class SubtitleEditorDialog(QDialog):
             })
         if all(row["deleted"] for row in rows):
             answer = QMessageBox.question(
-                self, "Delete All Subtitles", "This removes every translated subtitle. Continue?",
+                self, "Xóa tất cả phụ đề", "Thao tác này sẽ xóa toàn bộ phụ đề đã dịch. Bạn có chắc chắn muốn tiếp tục?",
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
             )
             if answer != QMessageBox.Yes:

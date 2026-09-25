@@ -65,6 +65,31 @@ class ExtractionWorker(QThread):
             self.finished.emit(False, str(exc))
 
 
+class VoiceGenderCheckWorker(QThread):
+    completed = Signal(object, str)
+    progress = Signal(str)
+
+    def __init__(self, video_path, existing_cues=None):
+        super().__init__()
+        self.video_path = video_path
+        self.existing_cues = existing_cues
+
+    def run(self):
+        try:
+            from services.voice_gender_check_service import VoiceGenderCheckService
+
+            result = VoiceGenderCheckService().run(
+                self.video_path,
+                existing_cues=self.existing_cues,
+                progress=self.progress.emit,
+            )
+            self.completed.emit(result, "")
+        except Exception as exc:
+            details = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)).strip()
+            print(f"[Voice Gender Check] Failed:\n{details}")
+            self.completed.emit({}, str(exc))
+
+
 class TranscriptionWorker(QThread):
     finished = Signal(list, str)
 
@@ -379,9 +404,16 @@ class ResourceDownloadWorker(QThread):
             service.download_resource(self.resource_id, progress_cb=self.progress.emit)
             self.finished.emit(self.resource_id, "")
         except Exception as exc:
-            details = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)).strip()
-            print(f"ResourceDownloadWorker Error:\n{details}")
-            self.finished.emit(self.resource_id, details or str(exc))
+            try:
+                err_msg = str(exc)
+                try:
+                    safe_msg = err_msg.encode("ascii", "replace").decode("ascii")
+                    print(f"ResourceDownloadWorker Error: {safe_msg}")
+                except Exception:
+                    pass
+                self.finished.emit(self.resource_id, err_msg)
+            except Exception:
+                self.finished.emit(self.resource_id, "Không thể tải tài nguyên.")
 
 
 class TimelineWaveformWorker(QThread):
@@ -913,7 +945,7 @@ class SegmentAudioPreviewWorker(QThread):
             )
             residual_speed = (requested_speed / provider_speed) if provider_speed > 0.0 else requested_speed
 
-            base_wav_path = os.path.join(cache_temp_dir, f"seg_{self.index:04d}_base.wav")
+            base_wav_path = os.path.join(cache_temp_dir, f"seg_{self.index:04d}_{self.voice_name}.wav")
             engine.synthesize_segment(
                 text=self.text,
                 wav_path=base_wav_path,

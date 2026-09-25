@@ -1,4 +1,4 @@
-﻿import os
+import os
 import hashlib
 import json
 import re
@@ -1367,6 +1367,8 @@ class PreviewController:
         if not video_path or not os.path.exists(video_path):
             self.gui.log("[Preview] Video file not found, showing error")
             QMessageBox.warning(self.gui, "Error", "Video file not found. Please select a video first.")
+            if bool(getattr(self.gui, "_pipeline_active", False)):
+                self.gui._pipeline_fail("Video file not found.")
             return
         if mode in ("voice", "both") and (not audio_path or not os.path.exists(audio_path)):
             self.gui.log(f"[Preview] Audio file not found for mode={mode}, showing error")
@@ -1375,6 +1377,8 @@ class PreviewController:
                 "Error",
                 "No active audio track is ready. Generate the voice or add a Music Layer, then check Track Volumes.",
             )
+            if bool(getattr(self.gui, "_pipeline_active", False)):
+                self.gui._pipeline_fail("No active audio track is ready.")
             return
 
         has_active_video_filters = bool(hasattr(self.gui, "has_active_video_filters") and self.gui.has_active_video_filters())
@@ -1397,6 +1401,10 @@ class PreviewController:
                 self.gui.refresh_ui_state()
             except Exception:
                 pass
+            if bool(getattr(self.gui, "_pipeline_active", False)) and str(getattr(self.gui, "_pipeline_step", "") or "").strip().lower() == "preview":
+                self.gui.pipeline_controller.pipeline_advance("preview")
+                self.gui.apply_segments_to_timeline()
+                self.gui.refresh_ui_state()
             return
         ts = int(time.time())
         preview_out = self.gui.get_project_temp_path("preview", f"preview_vi_voice_{ts}.mp4", create_parent=True)
@@ -1410,6 +1418,8 @@ class PreviewController:
             preview_srt_path, preview_segments = self.build_full_active_subtitle_srt()
             if not preview_srt_path:
                 QMessageBox.warning(self.gui, "Error", "No active subtitle track is available for video preview.")
+                if bool(getattr(self.gui, "_pipeline_active", False)):
+                    self.gui._pipeline_fail("No active subtitle track is available.")
                 return
             subtitle_style = self.gui.get_subtitle_export_style(segments=preview_segments)
             styled_signature = self._build_styled_preview_signature(
@@ -1429,7 +1439,10 @@ class PreviewController:
                 return
 
         if self.gui.last_preview_video_path and self.gui.last_preview_video_path != self.gui.last_exact_preview_5s_path:
-            if not (cached_preview and os.path.abspath(self.gui.last_preview_video_path) == os.path.abspath(cached_preview)):
+            if (
+                os.path.abspath(self.gui.last_preview_video_path) != os.path.abspath(video_path)
+                and not (cached_preview and os.path.abspath(self.gui.last_preview_video_path) == os.path.abspath(cached_preview))
+            ):
                 try:
                     # Release file handle so Windows can delete the previous preview clip.
                     self.gui.media_player.stop()

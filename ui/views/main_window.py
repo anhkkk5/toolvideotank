@@ -62,57 +62,110 @@ def _build_header_bar(gui):
     header = _TitleBar()
     header.setObjectName("statusCard")
     layout = QHBoxLayout(header)
-    layout.setContentsMargins(18, 14, 18, 14)
-    layout.setSpacing(12)
+    layout.setContentsMargins(16, 10, 16, 10)
+    layout.setSpacing(10)
     gui.header_bar = header
     gui.header_layout = layout
 
     logo_label = QLabel()
-    logo_label.setFixedSize(34, 34)
+    logo_label.setFixedSize(32, 32)
     logo_label.setAlignment(Qt.AlignCenter)
-    if os.path.exists(getattr(gui, "logo_path", "")):
-        logo_pixmap = QPixmap(gui.logo_path)
+    
+    # Ưu tiên logo TankVideo mới
+    tank_logo_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "assets", "tankvideo.png")
+    actual_logo = tank_logo_path if os.path.exists(tank_logo_path) else getattr(gui, "logo_path", "")
+    
+    if os.path.exists(actual_logo):
+        logo_pixmap = QPixmap(actual_logo)
         if not logo_pixmap.isNull():
-            white_logo = _tint_pixmap(logo_pixmap, QColor("#FFFFFF"))
-            logo_label.setPixmap(white_logo.scaled(30, 30, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            logo_label.setPixmap(logo_pixmap.scaled(28, 28, Qt.KeepAspectRatio, Qt.SmoothTransformation))
     layout.addWidget(logo_label)
     gui.header_logo_label = logo_label
 
-    brand_label = QLabel("CapCap")
+    brand_label = QLabel()
     brand_label.setObjectName("heroTitle")
-    brand_label.setStyleSheet("color: #ffffff; font-size: 18px; font-weight: 800;")
+    brand_label.setText("<span style='color:#f1f5f9; font-size:18px; font-weight:900; letter-spacing:0.5px;'>TANK</span><span style='color:#ff7b1a; font-size:18px; font-weight:900; letter-spacing:0.5px;'>VIDEO</span>")
+    brand_label.setTextFormat(Qt.RichText)
     layout.addWidget(brand_label)
     gui.header_brand_label = brand_label
 
-    gui.project_title_label = QLabel("Project: No video selected")
+    gui.project_title_label = QLabel("📁 Chưa chọn video")
     gui.project_title_label.setObjectName("statusHeadline")
+    gui.project_title_label.setStyleSheet(
+        "background-color: #1a1d24; border: 1px solid #2e333d; border-radius: 8px; "
+        "padding: 6px 14px; color: #cbd5e1; font-size: 13px; font-weight: 600;"
+    )
     layout.addWidget(gui.project_title_label, 1)
-    gui.run_all_btn.setMinimumHeight(42)
+
+    gui.voice_gender_check_btn = QPushButton("🎙️ Phân vai AI")
+    gui.voice_gender_check_btn.setObjectName("secondaryActionBtn")
+    gui.voice_gender_check_btn.setMinimumHeight(38)
+    gui.voice_gender_check_btn.setMinimumWidth(125)
+    gui.voice_gender_check_btn.setToolTip("Đọc phụ đề gốc và phân vai Nam / Nữ bằng AI")
+    gui.voice_gender_check_btn.clicked.connect(gui.run_voice_gender_check)
+    layout.addWidget(gui.voice_gender_check_btn)
+
+    gui.voice_gender_history_btn = QPushButton("📜 Lịch sử")
+    gui.voice_gender_history_btn.setObjectName("secondaryActionBtn")
+    gui.voice_gender_history_btn.setMinimumHeight(38)
+    gui.voice_gender_history_btn.setMinimumWidth(95)
+    gui.voice_gender_history_btn.setToolTip("Mở danh sách các bản Master Data đã lưu")
+    gui.voice_gender_history_btn.clicked.connect(gui.open_voice_gender_history)
+    layout.addWidget(gui.voice_gender_history_btn)
+
+    gui.pipeline_b_create_btn = QPushButton("⚡ TẠO VIDEO AI")
+    gui.pipeline_b_create_btn.setObjectName("pipelineBActionBtn")
+    gui.pipeline_b_create_btn.setMinimumHeight(38)
+    gui.pipeline_b_create_btn.setMinimumWidth(165)
+    gui.pipeline_b_create_btn.setToolTip("Tạo video tự động từ Master Data đã duyệt (Lồng tiếng AI -> Ducking -> Xuất MP4)")
+    gui.pipeline_b_create_btn.setStyleSheet(
+        "QPushButton { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #ff6a00, stop:1 #e04800); "
+        "color: #ffffff; font-weight: 800; font-size: 13px; border: 1px solid #ff8833; border-radius: 8px; padding: 6px 16px; } "
+        "QPushButton:hover { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #ff7d1a, stop:1 #f05400); border-color: #ffa352; }"
+    )
+    gui.pipeline_b_create_btn.clicked.connect(lambda: getattr(gui, "start_pipeline_b_flow", lambda: None)())
+    layout.addWidget(gui.pipeline_b_create_btn)
+
+    gui.run_all_btn.setText("▶ Tạo video (1 giọng)")
+    gui.run_all_btn.setMinimumHeight(38)
+    gui.run_all_btn.setMinimumWidth(160)
+    gui.run_all_btn.setToolTip("Chạy toàn bộ quy trình 1 giọng (Setup âm thanh ➔ Quét OCR ➔ DeepSeek AI ➔ Che chữ Trung + Đè phụ đề ➔ Ra video)")
+    gui.run_all_btn.setStyleSheet(
+        "QToolButton { background: #1a2a3e; color: #8ad7ff; border: 1px solid #2e4768; border-radius: 8px; padding: 6px 14px; font-weight: bold; font-size: 12px; } "
+        "QToolButton:hover { background: #223854; color: #ffffff; border-color: #4ecdc4; }"
+    )
     layout.addWidget(gui.run_all_btn)
+
+
+    gui.export_btn.setText("📤 Xuất MP4")
     gui.export_btn.setObjectName("secondaryActionBtn")
-    gui.export_btn.setMinimumHeight(42)
+    gui.export_btn.setMinimumHeight(38)
     layout.addWidget(gui.export_btn)
+
+    gui.preview_5s_btn.setText("👁 Xem nhanh")
     gui.preview_5s_btn.setObjectName("secondaryActionBtn")
-    gui.preview_5s_btn.setMinimumHeight(42)
-    gui.preview_5s_btn.setMinimumWidth(140)
-    gui.preview_5s_btn.setToolTip("Render five seconds with final export subtitle styling")
+    gui.preview_5s_btn.setMinimumHeight(38)
+    gui.preview_5s_btn.setMinimumWidth(110)
+    gui.preview_5s_btn.setToolTip("Render 5 giây mẫu với đầy đủ phụ đề và mặt nạ")
     layout.addWidget(gui.preview_5s_btn)
 
     gui.toggle_panel_btn = QPushButton("Control")
     gui.toggle_panel_btn.setObjectName("secondaryActionBtn")
-    gui.toggle_panel_btn.setMinimumHeight(42)
-    gui.toggle_panel_btn.setMinimumWidth(180)
-    gui.toggle_panel_btn.setToolTip("Toggle side panel")
-    gui.toggle_panel_btn.setText("Controls")
-    gui.toggle_panel_btn.clicked.connect(gui.toggle_controls_panel)
-    # Hide the toggle button - the workflow panel is always visible.
+    gui.toggle_panel_btn.setMinimumHeight(38)
     gui.toggle_panel_btn.setVisible(False)
     layout.addWidget(gui.toggle_panel_btn)
 
-    gui.more_actions_btn = QPushButton("More")
+    gui.license_btn = QPushButton("👑 Bản quyền")
+    gui.license_btn.setObjectName("secondaryActionBtn")
+    gui.license_btn.setMinimumHeight(38)
+    gui.license_btn.setToolTip("Xem thông tin bản quyền và thời hạn gói tháng")
+    gui.license_btn.clicked.connect(lambda: getattr(gui, "open_license_dialog", lambda: None)())
+    layout.addWidget(gui.license_btn)
+
+    gui.more_actions_btn = QPushButton("⚙ Tùy chọn ▾")
     gui.more_actions_btn.setObjectName("secondaryActionBtn")
-    gui.more_actions_btn.setMinimumHeight(42)
-    gui.more_actions_btn.setMinimumWidth(180)
+    gui.more_actions_btn.setMinimumHeight(38)
+    gui.more_actions_btn.setMinimumWidth(120)
     more_menu = QMenu(gui.more_actions_btn)
     more_menu.setObjectName("headerMoreMenu")
 
@@ -123,27 +176,27 @@ def _build_header_bar(gui):
     gui.preview_5s_action = more_menu.addAction("Fast Preview (5 seconds)")
     gui.preview_5s_action.triggered.connect(gui.preview_5s_btn.click)
     more_menu.addSeparator()
-    gui.clean_project_action = more_menu.addAction("Clean")
+    gui.clean_project_action = more_menu.addAction("Clean Project")
     gui.clean_project_action.triggered.connect(gui.clean_current_project)
-    gui.exit_project_action = more_menu.addAction("Exit")
+    gui.exit_project_action = more_menu.addAction("Exit to Launcher")
     gui.exit_project_action.triggered.connect(gui.exit_to_launcher)
     gui.settings_action = more_menu.addAction("Settings")
     gui.settings_action.triggered.connect(gui.open_model_settings_dialog)
     gui.more_actions_btn.setMenu(more_menu)
     layout.addWidget(gui.more_actions_btn)
-    layout.addSpacing(12)
+    layout.addSpacing(10)
 
     gui.titlebar_min_btn = QPushButton("—")
-    gui.titlebar_min_btn.setFixedSize(38, 38)
+    gui.titlebar_min_btn.setFixedSize(36, 36)
     gui.titlebar_min_btn.setToolTip("Minimize")
-    gui.titlebar_min_btn.setStyleSheet("QPushButton { background: transparent; color: #a0b4cc; font-size: 16px; font-weight: bold; border-radius: 4px; } QPushButton:hover { background: #223248; color: #fff; }")
+    gui.titlebar_min_btn.setStyleSheet("QPushButton { background: transparent; color: #94a3b8; font-size: 16px; font-weight: bold; border-radius: 6px; } QPushButton:hover { background: #22262e; color: #fff; }")
     gui.titlebar_min_btn.clicked.connect(gui.showMinimized)
     layout.addWidget(gui.titlebar_min_btn)
 
     gui.titlebar_close_btn = QPushButton("✕")
-    gui.titlebar_close_btn.setFixedSize(38, 38)
+    gui.titlebar_close_btn.setFixedSize(36, 36)
     gui.titlebar_close_btn.setToolTip("Close")
-    gui.titlebar_close_btn.setStyleSheet("QPushButton { background: transparent; color: #a0b4cc; font-size: 14px; font-weight: bold; border-radius: 4px; } QPushButton:hover { background: #e34f4f; color: #fff; }")
+    gui.titlebar_close_btn.setStyleSheet("QPushButton { background: transparent; color: #94a3b8; font-size: 14px; font-weight: bold; border-radius: 6px; } QPushButton:hover { background: #e11d48; color: #fff; }")
     gui.titlebar_close_btn.clicked.connect(gui.close)
     layout.addWidget(gui.titlebar_close_btn)
     return header

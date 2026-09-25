@@ -18,9 +18,14 @@ from .processing_workers import (
     VocalSeparationWorker,
     VoiceSamplePreviewWorker,
     VoiceOverWorker,
+    VoiceGenderCheckWorker,
 )
+from .translation_worker import DeepSeekTranslationWorker
+from .video_creator_adapter import VideoCreatorWorker
 
 __all__ = [
+    "VideoCreatorWorker",
+    "DeepSeekTranslationWorker",
     "ExactFramePreviewWorker",
     "ExtractionWorker",
     "FinalExportWorker",
@@ -42,4 +47,5 @@ __all__ = [
     "VocalSeparationWorker",
     "VoiceSamplePreviewWorker",
     "VoiceOverWorker",
+    "VoiceGenderCheckWorker",
 ]

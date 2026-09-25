@@ -64,21 +64,21 @@ def build_advanced_group(gui, left_layout):
     group_layout.setContentsMargins(0, 0, 0, 0)
 
     _build_hidden_runtime_widgets(gui)
-    subtitle_card, subtitle_layout = _advanced_block("Subtitle")
+    subtitle_card, subtitle_layout = _advanced_block("Phụ đề")
     subtitle_layout.addWidget(gui.import_original_srt_btn)
     subtitle_card.hide()
     group_layout.addWidget(subtitle_card)
 
-    logs_card, logs_layout = _advanced_block("Logs")
+    logs_card, logs_layout = _advanced_block("Nhật ký")
     logs_layout.addWidget(gui.make_helper_label(
-        "Runtime messages are kept here for troubleshooting and bug reports."
+        "Thông báo hệ thống được lưu tại đây để khắc phục sự cố và xem lỗi."
     ))
     gui.runtime_log_view = QPlainTextEdit()
     gui.runtime_log_view.setObjectName("runtimeLogView")
     gui.runtime_log_view.setReadOnly(True)
     gui.runtime_log_view.setMaximumBlockCount(10000)
     gui.runtime_log_view.setMinimumHeight(160)
-    gui.runtime_log_view.setPlaceholderText("Runtime logs will appear here.")
+    gui.runtime_log_view.setPlaceholderText("Nhật ký hệ thống sẽ xuất hiện ở đây.")
     gui.runtime_log_view.setStyleSheet(
         "QPlainTextEdit#runtimeLogView { background: #0b1220; color: #c9d8e8; "
         "border: 1px solid #30425b; border-radius: 6px; padding: 6px; font-family: Consolas, monospace; }"
@@ -89,9 +89,9 @@ def build_advanced_group(gui, left_layout):
         gui._runtime_log_view_entry_count = len(existing_logs)
     logs_layout.addWidget(gui.runtime_log_view)
     logs_actions = QHBoxLayout()
-    gui.export_logs_btn = QPushButton("Export Logs")
+    gui.export_logs_btn = QPushButton("Xuất nhật ký")
     gui.export_logs_btn.clicked.connect(gui.export_runtime_logs)
-    gui.clear_logs_btn = QPushButton("Clear Logs")
+    gui.clear_logs_btn = QPushButton("Xóa nhật ký")
     gui.clear_logs_btn.clicked.connect(gui.clear_log)
     logs_actions.addWidget(gui.export_logs_btn)
     logs_actions.addWidget(gui.clear_logs_btn)
@@ -115,17 +115,17 @@ def _build_audio_source_controls(gui):
     # Audio is now composed from independent timeline tracks.  Keep the old
     # hidden source widgets for project compatibility, but do not expose the
     # radio-button/file-source workflow in the Audio tab.
-    source_card, source_layout = _advanced_block("Music Layer")
+    source_card, source_layout = _advanced_block("Lớp nhạc nền")
     source_layout.addWidget(
         gui.make_helper_label(
-            "Add music as its own timeline track. Its volume is controlled independently in Track Volumes."
+            "Thêm nhạc nền làm một track timeline độc lập. Âm lượng được điều chỉnh riêng trong Âm lượng track."
         )
     )
-    gui.add_music_layer_btn = QPushButton("Add Music Layer")
-    gui.add_music_layer_btn.setToolTip("Choose an audio file and add it as an independent music track.")
+    gui.add_music_layer_btn = QPushButton("Thêm lớp nhạc nền")
+    gui.add_music_layer_btn.setToolTip("Chọn một file âm thanh và thêm vào làm track nhạc độc lập.")
     gui.add_music_layer_btn.clicked.connect(gui.add_music_layer)
     source_layout.addWidget(gui.add_music_layer_btn)
-    gui.music_layers_summary_label = gui.make_helper_label("No music layer added.")
+    gui.music_layers_summary_label = gui.make_helper_label("Chưa có lớp nhạc nào được thêm.")
     source_layout.addWidget(gui.music_layers_summary_label)
     return source_card
 

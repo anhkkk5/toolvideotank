@@ -3,6 +3,11 @@ import math
 import os
 import re
 
+from dotenv import load_dotenv
+_ENV_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".env"))
+if os.path.isfile(_ENV_PATH):
+    load_dotenv(_ENV_PATH, override=False)
+
 from .errors import TranslationValidationError
 from .models import TranslationResult
 from .prompt_loader import render_prompt
@@ -11,6 +16,7 @@ from .providers import (
     OpenAICompatiblePolisherProvider,
 )
 from .srt_utils import clone_with_texts, parse_srt, split_text_batches, to_srt, validate_texts
+from .translation_normalizer import harvest_character_entities, post_process_translation
 
 
 class AIBatchTranslationError(Exception):
@@ -37,7 +43,7 @@ class TranslationOrchestrator:
         if not segments:
             return TranslationResult(success=False, errors=["No segments to translate."], stage="input")
 
-        source_texts = [s.get("text") or "" for s in segments]
+        source_texts = [s.get("text") or s.get("original_text") or "" for s in segments]
         normalized_src = self._normalize_source_language(src_lang)
         warnings = []
         optimize_subtitles = False
@@ -48,6 +54,7 @@ class TranslationOrchestrator:
                 try:
                     mode_label = self._describe_ai_provider(provider_type)
                     merged_style = str(style_instruction or "")
+                    speakers = [str(s.get("speaker") or "").strip() for s in segments]
                     print(
                         f"[AI Translation] Starting translation (provider: {mode_label}, batch_size={polish_batch_size})..."
                     )
@@ -60,6 +67,7 @@ class TranslationOrchestrator:
                         target_lang=target_lang,
                         style_instruction=merged_style,
                         polish_batch_size=polish_batch_size,
+                        speakers=speakers,
                     )
                     warnings.extend(batch_warnings)
 
@@ -220,7 +228,7 @@ class TranslationOrchestrator:
         return mapping.get(key, src_lang)
 
     def _resolve_ai_provider(self):
-        # All selectable API providers use the same compatible client.  The
+        # All selectable API providers use the same compatible client. The
         # provider definition here is the only place needed to add another
         # OpenAI-compatible service in the future.
         configured_provider = (os.getenv("OPENAI_PROVIDER") or os.getenv("AI_POLISHER_PROVIDER") or "gemini").strip().lower()
@@ -228,7 +236,8 @@ class TranslationOrchestrator:
         if provider_type == "gemini":  # backward compatibility for saved settings
             provider_type = "google_ai_studio"
         definitions = {
-            "google_ai_studio": ("Google AI Studio", "GOOGLE_AI_STUDIO", "https://generativelanguage.googleapis.com/v1beta/openai/", "gemini-3.7-flash"),
+            "google_ai_studio": ("Google AI Studio", "GOOGLE_AI_STUDIO", "https://generativelanguage.googleapis.com/v1beta/openai/", "gemini-2.5-flash"),
+            "deepseek": ("DeepSeek", "DEEPSEEK", "https://api.deepseek.com", "deepseek-v4-flash"),
             "openai": ("OpenAI", "OPENAI", "https://api.openai.com/v1/", "gpt-4o-mini"),
             "ollama": ("Ollama", "OPENAI", "http://localhost:11434/v1", "gemma4:31b-cloud"),
         }
@@ -246,7 +255,12 @@ class TranslationOrchestrator:
         )
 
     def _describe_ai_provider(self, provider_type: str) -> str:
-        names = {"google_ai_studio": "Google AI Studio", "openai": "OpenAI", "ollama": "Ollama"}
+        names = {
+            "google_ai_studio": "Google AI Studio",
+            "deepseek": "DeepSeek",
+            "openai": "OpenAI",
+            "ollama": "Ollama",
+        }
         return f"{names.get(provider_type, 'AI')} ({getattr(self._resolve_ai_provider()[1], 'model_name', '')})"
 
     def _run_ai_batches(
@@ -260,6 +274,7 @@ class TranslationOrchestrator:
         target_lang: str,
         style_instruction: str,
         polish_batch_size: int,
+        speakers: list[str] | None = None,
     ) -> tuple[list[str], list[str], list[str]]:
         warnings = []
         providers_used = set()
@@ -280,6 +295,10 @@ class TranslationOrchestrator:
                 f"segments={len(source_texts)}, requests={len(batches)}, "
                 f"max_segments={max((len(source) for source, _draft, _tokens in batches), default=0)}"
             )
+        is_direct = translated_texts is None
+        is_cjk = str(src_lang or "").lower().startswith(("zh", "chi", "auto"))
+        use_sequential = full_context_request or (is_direct and (is_cjk or len(batches) > 1))
+
         try:
             return self._run_ai_batch_requests(
                 polisher=polisher,
@@ -287,7 +306,10 @@ class TranslationOrchestrator:
                 src_lang=src_lang,
                 target_lang=target_lang,
                 style_instruction=style_instruction,
-                max_workers=1 if full_context_request else min(len(batches), 4),
+                max_workers=1 if use_sequential else min(len(batches), 4),
+                source_texts=source_texts,
+                sequential=use_sequential,
+                speakers=speakers,
             )
         except TranslationValidationError as exc:
             if not full_context_request:
@@ -311,7 +333,10 @@ class TranslationOrchestrator:
                     src_lang=src_lang,
                     target_lang=target_lang,
                     style_instruction=style_instruction,
-                    max_workers=min(len(fallback_batches), 4),
+                    max_workers=1 if use_sequential else min(len(fallback_batches), 4),
+                    source_texts=source_texts,
+                    sequential=use_sequential,
+                    speakers=speakers,
                 )
                 print("[AI Translation] Batch translation completed successfully.")
                 return recovered
@@ -320,41 +345,116 @@ class TranslationOrchestrator:
                 raise AIBatchTranslationError(str(batch_exc)) from exc
 
     @staticmethod
-    def _run_ai_batch_requests(*, polisher, batches, src_lang, target_lang, style_instruction, max_workers):
+    def _run_ai_batch_requests(
+        *,
+        polisher,
+        batches,
+        src_lang,
+        target_lang,
+        style_instruction,
+        max_workers,
+        source_texts: list[str] | None = None,
+        sequential: bool = False,
+        speakers: list[str] | None = None,
+    ):
         """Submit validated ordered batches and merge their results by index."""
         warnings = []
         providers_used = set()
         translated_texts_map = {}
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, max_workers)) as executor:
-            future_to_idx = {}
-            for idx, (source_batch, translated_batch, max_tokens) in enumerate(batches):
-                future = executor.submit(
-                    polisher.polish_batch,
-                    source_texts=source_batch,
-                    translated_texts=translated_batch,
-                    src_lang=src_lang,
-                    target_lang=target_lang,
-                    style_instruction=style_instruction,
-                    max_tokens=max_tokens,
-                )
-                future_to_idx[future] = idx
+        character_glossary: dict[str, str] = {}
 
-            for future in concurrent.futures.as_completed(future_to_idx):
-                idx = future_to_idx[future]
+        if sequential:
+            # Sequential execution with sliding window context (for character consistency & flow)
+            all_history: list[dict] = []
+            curr_offset = 0
+            for idx, (source_batch, translated_batch, max_tokens) in enumerate(batches):
+                prev_ctx = all_history[-10:] if all_history else None
+                next_ctx = None
+                if source_texts is not None:
+                    next_start = curr_offset + len(source_batch)
+                    next_end = min(len(source_texts), next_start + 5)
+                    if next_start < len(source_texts):
+                        next_ctx = source_texts[next_start:next_end]
+
+                source_speakers = speakers[curr_offset : curr_offset + len(source_batch)] if speakers else None
+
                 try:
-                    batch_result, batch_warnings, provider_name = future.result()
-                    translated_texts_map[idx] = batch_result
+                    batch_result, batch_warnings, provider_name = polisher.polish_batch(
+                        source_texts=source_batch,
+                        translated_texts=translated_batch,
+                        src_lang=src_lang,
+                        target_lang=target_lang,
+                        style_instruction=style_instruction,
+                        previous_context=prev_ctx,
+                        next_context=next_ctx,
+                        speakers=source_speakers,
+                        character_glossary=character_glossary if character_glossary else None,
+                        max_tokens=max_tokens,
+                    )
+
+                    # Dynamically discover and update character glossary across batches
+                    character_glossary = harvest_character_entities(
+                        source_batch, batch_result, character_glossary
+                    )
+
+                    # Post-process translation for spatial deixis ("đây" vs "đấy") and character consistency
+                    processed_batch = [
+                        post_process_translation(s, t, character_glossary)
+                        for s, t in zip(source_batch, batch_result)
+                    ]
+
+                    translated_texts_map[idx] = processed_batch
                     warnings.extend(batch_warnings)
                     if provider_name:
                         providers_used.add(provider_name)
+                    for s_idx, (s_txt, t_txt) in enumerate(zip(source_batch, processed_batch)):
+                        spk = source_speakers[s_idx] if source_speakers and s_idx < len(source_speakers) else ""
+                        all_history.append({"speaker": spk, "source": s_txt, "translated": t_txt})
                 except Exception as exc:
                     if isinstance(exc, TranslationValidationError):
                         raise
                     raise Exception(f"Batch {idx + 1} failed: {exc}") from exc
 
+                curr_offset += len(source_batch)
+        else:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, max_workers)) as executor:
+                future_to_idx = {}
+                for idx, (source_batch, translated_batch, max_tokens) in enumerate(batches):
+                    future = executor.submit(
+                        polisher.polish_batch,
+                        source_texts=source_batch,
+                        translated_texts=translated_batch,
+                        src_lang=src_lang,
+                        target_lang=target_lang,
+                        style_instruction=style_instruction,
+                        max_tokens=max_tokens,
+                    )
+                    future_to_idx[future] = idx
+
+                for future in concurrent.futures.as_completed(future_to_idx):
+                    idx = future_to_idx[future]
+                    try:
+                        batch_result, batch_warnings, provider_name = future.result()
+                        translated_texts_map[idx] = batch_result
+                        warnings.extend(batch_warnings)
+                        if provider_name:
+                            providers_used.add(provider_name)
+                    except Exception as exc:
+                        if isinstance(exc, TranslationValidationError):
+                            raise
+                        raise Exception(f"Batch {idx + 1} failed: {exc}") from exc
+
         merged = []
         for idx in range(len(batches)):
             merged.extend(translated_texts_map[idx])
+
+        # Final pass: guarantee spatial deixis and character consistency across full output
+        if source_texts and len(source_texts) == len(merged):
+            merged = [
+                post_process_translation(s, t, character_glossary)
+                for s, t in zip(source_texts, merged)
+            ]
+
         return merged, sorted(providers_used), warnings
 
     @staticmethod

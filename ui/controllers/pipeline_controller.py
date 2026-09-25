@@ -219,13 +219,13 @@ class PipelineController:
         self._stop_local_worker_server()
         if self.progress_dialog:
             self.progress_dialog.fail_step("ai_process")
-            self.progress_dialog.footer.setText("Pipeline stopped.")
+            self.progress_dialog.footer.setText("Quy trình đã dừng.")
             self.progress_dialog.footer.setStyleSheet("color: #FFB86B; font-weight: bold; font-size: 14px; margin-top: 15px;")
             self.progress_dialog.stop_btn.setEnabled(False)
-            self.progress_dialog.stop_btn.setText("Stopped")
+            self.progress_dialog.stop_btn.setText("Đã dừng")
         if hasattr(self.gui, "run_all_btn"):
             self.gui.run_all_btn.setEnabled(True)
-            self.gui.run_all_btn.setText("Generate")
+            self.gui.run_all_btn.setText("Tạo")
         self.gui.progress_bar.setRange(0, 100)
         self.gui.progress_bar.setValue(0)
         self.gui.refresh_ui_state()
@@ -262,8 +262,8 @@ class PipelineController:
             if self.whisper_download_dialog is not None:
                 return
             model_name = getattr(self.gui, "get_whisper_model_name", lambda: "medium")()
-            dlg = BackgroundableProgressDialog(f"Downloading Whisper model: {model_name} ...", "Hide", 0, 0, self.gui)
-            dlg.setWindowTitle("Downloading models")
+            dlg = BackgroundableProgressDialog(f"Đang tải mô hình Whisper: {model_name} ...", "Ẩn", 0, 0, self.gui)
+            dlg.setWindowTitle("Đang tải mô hình")
             dlg.setWindowModality(Qt.NonModal)
             dlg.setMinimumDuration(0)
             dlg.setAutoReset(False)
@@ -296,11 +296,11 @@ class PipelineController:
         if is_remote_profile():
             # Backend runs separate + transcribe + translate in one batch.
             # Cleaner voice (separation) is handled inside the batch silently.
-            self.progress_dialog.add_step("ai_process", "Subtitle Processing (AI)")
+            self.progress_dialog.add_step("ai_process", "Xử lý phụ đề (AI)")
         else:
-            self.progress_dialog.add_step("ai_process", "Subtitle Processing (AI)")
-        self.progress_dialog.add_step("voiceover", "Synthesizing AI Voiceover")
-        self.progress_dialog.add_step("preview", "Preparing Video Preview")
+            self.progress_dialog.add_step("ai_process", "Xử lý phụ đề (AI)")
+        self.progress_dialog.add_step("voiceover", "Tạo giọng đọc AI (TTS)")
+        self.progress_dialog.add_step("preview", "Chuẩn bị xem trước Video")
         self.progress_dialog.show()
 
     def run_all_pipeline(self, video_path=None, requires_separation=None, target_stage="full"):
@@ -314,7 +314,7 @@ class PipelineController:
                 video_path = getattr(self.gui, "last_video_path", "")
 
         if not video_path or not os.path.exists(video_path):
-            QMessageBox.warning(self.gui, "Error", "Please select a video file first.")
+            QMessageBox.warning(self.gui, "Lỗi", "Vui lòng chọn một tệp video trước.")
             return
 
         # Determine if we need vocal separation based on UI settings
@@ -331,7 +331,7 @@ class PipelineController:
         # UI Feedback
         if hasattr(self.gui, "run_all_btn"):
             self.gui.run_all_btn.setEnabled(False)
-            self.gui.run_all_btn.setText("Processing...")
+            self.gui.run_all_btn.setText("Đang xử lý...")
             
         self._setup_progress_dialog(includes_separation=requires_separation)
         self.progress_dialog.start_step("ai_process")
@@ -406,19 +406,19 @@ class PipelineController:
         if not self.progress_dialog:
             return
         labels = {
-            "prepare": "Preparing project",
-            "extract_audio": "Extracting audio",
-            "extraction": "Extracting audio",
-            "separation": "Separating vocals",
-            "diarization": "Detecting speakers",
-            "transcription": "Transcribing audio",
-            "translation": "Translating subtitles",
-            "done": "Prepare complete",
-            "error": "Prepare failed",
+            "prepare": "Chuẩn bị dự án",
+            "extract_audio": "Trích xuất âm thanh",
+            "extraction": "Trích xuất âm thanh",
+            "separation": "Tách lời thoại / nhạc nền",
+            "diarization": "Nhận diện người nói",
+            "transcription": "Chép lời âm thanh",
+            "translation": "Dịch phụ đề",
+            "done": "Chuẩn bị hoàn tất",
+            "error": "Chuẩn bị thất bại",
         }
-        label = str(message or labels.get(str(step_id or ""), step_id or "Processing")).strip()
+        label = str(message or labels.get(str(step_id or ""), step_id or "Đang xử lý")).strip()
         if label and self.progress_dialog:
-            self.progress_dialog.footer.setText(f"Prepare: {label}")
+            self.progress_dialog.footer.setText(f"Chuẩn bị: {label}")
             self.progress_dialog.footer.setStyleSheet("color: #9fb7d5; font-size: 13px; margin-top: 15px;")
         if step_id == "transcription":
             self._hide_whisper_download_dialog()
@@ -435,8 +435,8 @@ class PipelineController:
             return
 
         if error or not project_state_path:
-            self.pipeline_fail(f"Prepare workflow failed: {error}")
-            self.gui.show_error("Prepare Failed", "Could not complete project preparation.", str(error))
+            self.pipeline_fail(f"Quy trình chuẩn bị thất bại: {error}")
+            self.gui.show_error("Chuẩn bị thất bại", "Không thể hoàn thành việc chuẩn bị dự án.", str(error))
             return
 
         if self.progress_dialog:
@@ -447,6 +447,7 @@ class PipelineController:
             self.gui.current_project_state = state
             self.gui.load_project_context(state)
             self.gui.refresh_ui_state()
+            self._notify_speaker_analysis_result(state)
             # The OCR crop is an editing aid. Once its transcript is ready,
             # return the preview to its normal unobstructed state. The crop
             # geometry remains available through the OCR button for later
@@ -487,9 +488,63 @@ class PipelineController:
         if getattr(self, "_fallback_notification_signature", "") == signature:
             return
         self._fallback_notification_signature = signature
-        notice = "AI Provider is unavailable. Translation completed using Google Translate instead."
-        self.gui.log(f"[Translation] {notice}")
-        QMessageBox.information(self.gui, "Translation Fallback", notice)
+        notice = "Nhà cung cấp AI không khả dụng. Đã chuyển sang dùng Google Translate thay thế."
+        self.gui.log(f"[Dịch thuật] {notice}")
+
+    def _notify_speaker_analysis_result(self, state):
+        summary = dict(getattr(state, "settings", {}).get("speaker_analysis_summary") or {})
+        characters = dict(getattr(state, "settings", {}).get("character_analysis_summary") or {})
+        if not summary:
+            return
+        signature = str(getattr(state, "settings", {}).get("openai_speaker_analysis_signature", "") or "")
+        if characters:
+            signature += (
+                f":char-v{characters.get('version', 0)}:"
+                f"{characters.get('character_count', 0)}:"
+                f"{characters.get('unknown_turn_count', 0)}:"
+                f"{characters.get('voice_resolved_turn_count', 0)}:"
+                f"{characters.get('split_turn_count', 0)}:"
+                f"{characters.get('manual_correction_count', 0)}"
+            )
+        if signature and getattr(self, "_speaker_analysis_notice_signature", "") == signature:
+            return
+        self._speaker_analysis_notice_signature = signature
+        effective = characters or summary
+        count_key = "character_count" if characters else "speaker_count"
+        label = "nhân vật có thoại" if characters else "cụm giọng"
+        message = (
+            f"Đã phát hiện {int(effective.get(count_key, 0) or 0)} {label}: "
+            f"{int(effective.get('male_count', 0) or 0)} nam, "
+            f"{int(effective.get('female_count', 0) or 0)} nữ"
+        )
+        unknown = int(
+            effective.get("unknown_character_count", effective.get("unknown_turn_count", 0))
+            if characters else effective.get("unknown_count", 0)
+            or 0
+        )
+        if unknown:
+            message += f", {unknown} giọng chưa đủ chắc chắn"
+        if characters and int(characters.get("voice_resolved_turn_count", 0) or 0):
+            message += (
+                f". Phase 2 đã nhận lại "
+                f"{int(characters.get('voice_resolved_turn_count', 0) or 0)} lượt thoại khuất mặt bằng dấu vân tay giọng"
+            )
+        if characters and int(characters.get("split_turn_count", 0) or 0):
+            message += (
+                f". Phase 3 đã tách "
+                f"{int(characters.get('split_turn_count', 0) or 0)} lượt có nhiều nhân vật nói nối tiếp"
+            )
+        if characters and int(characters.get("manual_correction_count", 0) or 0):
+            message += (
+                f". Phase 4 đã áp dụng "
+                f"{int(characters.get('manual_correction_count', 0) or 0)} correction của người dùng"
+            )
+        message += ".\n\n"
+        if not characters:
+            message += "Đây là số giọng khác nhau trong âm thanh, không phải số người xuất hiện trên hình. "
+        message += "Kết quả này đã được dùng để phân vai tự động."
+        self.gui.log(f"[OpenAI Speaker Analysis] {message.replace(chr(10), ' ')}")
+        QMessageBox.information(self.gui, "Phân tích người nói", message)
 
     def pipeline_advance(self, completed_step: str):
         """Manages transitions between major pipeline segments."""
@@ -548,14 +603,34 @@ class PipelineController:
             current_step = getattr(self.gui, "_pipeline_step", "prepare")
             self.progress_dialog.fail_step(current_step)
             # Show the error reason in the footer
-            self.progress_dialog.footer.setText(f"FAILED: {reason}")
+            self.progress_dialog.footer.setText(f"THẤT BẠI: {reason}")
             self.progress_dialog.footer.setStyleSheet("color: #FF4444; font-weight: bold;")
 
         # Restore UI
         if hasattr(self.gui, "run_all_btn"):
             self.gui.run_all_btn.setEnabled(True)
-            self.gui.run_all_btn.setText("Generate")
+            self.gui.run_all_btn.setText("Tạo")
         
+        self.gui.progress_bar.setRange(0, 100)
+        self.gui.progress_bar.setValue(0)
+        self.gui.refresh_ui_state()
+
+    def pipeline_review_required(self, reason: str):
+        """Stop an automatic run cleanly when human review is required."""
+        self.gui._pipeline_active = False
+        self.gui._pipeline_step = ""
+        self._stop_prepare_status_polling()
+        self._stop_local_worker_server()
+        if self.progress_dialog:
+            self.progress_dialog.fail_step("voiceover")
+            self.progress_dialog.footer.setText(f"CẦN KIỂM TRA: {reason}")
+            self.progress_dialog.footer.setStyleSheet(
+                "color: #FFB84D; font-weight: bold;"
+            )
+            self.progress_dialog.stop_btn.setEnabled(False)
+        if hasattr(self.gui, "run_all_btn"):
+            self.gui.run_all_btn.setEnabled(True)
+            self.gui.run_all_btn.setText("Tạo")
         self.gui.progress_bar.setRange(0, 100)
         self.gui.progress_bar.setValue(0)
         self.gui.refresh_ui_state()
@@ -569,7 +644,7 @@ class PipelineController:
         
         if hasattr(self.gui, "run_all_btn"):
             self.gui.run_all_btn.setEnabled(True)
-            self.gui.run_all_btn.setText("Generate")
+            self.gui.run_all_btn.setText("Tạo")
             
         self.gui.progress_bar.setRange(0, 100)
         self.gui.progress_bar.setValue(100)

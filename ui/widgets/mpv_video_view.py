@@ -1100,7 +1100,7 @@ class _MaskRegionOverlayWindow(_BlurRegionOverlayWindow):
             return QRectF(0.0, 0.0, 0.0, 0.0)
         return QRectF(self._regions[self._active_index])
 
-    def add_mask(self, x: float = 0.3, y: float = 0.3, w: float = 0.4, h: float = 0.2):
+    def add_mask(self, x: float = 0.05, y: float = 0.84, w: float = 0.90, h: float = 0.08):
         self._regions = [QRectF(x, y, w, h)]
         self._active_index = 0
 
@@ -1916,8 +1916,8 @@ class MpvVideoView(QWidget):
         self.blurRegionChanged.emit()
 
     # --- Mask / M1 overlay ---
-    def add_mask_region(self, *, x: float = 0.3, y: float = 0.3,
-                        w: float = 0.4, h: float = 0.2,
+    def add_mask_region(self, *, x: float = 0.05, y: float = 0.84,
+                        w: float = 0.90, h: float = 0.08,
                         color: str | QColor = "#c98c5a"):
         self.mask_overlay.attach_to_view(self)
         self.mask_overlay.add_mask(x, y, w, h)

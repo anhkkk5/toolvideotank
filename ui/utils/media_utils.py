@@ -17,21 +17,7 @@ def setup_media_player(gui):
             summary = str(diagnostic.get("summary") or "Advanced Video Preview is unavailable.")
             technical = str(diagnostic.get("details") or diagnostic.get("error") or "")
             if hasattr(gui, "log"):
-                gui.log(f"[Preview] Advanced Video Preview unavailable ({stage}): {technical or summary}")
-
-            def _show_preview_warning():
-                # The fallback is intentional and safe, but advanced MPV-only
-                # preview features are unavailable. Keep the dialog concise;
-                # the detailed loader error is preserved in the runtime log.
-                from PySide6.QtWidgets import QMessageBox
-                QMessageBox.warning(
-                    gui,
-                    "Advanced Video Preview Unavailable",
-                    f"Advanced Video Preview is unavailable.\n\nReason: {summary}\n\n"
-                    "CapCap will use the compatible preview instead. See Logs for technical details.",
-                )
-
-            QTimer.singleShot(0, _show_preview_warning)
+                gui.log(f"[Preview] Sử dụng chế độ xem trước tương thích Qt ({stage}): {technical or summary}")
 
     gui.play_btn.clicked.connect(gui.toggle_play)
     gui.stop_btn.clicked.connect(gui.stop_video)

@@ -237,7 +237,9 @@ class VoiceWorkflow:
         if bool(current.get("voice_edited")):
             edited_text = str(current.get("tts_text") or current.get("dubbing_vi") or "").strip()
             if edited_text:
-                return edited_text
+                subtitle_text = edited_text
+        if re.search(r"^\s*\(?\s*(?:âm thanh nhỏ|tiếng ồn|nhạc nền|sound|noise)\s*\)?\s*$", subtitle_text, re.IGNORECASE):
+            return ""
         return subtitle_text
 
     def _provider_native_speed(self, *, provider: str, requested_speed: float) -> float:
@@ -1247,21 +1249,36 @@ class VoiceWorkflow:
                 wavs[idx] = ""
                 continue
             segment_voice_name = str(seg.get("voice_name") or voice_name).strip() or voice_name
-            seg_wav = os.path.join(tmp_dir, f"seg_{global_idx:04d}_base.wav")
             cache_key = self._segment_cache_key(
                 text=txt,
                 voice_name=segment_voice_name,
                 provider_speed=provider_speed,
                 normalizer_signature=normalizer_signature,
             )
+            seg_wav = os.path.join(tmp_dir, f"tts_{cache_key[:16]}.wav")
+
+            # Check cache with strict text match verification
+            cached_wav = ""
             cache_entry = manifest_segments.get(str(global_idx), {})
-            cached_wav = str(cache_entry.get("wav_path", "")).strip()
-            cached_key = str(cache_entry.get("cache_key", "")).strip()
-            if not (cached_key == cache_key and cached_wav and os.path.exists(cached_wav)):
-                cache_entry = dict(manifest_by_cache_key.get(cache_key, {}) or {})
+            if (
+                cache_entry.get("cache_key") == cache_key
+                and str(cache_entry.get("text", "")).strip() == txt.strip()
+                and cache_entry.get("wav_path")
+                and os.path.exists(str(cache_entry.get("wav_path", "")))
+            ):
                 cached_wav = str(cache_entry.get("wav_path", "")).strip()
-                cached_key = str(cache_entry.get("cache_key", "")).strip()
-            if cached_key == cache_key and cached_wav and os.path.exists(cached_wav):
+
+            if not cached_wav:
+                cache_entry_by_key = dict(manifest_by_cache_key.get(cache_key, {}) or {})
+                if (
+                    cache_entry_by_key.get("cache_key") == cache_key
+                    and str(cache_entry_by_key.get("text", "")).strip() == txt.strip()
+                    and cache_entry_by_key.get("wav_path")
+                    and os.path.exists(str(cache_entry_by_key.get("wav_path", "")))
+                ):
+                    cached_wav = str(cache_entry_by_key.get("wav_path", "")).strip()
+
+            if cached_wav:
                 wavs[idx] = cached_wav
                 manifest_segments[str(global_idx)] = {
                     "cache_key": cache_key,
@@ -1320,7 +1337,7 @@ class VoiceWorkflow:
                     cache_hits += 1
                 except Exception:
                     pass
-            elif pending_providers == {"edge"}:
+            elif pending_providers == {"edge"} or "vieneu" in pending_providers:
                 worker_count = 1
             else:
                 worker_count = max(1, min(self.MAX_TTS_WORKERS, len(pending_jobs)))

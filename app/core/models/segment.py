@@ -33,6 +33,19 @@ class Segment:
         speaker = str(data.get("speaker", "") or "").strip()
         if speaker and not metadata.get("speaker"):
             metadata["speaker"] = speaker
+        # Character Resolver data is produced as flat fields by the OCR/audio
+        # aligner.  Keep the complete assignment when converting to Segment;
+        # otherwise the UI falls back to SPEAKER_x and displays AI 0%.
+        for key in (
+            "audio_speaker",
+            "character_id",
+            "character_gender",
+            "character_confidence",
+            "character_source",
+            "speaker_confidence",
+        ):
+            if key in data and key not in metadata:
+                metadata[key] = data.get(key)
         if "words" in data and "words" not in metadata:
             metadata["words"] = list(data.get("words") or [])
         if "manual_highlights" in data and "manual_highlights" not in metadata:
@@ -69,6 +82,18 @@ class Segment:
         speaker = str(data.get("speaker", "") or "").strip()
         if speaker:
             metadata["speaker"] = speaker
+        for key in (
+            "voice_name",
+            "voice_group",
+            "speaker_confidence",
+            "audio_speaker",
+            "character_id",
+            "character_gender",
+            "character_confidence",
+            "character_source",
+        ):
+            if key in data:
+                metadata[key] = data[key]
         return cls(
             id=segment_id,
             start=float(data.get("start", 0.0) or 0.0),
@@ -134,6 +159,13 @@ class Segment:
             payload["auto_highlights"] = list(self.metadata.get("auto_highlights") or [])
         if self.metadata.get("speaker"):
             payload["speaker"] = str(self.metadata.get("speaker"))
+        for key in (
+            "voice_name", "voice_group", "speaker_confidence",
+            "audio_speaker", "character_id", "character_gender",
+            "character_confidence", "character_source",
+        ):
+            if key in self.metadata:
+                payload[key] = self.metadata.get(key)
         raw_ae = self.metadata.get("_audio_end")
         if raw_ae is not None:
             try:
@@ -153,6 +185,13 @@ class Segment:
             payload["words"] = list(self.metadata.get("words") or [])
         if self.metadata.get("speaker"):
             payload["speaker"] = str(self.metadata.get("speaker"))
+        for key in (
+            "voice_name", "voice_group", "speaker_confidence",
+            "audio_speaker", "character_id", "character_gender",
+            "character_confidence", "character_source",
+        ):
+            if key in self.metadata:
+                payload[key] = self.metadata.get(key)
         return payload
 
 

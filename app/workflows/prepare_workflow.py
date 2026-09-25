@@ -267,6 +267,147 @@ class PrepareWorkflow:
             source = f"{os.path.abspath(audio_path)}|{diarization_key}"
         return hashlib.sha1(source.encode("utf-8", errors="replace")).hexdigest()
 
+    def _analyze_speakers_before_transcription(self, audio_path: str, project_state, step_callback=None, *, video_path: str = ""):
+        """Use paid OpenAI diarization once per audio revision, before OCR/ASR."""
+        from services import CharacterCorrectionService, CharacterVoiceResolver, OpenAISpeakerAnalysisService
+
+        if not OpenAISpeakerAnalysisService.is_configured():
+            return [], None
+        signature = self._speaker_diarization_signature(
+            audio_path, OpenAISpeakerAnalysisService.cache_key()
+        )
+        cached_signature = str(project_state.settings.get("openai_speaker_analysis_signature", "") or "")
+        cached_path = project_state.artifacts.get("openai_speaker_analysis", "")
+        if cached_signature == signature and cached_path and os.path.exists(cached_path):
+            result = self.project_service.load_json_artifact(
+                project_state, "openai_speaker_analysis", default={}
+            ) or {}
+            print("[OpenAI Speaker Analysis] Reusing cached result; no paid API call was made.")
+        else:
+            print("\n--- Step 1.5: OpenAI analyzing speakers before transcription ---")
+            if step_callback:
+                step_callback("diarization")
+            result = OpenAISpeakerAnalysisService().analyze(audio_path, video_path=video_path)
+            self.project_service.save_json_artifact(
+                project_state,
+                "openai_speaker_analysis",
+                os.path.join("analysis", "openai_speaker_analysis.json"),
+                result,
+            )
+            project_state.set_setting("openai_speaker_analysis_signature", signature)
+        # Re-run cheap local stabilization/gender analysis even for a cached
+        # paid diarization result. Algorithm improvements must not spend API
+        # credit merely to reinterpret existing speaker turns.
+        cached_turns = list(result.get("turns") or [])
+        if cached_turns:
+            previous_summary = dict(result.get("summary") or {})
+            previous_characters = list(result.get("characters") or [])
+            previous_character_summary = dict(result.get("character_summary") or {})
+            result = OpenAISpeakerAnalysisService().postprocess(
+                audio_path,
+                cached_turns,
+                model=str((result.get("summary") or {}).get("model", "") or ""),
+            )
+            if previous_summary.get("visual_analysis_version"):
+                prior_genders = {
+                    str(item.get("speaker", "") or ""): item
+                    for item in list(previous_summary.get("speakers") or [])
+                    if str(item.get("gender_source", "") or "") == "openai-vision"
+                }
+                refreshed = list((result.get("summary") or {}).get("speakers") or [])
+                for item in refreshed:
+                    prior = prior_genders.get(str(item.get("speaker", "") or ""))
+                    if prior:
+                        item.update({
+                            "gender": prior.get("gender", "unknown"),
+                            "confidence": prior.get("confidence", 0.98),
+                            "gender_source": "openai-vision",
+                        })
+                counts = {"male": 0, "female": 0, "unknown": 0}
+                for item in refreshed:
+                    gender = str(item.get("gender", "unknown") or "unknown")
+                    counts[gender if gender in counts else "unknown"] += 1
+                result["summary"].update({
+                    "speakers": refreshed,
+                    "male_count": counts["male"],
+                    "female_count": counts["female"],
+                    "unknown_count": counts["unknown"],
+                    "vision_model": previous_summary.get("vision_model", ""),
+                    "visual_analysis_version": previous_summary.get("visual_analysis_version"),
+                })
+            elif video_path:
+                try:
+                    result = OpenAISpeakerAnalysisService().analyze_visual(video_path, result)
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"OpenAI could not verify voice categories from video frames: {exc}"
+                    ) from exc
+            if int(previous_character_summary.get("version", 0) or 0) >= 3:
+                result["characters"] = previous_characters
+                result["character_summary"] = previous_character_summary
+            elif video_path:
+                result = OpenAISpeakerAnalysisService().resolve_characters(video_path, result)
+            corrections = self.project_service.load_json_artifact(
+                project_state, "character_corrections", default=[]
+            ) or []
+            if corrections:
+                result = CharacterCorrectionService.apply(result, corrections)
+            # Phase 2 is local: learn voice prototypes from confident visual
+            # anchors, then recover off-screen/UNKNOWN turns without another
+            # paid OpenAI request.
+            if result.get("characters"):
+                result, voice_artifact = CharacterVoiceResolver().resolve(audio_path, result)
+                self.project_service.save_json_artifact(
+                    project_state,
+                    "character_voice_prototypes",
+                    os.path.join("analysis", "character_voice_prototypes.json"),
+                    voice_artifact,
+                )
+            self.project_service.save_json_artifact(
+                project_state,
+                "openai_speaker_analysis",
+                os.path.join("analysis", "openai_speaker_analysis.json"),
+                result,
+            )
+        summary = dict(result.get("summary") or {})
+        character_summary = dict(result.get("character_summary") or {})
+        turns = list(result.get("turns") or [])
+        if video_path and (not character_summary or not list(result.get("characters") or [])):
+            raise RuntimeError(
+                "Character Resolver did not produce any CHAR_x assignments. "
+                "TTS was stopped to prevent incorrect male/female dubbing."
+            )
+        project_state.set_setting("speaker_analysis_summary", summary)
+        if character_summary:
+            project_state.set_setting("character_analysis_summary", character_summary)
+            self.project_service.save_json_artifact(
+                project_state,
+                "character_registry",
+                os.path.join("analysis", "character_registry.json"),
+                list(result.get("characters") or []),
+            )
+        project_state.set_setting("speaker_diarization_num_speakers", int(summary.get("speaker_count", -1) or -1))
+        self.project_service.save_project(project_state)
+        print(
+            "[OpenAI Speaker Analysis] "
+            f"{summary.get('speaker_count', 0)} người: "
+            f"{summary.get('male_count', 0)} nam, "
+            f"{summary.get('female_count', 0)} nữ, "
+            f"{summary.get('unknown_count', 0)} chưa chắc chắn."
+        )
+        if character_summary:
+            print(
+                "[Character Resolver] "
+                f"{character_summary.get('character_count', 0)} characters: "
+                f"{character_summary.get('male_count', 0)} male, "
+                f"{character_summary.get('female_count', 0)} female, "
+                f"{character_summary.get('unknown_turn_count', 0)} unresolved turns; "
+                f"Phase 3 split {character_summary.get('split_turn_count', 0)} mixed turn(s); "
+                f"Phase 2 recovered {character_summary.get('voice_resolved_turn_count', 0)} by voice; "
+                f"Phase 4 applied {character_summary.get('manual_correction_count', 0)} correction(s)."
+            )
+        return turns, summary
+
     @staticmethod
     def _should_run_diarization_parallel(*, is_sensevoice: bool) -> bool:
         """Only overlap CPU diarization with ASR that does not consume CPU."""
@@ -278,32 +419,163 @@ class PrepareWorkflow:
 
     @staticmethod
     def _apply_speaker_labels(segments: list[dict], speaker_turns: list[dict]) -> list[dict]:
-        """Assign each transcript cue to the speaker with the most overlap."""
+        """Assign speaker labels and split segments when multiple speakers converse within one cue."""
         if not speaker_turns:
             return [dict(segment) for segment in (segments or [])]
-        labeled = []
+
+        valid_turns = []
+        for t in speaker_turns:
+            try:
+                ts = float(t.get("start", 0.0))
+                te = float(t.get("end", 0.0))
+                spk = str(t.get("speaker", "") or "").strip()
+                if te > ts and spk:
+                    valid_turns.append({"start": ts, "end": te, "speaker": spk})
+            except (TypeError, ValueError):
+                continue
+        valid_turns.sort(key=lambda x: x["start"])
+
+        if not valid_turns:
+            return [dict(segment) for segment in (segments or [])]
+
+        def get_speaker_for_time(t_mid: float) -> str:
+            for turn in valid_turns:
+                if turn["start"] <= t_mid <= turn["end"]:
+                    return turn["speaker"]
+            closest_spk = ""
+            min_dist = 999.0
+            for turn in valid_turns:
+                dist = min(abs(t_mid - turn["start"]), abs(t_mid - turn["end"]))
+                if dist < min_dist:
+                    min_dist = dist
+                    closest_spk = turn["speaker"]
+            return closest_spk if min_dist < 0.6 else ""
+
+        labeled_and_split = []
+
         for segment in segments or []:
             item = dict(segment)
             try:
                 start = float(item.get("start", 0.0))
                 end = max(start, float(item.get("end", start)))
             except (TypeError, ValueError):
-                labeled.append(item)
+                labeled_and_split.append(item)
                 continue
+
+            words = list(item.get("words") or [])
+
+            # Identify speaker turns overlapping with this segment
+            overlapping_turns = [
+                t for t in valid_turns
+                if max(0.0, min(end, t["end"]) - max(start, t["start"])) >= 0.15
+            ]
+            distinct_speakers = {t["speaker"] for t in overlapping_turns}
+
+            # If segment has multiple words and spans more than 1 speaker: split by word timestamps
+            if words and len(words) >= 2 and len(distinct_speakers) > 1:
+                word_speakers = []
+                for w in words:
+                    w_start = float(w.get("start", 0.0))
+                    w_end = float(w.get("end", w_start))
+                    w_mid = (w_start + w_end) / 2.0
+                    spk = get_speaker_for_time(w_mid)
+                    word_speakers.append(spk)
+
+                # Smooth single-word anomalies (e.g. A B A -> A A A)
+                for i in range(1, len(word_speakers) - 1):
+                    if word_speakers[i - 1] and word_speakers[i - 1] == word_speakers[i + 1] and word_speakers[i] != word_speakers[i - 1]:
+                        word_speakers[i] = word_speakers[i - 1]
+
+                # Fill any unassigned words from neighboring words
+                last_known = ""
+                for i in range(len(word_speakers)):
+                    if word_speakers[i]:
+                        last_known = word_speakers[i]
+                    elif last_known:
+                        word_speakers[i] = last_known
+                if last_known:
+                    for i in range(len(word_speakers) - 1, -1, -1):
+                        if not word_speakers[i]:
+                            word_speakers[i] = last_known
+                        else:
+                            last_known = word_speakers[i]
+
+                # Group consecutive words by speaker
+                groups = []
+                curr_g = []
+                curr_spk = word_speakers[0] if word_speakers else ""
+                for w, spk in zip(words, word_speakers):
+                    if spk == curr_spk:
+                        curr_g.append(w)
+                    else:
+                        if curr_g:
+                            groups.append((curr_spk, curr_g))
+                        curr_g = [w]
+                        curr_spk = spk
+                if curr_g:
+                    groups.append((curr_spk, curr_g))
+
+                if len(groups) > 1:
+                    for spk, g in groups:
+                        sub_seg = dict(item)
+                        sub_seg["start"] = round(float(g[0].get("start", 0.0)), 3)
+                        sub_seg["end"] = round(float(g[-1].get("end", 0.0)), 3)
+                        sub_seg["words"] = g
+                        sub_seg["text"] = SegmentRegroupService.join_words(g)
+                        sub_seg["tts_text"] = sub_seg["text"]
+                        if spk:
+                            sub_seg["speaker"] = spk
+                        labeled_and_split.append(sub_seg)
+                    continue
+
+            elif len(distinct_speakers) > 1:
+                # When word-level timestamps are not present, split by punctuation and align to speaker turns
+                orig_text = str(item.get("text", "") or item.get("original_text", "") or "").strip()
+                sentences = SegmentRegroupService.split_text_by_punctuation(orig_text, duration=(end - start))
+                sorted_turns = sorted(overlapping_turns, key=lambda t: t["start"])
+                if len(sentences) > 1 and len(sorted_turns) > 1:
+                    total_chars = sum(max(1, len(s)) for s in sentences)
+                    curr_time = start
+                    total_dur = end - start
+                    for s_idx, s_text in enumerate(sentences):
+                        s_dur = total_dur * (len(s_text) / total_chars)
+                        s_start = round(curr_time, 3)
+                        s_end = round(curr_time + s_dur if s_idx < len(sentences) - 1 else end, 3)
+                        curr_time += s_dur
+                        sub_spk = ""
+                        best_sub_ov = 0.0
+                        for t in sorted_turns:
+                            ov = max(0.0, min(s_end, t["end"]) - max(s_start, t["start"]))
+                            if ov > best_sub_ov:
+                                best_sub_ov = ov
+                                sub_spk = t["speaker"]
+                        if not sub_spk and s_idx < len(sorted_turns):
+                            sub_spk = sorted_turns[s_idx]["speaker"]
+                        sub_seg = dict(item)
+                        sub_seg["start"] = s_start
+                        sub_seg["end"] = s_end
+                        sub_seg["text"] = s_text
+                        sub_seg["tts_text"] = s_text
+                        sub_seg["original_text"] = s_text
+                        sub_seg["words"] = []
+                        if sub_spk:
+                            sub_seg["speaker"] = sub_spk
+                        labeled_and_split.append(sub_seg)
+                    continue
+
+            # Fallback for single speaker or segments without words
             best_speaker = ""
             best_overlap = 0.0
-            for turn in speaker_turns:
-                try:
-                    overlap = max(0.0, min(end, float(turn.get("end", 0.0))) - max(start, float(turn.get("start", 0.0))))
-                except (TypeError, ValueError):
-                    continue
+            for turn in valid_turns:
+                overlap = max(0.0, min(end, turn["end"]) - max(start, turn["start"]))
                 if overlap > best_overlap:
                     best_overlap = overlap
-                    best_speaker = str(turn.get("speaker", "") or "").strip()
+                    best_speaker = turn["speaker"]
             if best_speaker:
                 item["speaker"] = best_speaker
-            labeled.append(item)
-        return labeled
+            labeled_and_split.append(item)
+
+        return labeled_and_split
 
     def run(
         self,
@@ -329,7 +601,7 @@ class PrepareWorkflow:
         if step_callback: step_callback("prepare")
         workflow_started = time.perf_counter()
         is_ocr = transcription_engine == "ocr"
-        speaker_diarization = bool(speaker_diarization and not is_ocr)
+        speaker_diarization = bool(speaker_diarization or is_ocr)
         try:
             speaker_diarization_num_speakers = int(speaker_diarization_num_speakers)
         except (TypeError, ValueError):
@@ -413,6 +685,30 @@ class PrepareWorkflow:
             project_state.set_step_status("extract_audio", "completed")
             self.project_service.save_project(project_state)
 
+            openai_speaker_turns: list[dict] = []
+            if speaker_diarization:
+                from services import OpenAISpeakerAnalysisService
+                try:
+                    openai_speaker_turns, openai_summary = self._analyze_speakers_before_transcription(
+                        audio_output_path, project_state, step_callback, video_path=video_path
+                    )
+                    if openai_summary:
+                        speaker_diarization_num_speakers = int(
+                            openai_summary.get("speaker_count", -1) or -1
+                        )
+                    project_state.settings.pop("speaker_analysis_error", None)
+                    self.project_service.save_project(project_state)
+                except Exception as exc:
+                    error_message = str(exc or "Unknown Character Resolver error")
+                    project_state.set_setting("speaker_analysis_error", error_message)
+                    self.project_service.save_project(project_state)
+                    if OpenAISpeakerAnalysisService.is_configured():
+                        raise RuntimeError(
+                            "Phân tích nhân vật thất bại; quy trình đã dừng trước TTS để tránh gán sai giọng. "
+                            f"Chi tiết: {error_message}"
+                        ) from exc
+                    print(f"[OpenAI Speaker Analysis] OpenAI not configured; using local Sherpa fallback: {exc}")
+
             print("--- Step 2: Extracting subtitles via OCR ---")
             if step_callback: step_callback("transcription")
             transcribe_started = time.perf_counter()
@@ -423,6 +719,41 @@ class PrepareWorkflow:
             ocr_signature = self.project_service.build_ocr_transcription_signature(
                 video_path, region=ocr_region,
             )
+            if speaker_diarization:
+                # Speaker labels are part of the cached transcript artifact.
+                # Include the diarization algorithm/configuration so clearing
+                # or rerunning cannot silently restore obsolete speaker IDs.
+                from services import SpeakerDiarizationService
+                ocr_signature += "|" + SpeakerDiarizationService.cache_key(
+                    num_speakers=speaker_diarization_num_speakers
+                )
+                if openai_speaker_turns:
+                    from services import OpenAISpeakerAnalysisService
+                    ocr_signature += "|" + OpenAISpeakerAnalysisService.cache_key()
+                    ocr_signature += "|character-resolver-v4-post-ocr-gap-integrity"
+                    character_assignment_fingerprint = hashlib.sha1(
+                        repr([
+                            (
+                                round(float(turn.get("start", 0.0) or 0.0), 3),
+                                round(float(turn.get("end", 0.0) or 0.0), 3),
+                                str(turn.get("character_id", turn.get("speaker", "")) or ""),
+                                str(turn.get("character_gender", "unknown") or "unknown"),
+                            )
+                            for turn in openai_speaker_turns
+                        ]).encode("utf-8", errors="replace")
+                    ).hexdigest()
+                    ocr_signature += "|character-assignments=" + character_assignment_fingerprint
+                    # A Phase 4 correction changes speaker/voice assignment
+                    # even when OCR text and video are unchanged. Include it
+                    # in the transcript cache key so corrected CHAR_x labels
+                    # cannot be hidden by an older cached OCR artifact.
+                    corrections = self.project_service.load_json_artifact(
+                        project_state, "character_corrections", default=[]
+                    ) or []
+                    correction_fingerprint = hashlib.sha1(
+                        repr(corrections).encode("utf-8", errors="replace")
+                    ).hexdigest()
+                    ocr_signature += "|corrections=" + correction_fingerprint
             cached_ocr_signature = str(project_state.settings.get("ocr_transcription_signature", "") or "")
             cached_raw_path = project_state.artifacts.get("transcript_raw", "")
             cached_segment_path = project_state.artifacts.get("transcript_segments", "")
@@ -432,6 +763,22 @@ class PrepareWorkflow:
                 and os.path.exists(cached_raw_path)
                 and os.path.exists(cached_segment_path)
             )
+            # Older cached OCR artifacts may have the same input signature but
+            # predate Character Resolver propagation. Never reuse them when the
+            # current analysis contains CHAR_x assignments.
+            if reused_ocr and any(
+                str(turn.get("character_id", "") or "").startswith("CHAR_")
+                for turn in openai_speaker_turns
+            ):
+                cached_raw = self.project_service.load_json_artifact(
+                    project_state, "transcript_raw", default=[]
+                ) or []
+                reused_ocr = bool(cached_raw) and all(
+                    str(segment.get("character_id", segment.get("speaker", "")) or "").startswith("CHAR_")
+                    for segment in cached_raw
+                )
+                if not reused_ocr:
+                    print("[Prepare Workflow] Invalidating OCR cache without Character Resolver metadata.")
             if reused_ocr:
                 raw_segments = self.project_service.load_json_artifact(project_state, "transcript_raw", default=[])
                 segment_models = self.project_service.load_segment_artifact(project_state, "transcript_segments")
@@ -440,6 +787,27 @@ class PrepareWorkflow:
                 print("[Prepare Workflow] Reusing cached OCR transcript. Generate did not scan the video again.")
             else:
                 raw_segments = self.engine_runtime.transcribe_video_ocr(video_path, region=ocr_region)
+                # Multimodal Fusion: Spatial/Temporal Tracking + VAD + ASR 3-State Classifier
+                try:
+                    from services.hybrid_audio_ocr_fusion import (
+                        classify_ocr_segments_multimodal,
+                        extract_audio_speech_and_asr,
+                        fill_ocr_gaps_with_speech,
+                    )
+                    speech_intervals, asr_segments = extract_audio_speech_and_asr(
+                        audio_output_path, whisper_model_name=whisper_model_name
+                    )
+                    raw_segments = classify_ocr_segments_multimodal(
+                        raw_segments, speech_intervals=speech_intervals, asr_segments=asr_segments
+                    )
+                    raw_segments = fill_ocr_gaps_with_speech(
+                        audio_output_path,
+                        raw_segments,
+                        whisper_model_name=whisper_model_name,
+                    )
+                except Exception as exc:
+                    print(f"[Prepare Workflow] Multimodal fusion skipped: {exc}")
+
                 if not raw_segments:
                     project_state.set_step_status("transcribe", "failed")
                     self.project_service.save_project(project_state)
@@ -450,8 +818,169 @@ class PrepareWorkflow:
                     )
                     print(f"[OCR] {message}")
                     raise RuntimeError(message)
+
+                # P0: OCR can observe valid dialogue that paid audio
+                # diarization omitted.  Give every uncovered cue its own
+                # exact audio/video window and rerun the Character Resolver
+                # over the complete chronological evidence.  Without this,
+                # the aligner would incorrectly inherit the nearest speaker.
+                if openai_speaker_turns:
+                    from services import (
+                        CharacterCorrectionService,
+                        CharacterVoiceResolver,
+                        OpenAISpeakerAnalysisService,
+                        PostOCRCharacterResolver,
+                    )
+                    augmented_turns, gap_report = PostOCRCharacterResolver.augment_turns(
+                        raw_segments, openai_speaker_turns
+                    )
+                    self.project_service.save_json_artifact(
+                        project_state,
+                        "post_ocr_gap_report",
+                        os.path.join("analysis", "post_ocr_gap_report.json"),
+                        gap_report,
+                    )
+                    if gap_report["gap_count"]:
+                        print(
+                            "[Post-OCR Resolver] Found "
+                            f"{gap_report['gap_count']} cue(s) missing audio turns; "
+                            "resolving their exact audio/video windows."
+                        )
+                        previous_analysis = self.project_service.load_json_artifact(
+                            project_state, "openai_speaker_analysis", default={}
+                        ) or {}
+                        expanded_result = {
+                            "summary": dict(previous_analysis.get("summary") or {}),
+                            "turns": augmented_turns,
+                        }
+                        expanded_result = OpenAISpeakerAnalysisService().resolve_characters(
+                            video_path, expanded_result
+                        )
+                        expanded_result, voice_artifact = CharacterVoiceResolver().resolve(
+                            audio_output_path, expanded_result
+                        )
+                        corrections = self.project_service.load_json_artifact(
+                            project_state, "character_corrections", default=[]
+                        ) or []
+                        if corrections:
+                            expanded_result = CharacterCorrectionService.apply(
+                                expanded_result, corrections
+                            )
+                        openai_speaker_turns = list(expanded_result.get("turns") or [])
+                        character_summary = dict(expanded_result.get("character_summary") or {})
+                        character_summary["post_ocr_gap_count"] = int(gap_report["gap_count"])
+                        expanded_result["character_summary"] = character_summary
+                        self.project_service.save_json_artifact(
+                            project_state,
+                            "openai_speaker_analysis",
+                            os.path.join("analysis", "openai_speaker_analysis.json"),
+                            expanded_result,
+                        )
+                        self.project_service.save_json_artifact(
+                            project_state,
+                            "character_voice_prototypes",
+                            os.path.join("analysis", "character_voice_prototypes.json"),
+                            voice_artifact,
+                        )
+                        self.project_service.save_json_artifact(
+                            project_state,
+                            "character_registry",
+                            os.path.join("analysis", "character_registry.json"),
+                            list(expanded_result.get("characters") or []),
+                        )
+                        project_state.set_setting("character_analysis_summary", character_summary)
+                        self.project_service.save_project(project_state)
+
+                # Speaker Diarization & Smart Role Cast for OCR Subtitles
+                if audio_output_path and os.path.isfile(audio_output_path) and raw_segments:
+                    print("\n--- Step 2.5: Running Sherpa-ONNX Diarization on audio for OCR subtitles ---")
+                    try:
+                        from services.speaker_diarization_service import SpeakerDiarizationService
+                        from services.subtitle_speaker_aligner import align_subtitles_to_speakers
+                        from services.smart_cast import auto_cast_speakers, apply_smart_cast_to_subtitles
+
+                        speaker_turns = list(openai_speaker_turns)
+                        if not speaker_turns:
+                            diar_service = SpeakerDiarizationService()
+                            speaker_turns = diar_service.diarize(
+                                audio_output_path,
+                                num_speakers=speaker_diarization_num_speakers,
+                            )
+                        if speaker_turns:
+                            self.project_service.save_json_artifact(
+                                project_state,
+                                "speaker_diarization",
+                                os.path.join("analysis", "speaker_diarization.json"),
+                                speaker_turns,
+                            )
+                            raw_segments = align_subtitles_to_speakers(raw_segments, speaker_turns)
+                            character_genders = {
+                                str(turn.get("character_id", "") or ""): str(
+                                    turn.get("character_gender", "unknown") or "unknown"
+                                )
+                                for turn in speaker_turns
+                                if str(turn.get("character_id", "") or "").startswith("CHAR_")
+                            }
+                            speaker_voice_map, profiles = auto_cast_speakers(
+                                raw_segments,
+                                audio_output_path,
+                                gender_overrides=character_genders,
+                                expected_speakers=speaker_diarization_num_speakers,
+                                speaker_turns=speaker_turns,
+                            )
+                            if speaker_voice_map:
+                                raw_segments = apply_smart_cast_to_subtitles(
+                                    raw_segments, speaker_voice_map, profiles=profiles
+                                )
+                                # A fresh diarization result must replace stale
+                                # per-speaker voice settings from an earlier
+                                # run/project revision. Otherwise the GUI
+                                # reapplies the old voice map over the correctly
+                                # detected male/female profiles.
+                                project_state.set_setting(
+                                    "speaker_voice_assignments",
+                                    {
+                                        speaker: {
+                                            "voice": voice,
+                                            "voice_gender_filter": str(
+                                                (profiles.get(speaker, {}) or {}).get("gender", "")
+                                            ),
+                                        }
+                                        for speaker, voice in speaker_voice_map.items()
+                                    },
+                                )
+                                self.project_service.save_project(project_state)
+                            print(f"[OCR Diarization] Successfully aligned {len(speaker_turns)} turns and auto-cast speaker roles.")
+                    except Exception as diar_exc:
+                        print(f"[OCR Diarization] Diarization alignment warning: {diar_exc}")
+
+                # Final integrity pass. Some OCR/fusion implementations retain
+                # only the flattened CHAR_x speaker label. Recover the full
+                # resolver metadata before it is persisted or translated.
+                if openai_speaker_turns:
+                    from services.subtitle_speaker_aligner import align_subtitles_to_speakers
+                    raw_segments = align_subtitles_to_speakers(raw_segments, openai_speaker_turns)
                 segment_models = self.segment_service.transcript_dicts_to_models(raw_segments)
                 project_state.set_setting("ocr_transcription_signature", ocr_signature)
+            from services import CharacterCorrectionService
+            review_queue = CharacterCorrectionService.build_review_queue(raw_segments)
+            self.project_service.save_json_artifact(
+                project_state,
+                "character_review_queue",
+                os.path.join("analysis", "character_review_queue.json"),
+                review_queue,
+            )
+            project_state.set_setting("character_review_count", len(review_queue))
+            from services import CharacterIntegrityGate
+            integrity_report = CharacterIntegrityGate.inspect(raw_segments)
+            self.project_service.save_json_artifact(
+                project_state,
+                "character_integrity_report",
+                os.path.join("analysis", "character_integrity_report.json"),
+                integrity_report,
+            )
+            project_state.set_setting("character_integrity_passed", bool(integrity_report["passed"]))
+            project_state.set_setting("character_integrity_issue_count", int(integrity_report["issue_count"]))
             transcribe_elapsed = time.perf_counter() - transcribe_started
             print(f"Success: Generated {len(segment_models)} segments via OCR.")
             print(f"[Timing] OCR step: {transcribe_elapsed:.2f}s")
@@ -509,6 +1038,19 @@ class PrepareWorkflow:
             project_state.set_step_status("extract_audio", "done")
             project_state.set_artifact("extracted_audio", audio_output_path)
             self.project_service.save_project(project_state)
+
+            openai_speaker_turns: list[dict] = []
+            if speaker_diarization:
+                try:
+                    openai_speaker_turns, openai_summary = self._analyze_speakers_before_transcription(
+                        audio_output_path, project_state, step_callback, video_path=video_path
+                    )
+                    if openai_summary:
+                        speaker_diarization_num_speakers = int(
+                            openai_summary.get("speaker_count", -1) or -1
+                        )
+                except Exception as exc:
+                    print(f"[OpenAI Speaker Analysis] Failed; using local Sherpa fallback: {exc}")
 
             working_audio_path = audio_output_path
             audio_mode_key = str(audio_handling_mode or "fast").strip().lower()
@@ -603,6 +1145,16 @@ class PrepareWorkflow:
             diarization_signature = ""
             diarization_started = 0.0
             if speaker_diarization:
+                if openai_speaker_turns:
+                    speaker_turns = list(openai_speaker_turns)
+                    self.project_service.save_json_artifact(
+                        project_state,
+                        "speaker_diarization",
+                        os.path.join("analysis", "speaker_diarization.json"),
+                        speaker_turns,
+                    )
+                    project_state.set_step_status("diarize", "done")
+                    self.project_service.save_project(project_state)
                 print("\n--- Step 1.75: Detecting speakers (Sherpa-ONNX) ---")
                 if step_callback:
                     step_callback("diarization")
@@ -617,7 +1169,9 @@ class PrepareWorkflow:
                 )
                 cached_signature = str(project_state.settings.get("speaker_diarization_signature", "") or "")
                 cached_turns_path = project_state.artifacts.get("speaker_diarization", "")
-                if (
+                if speaker_turns:
+                    print(f"[Diarization] Using OpenAI speaker turns: {len(speaker_turns)}")
+                elif (
                     cached_signature == diarization_signature
                     and cached_turns_path
                     and os.path.exists(cached_turns_path)
@@ -697,7 +1251,7 @@ class PrepareWorkflow:
                 # Bump the signature when the chunk merge algorithm changes
                 # so a project cannot reuse an aggressively regrouped
                 # transcript. Raw per-chunk ASR cache entries remain valid.
-                audio_handling_mode=f"{audio_mode_key}|asr-merge-v4",
+                audio_handling_mode=f"{audio_mode_key}|asr-merge-v5",
             )
             cached_transcription_signature = str(project_state.settings.get("transcription_signature", "") or "").strip()
             cached_transcript_path = project_state.artifacts.get("transcript_segments", "")
@@ -830,6 +1384,7 @@ class PrepareWorkflow:
                     project_state.set_step_status("transcribe", "failed")
                     self.project_service.save_project(project_state)
                     raise RuntimeError("Transcription failed.")
+                raw_segments = self.segment_regroup_service.regroup(raw_segments)
                 segment_models = self.segment_service.transcript_dicts_to_models(raw_segments)
                 project_state.set_setting("transcription_signature", transcription_signature)
             if diarization_future is not None:

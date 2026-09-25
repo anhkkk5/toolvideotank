@@ -179,14 +179,14 @@ def _update_device_label(gui):
     import os
     cpu_mode = os.getenv("CAPCAP_DEVICE", "cuda").strip().lower() == "cpu"
     if cpu_mode:
-        gui.device_mode_label.setText("CPU mode")
+        gui.device_mode_label.setText("Chế độ CPU")
         gui.device_mode_label.setStyleSheet("font-size: 11px; color: #ffa500;")
     else:
         gpu_name = os.getenv("CAPCAP_GPU_NAME", "").strip()
         if gpu_name:
             gui.device_mode_label.setText(gpu_name)
         else:
-            gui.device_mode_label.setText("GPU mode")
+            gui.device_mode_label.setText("Chế độ GPU")
         gui.device_mode_label.setStyleSheet("font-size: 11px; color: #4ecdc4;")
 
 
@@ -194,41 +194,48 @@ def build_start_group(gui, left_layout):
     _build_hidden_status_widgets(gui)
 
     gui.video_path_edit = QLineEdit()
-    gui.video_path_edit.setPlaceholderText("Choose one video to process...")
+    gui.video_path_edit.setPlaceholderText("Chọn video cần xử lý...")
     gui.video_path_edit.hide()
 
     gui.final_output_folder_edit = QLineEdit(os.path.join(gui.workspace_root, "output"))
-    gui.final_output_folder_edit.setPlaceholderText("Folder to save final results...")
+    gui.final_output_folder_edit.setPlaceholderText("Thư mục lưu video kết quả...")
     gui.final_output_folder_edit.hide()
 
     gui.run_all_btn = QToolButton()
     gui.run_all_btn.setObjectName("mainActionBtn")
     gui.run_all_btn.setPopupMode(QToolButton.MenuButtonPopup)
-    gui._generate_full_action = QAction("Generate Full Pipeline", gui.run_all_btn)
+    gui._generate_full_action = QAction("Tạo toàn bộ quy trình", gui.run_all_btn)
     gui._generate_full_action.triggered.connect(gui.run_all_pipeline)
     gui.run_all_btn.setDefaultAction(gui._generate_full_action)
     gui._generate_menu = None
 
-    gui.export_btn = QPushButton("Export")
+    gui.export_btn = QPushButton("Xuất video")
     gui.export_btn.setObjectName("mainActionBtn")
     gui.export_btn.clicked.connect(gui.export_final_video)
 
-    gui.preview_5s_btn = QPushButton("Fast Preview")
+    gui.preview_5s_btn = QPushButton("Xem nhanh (5s)")
     gui.preview_5s_btn.clicked.connect(gui.preview_five_seconds)
-    gui.preview_frame_btn = QPushButton("Open Large Frame Preview")
+    gui.preview_frame_btn = QPushButton("Xem trước khung hình lớn")
     gui.preview_frame_btn.clicked.connect(gui.preview_exact_frame)
-    gui.open_output_btn = QPushButton("Open Results Folder")
+    gui.open_output_btn = QPushButton("Mở thư mục kết quả")
     gui.open_output_btn.clicked.connect(lambda: gui.open_folder(gui.final_output_folder_edit.text()))
 
     gui.stabilize_button(gui.run_all_btn, min_width=240)
     gui.stabilize_button(gui.export_btn, min_width=180)
 
     workflow_shell, workflow_shell_layout = _section_card()
-    workflow_shell_layout.setSpacing(12)
+    workflow_shell_layout.setSpacing(10)
 
-    workflow_title = QLabel("Workflow")
-    workflow_title.setObjectName("statusHeadline")
-    workflow_shell_layout.addWidget(workflow_title)
+    workflow_header_layout = QHBoxLayout()
+    workflow_icon = QLabel("⚡")
+    workflow_icon.setStyleSheet("font-size: 13px; color: #ff9d42;")
+    workflow_header_layout.addWidget(workflow_icon)
+
+    workflow_title = QLabel("QUY TRÌNH TANKVIDEO")
+    workflow_title.setStyleSheet("font-size: 11px; font-weight: 800; color: #ff9d42; letter-spacing: 0.5px;")
+    workflow_header_layout.addWidget(workflow_title)
+    workflow_header_layout.addStretch()
+    workflow_shell_layout.addLayout(workflow_header_layout)
 
     # Generation milestones remain visible while users work through the
     # configuration pages below.
@@ -238,22 +245,60 @@ def build_start_group(gui, left_layout):
     gui.workflow_stage_labels = {}
     stage_box = QFrame()
     stage_box.setObjectName("statusCard")
+    stage_box.setStyleSheet(
+        "QFrame#statusCard { background-color: #12151d; border: 1px solid #232938; border-radius: 8px; }"
+    )
     stage_layout = QVBoxLayout(stage_box)
-    stage_layout.setContentsMargins(10, 8, 10, 8)
-    stage_layout.setSpacing(4)
-    for key, title in (("prepare", "Prepare"), ("transcript", "Transcript"),
-                       ("translate", "Translate"), ("tts", "Generate Voice / TTS (Optional)"),
-                       ("export", "Export")):
-        row = QHBoxLayout()
+    stage_layout.setContentsMargins(8, 6, 8, 6)
+    stage_layout.setSpacing(3)
+
+    stage_tab_map = {
+        "prepare": 0,    # media
+        "transcript": 0, # media
+        "translate": 2,  # language
+        "tts": 3,        # voice
+        "export": 5,     # advanced
+    }
+
+    for key, title in (("prepare", "1. Chuẩn bị"), ("transcript", "2. Chép lời"),
+                       ("translate", "3. Dịch thuật"), ("tts", "4. Lồng tiếng AI"),
+                       ("export", "5. Xuất video")):
+        row_frame = QFrame()
+        row_frame.setCursor(Qt.PointingHandCursor)
+        row_frame.setToolTip("Nhấp để chuyển đến phần cấu hình này")
+        row_frame.setStyleSheet(
+            "QFrame { background: transparent; border-radius: 4px; padding: 1px 3px; } "
+            "QFrame:hover { background: #1a202c; }"
+        )
+        row = QHBoxLayout(row_frame)
+        row.setContentsMargins(2, 2, 2, 2)
+        row.setSpacing(6)
         label = QLabel(title)
-        status = QLabel("Not started")
+        label.setStyleSheet("font-size: 11px; font-weight: 600; color: #cbd5e1;")
+        status = QLabel("Chưa bắt đầu")
         status.setObjectName("helperLabel")
+        status.setStyleSheet(
+            "background: #181d28; color: #8394aa; border: 1px solid #262f42; border-radius: 8px; padding: 1px 7px; font-size: 10px; font-weight: 600;"
+        )
         row.addWidget(label)
         row.addStretch(1)
         row.addWidget(status)
-        stage_layout.addLayout(row)
+        stage_layout.addWidget(row_frame)
         gui.workflow_stage_badges[key] = status
         gui.workflow_stage_labels[key] = label
+
+        # Click to jump to tab
+        def _bind_stage_jump(frame, target_idx):
+            tab_keys = ["media", "audio", "language", "voice", "style", "advanced"]
+            def handler(event):
+                if target_idx < len(tab_keys):
+                    pk = tab_keys[target_idx]
+                    btn = gui.workflow_tab_buttons.get(pk)
+                    if btn:
+                        btn.setChecked(True)
+            frame.mousePressEvent = handler
+        _bind_stage_jump(row_frame, stage_tab_map.get(key, 0))
+
     workflow_shell_layout.addWidget(stage_box)
 
     gui.device_mode_label = QLabel()
@@ -302,8 +347,6 @@ def build_start_group(gui, left_layout):
     pages = []
     media_page, media_layout = _make_page("media")
     audio_page, audio_layout = _make_page("audio")
-    # Advanced controls that belong to the Audio workflow are attached here
-    # after their shared runtime widgets have been created.
     gui.workflow_audio_layout = audio_layout
     language_page, language_layout = _make_page("language")
     voice_page, voice_layout = _make_page("voice")
@@ -328,14 +371,14 @@ def build_start_group(gui, left_layout):
         gui.workflow_tab_buttons[page_key] = btn
         return btn
 
-    _add_tab("Media", 0, "media", checked=True)
-    gui.audio_tab_btn = _add_tab("Audio", 1, "audio")
+    _add_tab("🎬 Video & Khung", 0, "media", checked=False)
+    gui.audio_tab_btn = _add_tab("🎵 Âm thanh", 1, "audio")
     gui.audio_tab_btn.setEnabled(False)
-    _add_tab("Language", 2, "language")
-    _add_tab("Voice", 3, "voice")
-    _add_tab("Style", 4, "style")
-    _add_tab("Advanced", 5, "advanced")
-    gui.show_progress_btn = QPushButton("Show Progress")
+    _add_tab("🌐 Dịch thuật", 2, "language")
+    _add_tab("🎙️ Giọng đọc AI", 3, "voice", checked=True)
+    _add_tab("🎨 Kiểu dáng Sub", 4, "style")
+    _add_tab("⚙️ Nâng cao", 5, "advanced")
+    gui.show_progress_btn = QPushButton("Xem tiến trình")
     gui.show_progress_btn.clicked.connect(gui.show_active_progress_dialog)
     gui.show_progress_btn.setVisible(False)
     gui.show_progress_btn.setEnabled(False)
@@ -349,38 +392,92 @@ def build_start_group(gui, left_layout):
     upload_card, upload_layout = _build_collapsible_section("Video")
     upload_card.hide()
 
-    output_card, output_layout = _build_collapsible_section("Output")
+    output_card, output_layout = _build_collapsible_section("Đầu ra")
     # Output is always subtitles + voice. Keep the hidden compatibility
     # control because older settings/project helpers still read it.
     gui.output_mode_combo = QComboBox(gui)
-    gui.output_mode_combo.addItem("Vietnamese subtitles + voice")
-    gui.output_mode_combo.setCurrentText("Vietnamese subtitles + voice")
+    gui.output_mode_combo.addItem("Phụ đề + Giọng đọc Tiếng Việt")
+    gui.output_mode_combo.setCurrentText("Phụ đề + Giọng đọc Tiếng Việt")
     gui.output_mode_combo.hide()
 
+    # ---- Quick Presets 1-Click for Creator ----
+    preset_card, preset_layout = _section_card()
+    preset_title = QLabel("⚡ Thiết lập nhanh theo Nền tảng")
+    preset_title.setObjectName("sectionTitle")
+    preset_title.setStyleSheet("color: #ff9d42; font-weight: 700; font-size: 11px;")
+    preset_layout.addWidget(preset_title)
+
+    preset_btn_row = QHBoxLayout()
+    preset_btn_row.setSpacing(6)
+
+    def _apply_quick_preset(ratio_val, quality_val, fps_val, scale_val):
+        idx_r = gui.output_ratio_combo.findData(ratio_val)
+        if idx_r >= 0:
+            gui.output_ratio_combo.setCurrentIndex(idx_r)
+        idx_q = gui.output_quality_combo.findData(quality_val)
+        if idx_q >= 0:
+            gui.output_quality_combo.setCurrentIndex(idx_q)
+        idx_f = gui.output_fps_combo.findData(fps_val)
+        if idx_f >= 0:
+            gui.output_fps_combo.setCurrentIndex(idx_f)
+        idx_s = gui.output_scale_mode_combo.findData(scale_val)
+        if idx_s >= 0:
+            gui.output_scale_mode_combo.setCurrentIndex(idx_s)
+
+    btn_tiktok = QPushButton("📱 TikTok (9:16)")
+    btn_tiktok.setToolTip("Chuẩn dọc 9:16 - 1080p - 30 FPS - Vừa vặn")
+    btn_tiktok.setStyleSheet(
+        "QPushButton { background: #161b26; color: #f1f5f9; border: 1px solid #2a3449; border-radius: 6px; padding: 6px 4px; font-size: 10px; font-weight: 700; } "
+        "QPushButton:hover { background: #222b3d; border-color: #ff7b1a; color: #ff9d42; }"
+    )
+    btn_tiktok.clicked.connect(lambda: _apply_quick_preset("9:16", "1080p", "30", "fit"))
+
+    btn_yt = QPushButton("🖥️ YouTube (16:9)")
+    btn_yt.setToolTip("Chuẩn ngang 16:9 - 1080p - Gốc/30 FPS - Vừa vặn")
+    btn_yt.setStyleSheet(
+        "QPushButton { background: #161b26; color: #f1f5f9; border: 1px solid #2a3449; border-radius: 6px; padding: 6px 4px; font-size: 10px; font-weight: 700; } "
+        "QPushButton:hover { background: #222b3d; border-color: #ff7b1a; color: #ff9d42; }"
+    )
+    btn_yt.clicked.connect(lambda: _apply_quick_preset("16:9", "1080p", "30", "fit"))
+
+    btn_fb = QPushButton("🟦 FB (1:1)")
+    btn_fb.setToolTip("Chuẩn vuông 1:1 - 1080p - 30 FPS - Vừa vặn")
+    btn_fb.setStyleSheet(
+        "QPushButton { background: #161b26; color: #f1f5f9; border: 1px solid #2a3449; border-radius: 6px; padding: 6px 4px; font-size: 10px; font-weight: 700; } "
+        "QPushButton:hover { background: #222b3d; border-color: #ff7b1a; color: #ff9d42; }"
+    )
+    btn_fb.clicked.connect(lambda: _apply_quick_preset("1:1", "1080p", "30", "fit"))
+
+    preset_btn_row.addWidget(btn_tiktok)
+    preset_btn_row.addWidget(btn_yt)
+    preset_btn_row.addWidget(btn_fb)
+    preset_layout.addLayout(preset_btn_row)
+    output_layout.addWidget(preset_card)
+
     output_quality_card, output_quality_layout = _section_card()
-    output_quality_title = QLabel("Quality")
+    output_quality_title = QLabel("Chất lượng video")
     output_quality_title.setObjectName("sectionTitle")
     output_quality_layout.addWidget(output_quality_title)
     gui.output_quality_combo = QComboBox()
-    gui.output_quality_combo.addItem("Max (source)", "source")
+    gui.output_quality_combo.addItem("Tối đa (Gốc)", "source")
     gui.output_quality_combo.addItem("720p", "720p")
     gui.output_quality_combo.addItem("1080p (Full HD)", "1080p")
     gui.output_quality_combo.addItem("1440p (2K)", "1440p")
     gui.output_quality_combo.addItem("2160p (4K)", "2160p")
     output_quality_layout.addWidget(gui.output_quality_combo)
     output_fps_row = QVBoxLayout()
-    output_fps_row.addWidget(QLabel("Frame rate"))
+    output_fps_row.addWidget(QLabel("Tốc độ khung hình (FPS)"))
     gui.output_fps_combo = QComboBox()
-    gui.output_fps_combo.addItem("Source (Recommended)", "source")
+    gui.output_fps_combo.addItem("Gốc (Khuyên dùng)", "source")
     gui.output_fps_combo.addItem("24 FPS", "24")
     gui.output_fps_combo.addItem("30 FPS", "30")
     gui.output_fps_combo.addItem("60 FPS", "60")
     output_fps_row.addWidget(gui.output_fps_combo)
     output_quality_layout.addLayout(output_fps_row)
     output_ratio_row = QVBoxLayout()
-    output_ratio_row.addWidget(QLabel("Ratio"))
+    output_ratio_row.addWidget(QLabel("Tỷ lệ khung hình"))
     gui.output_ratio_combo = QComboBox()
-    gui.output_ratio_combo.addItem("Source (Recommended)", "source")
+    gui.output_ratio_combo.addItem("Gốc (Khuyên dùng)", "source")
     gui.output_ratio_combo.addItem("16:9", "16:9")
     gui.output_ratio_combo.addItem("9:16", "9:16")
     gui.output_ratio_combo.addItem("1:1", "1:1")
@@ -389,61 +486,57 @@ def build_start_group(gui, left_layout):
     output_ratio_row.addWidget(gui.output_ratio_combo)
     output_quality_layout.addLayout(output_ratio_row)
     output_scale_row = QVBoxLayout()
-    output_scale_row.addWidget(QLabel("Canvas"))
+    output_scale_row.addWidget(QLabel("Khung hình hiển thị"))
     gui.output_scale_mode_combo = QComboBox()
-    gui.output_scale_mode_combo.addItem("Fit", "fit")
-    gui.output_scale_mode_combo.addItem("Fill", "fill")
+    gui.output_scale_mode_combo.addItem("Vừa vặn (Fit)", "fit")
+    gui.output_scale_mode_combo.addItem("Lấp đầy (Fill)", "fill")
     gui.output_scale_mode_combo.currentIndexChanged.connect(gui.on_output_scale_mode_changed)
     output_scale_row.addWidget(gui.output_scale_mode_combo)
-    gui.reset_framing_btn = QPushButton("Reset Framing")
-    gui.reset_framing_btn.setToolTip("Reset the fill focus to center")
+    gui.reset_framing_btn = QPushButton("Đặt lại căn khung")
+    gui.reset_framing_btn.setToolTip("Đặt lại trọng tâm lấp đầy về chính giữa")
     gui.reset_framing_btn.hide()
     output_scale_row.addWidget(gui.reset_framing_btn)
     output_quality_layout.addLayout(output_scale_row)
     output_layout.addWidget(output_quality_card)
 
     audio_cleanup_card, audio_cleanup_layout = _section_card()
-    audio_cleanup_title = QLabel("Audio Processing")
+    audio_cleanup_title = QLabel("Xử lý âm thanh")
     audio_cleanup_title.setObjectName("sectionTitle")
     audio_cleanup_layout.addWidget(audio_cleanup_title)
     gui.audio_handling_combo = QComboBox()
-    gui.audio_handling_combo.addItem("Fast (recommended)", "fast")
-    gui.audio_handling_combo.addItem("Cleaner voice (remove original voice)", "clean")
+    gui.audio_handling_combo.addItem("Nhanh (Khuyên dùng)", "fast")
+    gui.audio_handling_combo.addItem("Lọc giọng sạch (Tách bỏ giọng gốc)", "clean")
     gui.audio_handling_combo.setCurrentIndex(0)
     audio_cleanup_layout.addWidget(gui.audio_handling_combo)
-    gui.audio_handling_hint_label = QLabel("Fast transcribes the full source mix. Cleaner separates vocals for transcription; choose Music Layer separately for the final mix.", gui)
+    gui.audio_handling_hint_label = QLabel("Nhanh: chép lời từ toàn bộ âm thanh gốc. Lọc sạch: tách riêng giọng nói để chép lời chuẩn hơn.", gui)
     gui.audio_handling_hint_label.setObjectName("helperLabel")
     gui.audio_handling_hint_label.setWordWrap(True)
     audio_cleanup_layout.addWidget(gui.audio_handling_hint_label)
 
     diarization_card, diarization_layout = _section_card()
     gui.speaker_diarization_card = diarization_card
-    diarization_title = QLabel("Speaker Diarization")
+    diarization_title = QLabel("Phân biệt người nói")
     diarization_title.setObjectName("sectionTitle")
     diarization_layout.addWidget(diarization_title)
-    gui.speaker_diarization_cb = QCheckBox("Enable speaker diarization")
-    # Opt-in by default: diarization is an additional analysis pass and
-    # should never add work to a new project unless the user enables it.
-    gui.speaker_diarization_cb.setChecked(False)
+    gui.speaker_diarization_cb = QCheckBox("Bật nhận diện từng người nói")
+    gui.speaker_diarization_cb.setChecked(True)
     gui.speaker_diarization_cb.setToolTip(
-        "Detect speakers offline with Sherpa-ONNX and color TS1 segments. Available for audio transcription only."
+        "Nhận diện người nói offline bằng Sherpa-ONNX để tự động phân vai giọng đọc thông minh."
     )
     diarization_layout.addWidget(gui.speaker_diarization_cb)
     expected_speakers_row = QVBoxLayout()
-    expected_speakers_row.addWidget(QLabel("Expected speakers"))
+    expected_speakers_row.addWidget(QLabel("Số người nói dự kiến"))
     gui.speaker_diarization_speakers_combo = QComboBox()
-    gui.speaker_diarization_speakers_combo.addItem("Auto detect", -1)
+    gui.speaker_diarization_speakers_combo.addItem("Tự động nhận diện", -1)
     for count in range(2, 9):
-        gui.speaker_diarization_speakers_combo.addItem(f"{count} speakers", count)
+        gui.speaker_diarization_speakers_combo.addItem(f"{count} người nói", count)
     gui.speaker_diarization_speakers_combo.setToolTip(
-        "Choose a count when you know the number of people speaking. "
-        "Auto detect uses similarity-based clustering."
+        "Chọn số lượng khi bạn biết chính xác số người nói trong video. Tự động nhận diện sẽ gom cụm theo độ tương đồng."
     )
     expected_speakers_row.addWidget(gui.speaker_diarization_speakers_combo)
     diarization_layout.addLayout(expected_speakers_row)
     gui.speaker_diarization_hint_label = QLabel(
-        "Optional: detects speaker turns after extraction and colors TS1 segments. "
-        "Requires local Sherpa-ONNX diarization models."
+        "Tùy chọn: phát hiện các lượt nói và phân màu từng đoạn trên timeline TS1. Yêu cầu mô hình Sherpa-ONNX."
     )
     gui.speaker_diarization_hint_label.setObjectName("helperLabel")
     gui.speaker_diarization_hint_label.setWordWrap(True)
@@ -455,58 +548,66 @@ def build_start_group(gui, left_layout):
     if hasattr(gui, "update_speaker_diarization_availability"):
         gui.update_speaker_diarization_availability()
 
-    language_card, language_layout = _build_collapsible_section("Language")
+    language_card, language_layout = _build_collapsible_section("Ngôn ngữ")
     gui.lang_whisper_combo = QComboBox()
-    gui.lang_whisper_combo.addItem("Auto Detect", "auto")
-    gui.lang_whisper_combo.addItem("Chinese", "zh")
-    gui.lang_whisper_combo.addItem("Japanese", "ja")
-    gui.lang_whisper_combo.addItem("Korean", "ko")
-    gui.lang_whisper_combo.addItem("English", "en")
+    gui.lang_whisper_combo.addItem("Tự động phát hiện", "auto")
+    gui.lang_whisper_combo.addItem("Tiếng Trung", "zh")
+    gui.lang_whisper_combo.addItem("Tiếng Nhật", "ja")
+    gui.lang_whisper_combo.addItem("Tiếng Hàn", "ko")
+    gui.lang_whisper_combo.addItem("Tiếng Anh", "en")
+    gui.lang_whisper_combo.addItem("Tiếng Việt", "vi")
     gui.lang_target_combo = QComboBox()
-    gui.lang_target_combo.addItem("Vietnamese", "vi")
-    gui.lang_target_combo.addItem("English", "en")
+    gui.lang_target_combo.addItem("Tiếng Việt", "vi")
+    gui.lang_target_combo.addItem("Tiếng Anh", "en")
     gui.lang_target_combo.setCurrentIndex(0)
     language_pair_card, language_pair_layout = _section_card()
-    language_pair_title = QLabel("Language Pair")
+    language_pair_title = QLabel("Cặp ngôn ngữ dịch")
     language_pair_title.setObjectName("sectionTitle")
     language_pair_layout.addWidget(language_pair_title)
     source_row = QVBoxLayout()
-    source_row.addWidget(QLabel("Original language"))
+    source_row.addWidget(QLabel("Ngôn ngữ gốc của video"))
     source_row.addWidget(gui.lang_whisper_combo)
     target_row = QVBoxLayout()
-    target_row.addWidget(QLabel("Translate to"))
+    target_row.addWidget(QLabel("Dịch sang ngôn ngữ"))
     target_row.addWidget(gui.lang_target_combo)
     language_pair_layout.addLayout(source_row)
     language_pair_layout.addLayout(target_row)
+
+    gui.view_subtitle_alignment_btn = QPushButton("📋 Đối chiếu Phụ đề Song ngữ (Gốc & Dịch)")
+    gui.view_subtitle_alignment_btn.setStyleSheet(
+        "background-color: #1e3a5f; color: #4ecdc4; font-weight: bold; padding: 8px 14px; border: 1px solid #2d5a88; border-radius: 4px; margin-top: 6px;"
+    )
+    gui.view_subtitle_alignment_btn.clicked.connect(gui.open_subtitle_alignment_dialog)
+    language_layout.addWidget(gui.view_subtitle_alignment_btn)
 
     language_layout.addWidget(language_pair_card)
     gui.lang_target_combo.currentIndexChanged.connect(gui.on_target_language_changed)
 
     language_page.layout().addWidget(language_card)
 
-    voice_card, voice_layout = _build_collapsible_section("Voice")
+    voice_card, voice_layout = _build_collapsible_section("Giọng đọc")
     gui.voice_section_card = voice_card
     gui.voice_engine_combo = QComboBox()
-    gui.voice_engine_combo.addItem("Fast Voice", "fast")
+    gui.voice_engine_combo.addItem("Giọng đọc nhanh", "fast")
     gui.free_voice_combo = QComboBox()
     gui.voice_gender_combo = QComboBox()
-    gui.voice_gender_combo.addItems(["Any", "Male", "Female"])
-    # Default to the bundled Ngọc Huyền voice and its matching gender. Users
-    # can choose Any to show the complete voice list.
-    gui.voice_gender_combo.setCurrentText("Female")
-    gui.voice_gender_combo.currentTextChanged.connect(gui.on_voice_gender_changed)
+    gui.voice_gender_combo.addItem("Tất cả", "any")
+    gui.voice_gender_combo.addItem("Nam", "male")
+    gui.voice_gender_combo.addItem("Nữ", "female")
+    gui.voice_gender_combo.setCurrentIndex(0)
+    gui.voice_gender_combo.currentIndexChanged.connect(gui.on_voice_gender_changed)
     gui.voice_speed_spin = QComboBox(gui)
     gui.voice_speed_spin.setEditable(True)
     gui.voice_speed_spin.addItems(["0.8x", "0.9x", "1.0x", "1.1x", "1.2x", "1.3x", "1.4x", "1.5x", "1.6x", "1.8x", "2.0x"])
     gui.voice_speed_spin.setCurrentText("1.0x")
     gui.voice_speed_spin.hide()
     gui.voice_timing_sync_combo = QComboBox()
-    gui.voice_timing_sync_combo.addItems(["Off", "Smart", "Timeline Priority", "Force Fit"])
-    gui.voice_timing_sync_combo.setCurrentText("Smart")
+    gui.voice_timing_sync_combo.addItems(["Tắt", "Thông minh", "Ưu tiên Timeline", "Ép khớp thời gian"])
+    gui.voice_timing_sync_combo.setCurrentText("Thông minh")
 
     def _sync_voice_speed_enabled(_value: str = ""):
         mode = gui.voice_timing_sync_combo.currentText().strip().lower()
-        gui.voice_speed_spin.setEnabled(mode != "off")
+        gui.voice_speed_spin.setEnabled(mode != "tắt" and mode != "off")
     gui.voice_timing_sync_combo.currentTextChanged.connect(_sync_voice_speed_enabled)
     _sync_voice_speed_enabled()
 
@@ -514,13 +615,12 @@ def build_start_group(gui, left_layout):
         if hasattr(gui, "timeline") and gui.timeline is not None:
             gui.timeline.set_voice_sync_mode(gui.voice_timing_sync_combo.currentText())
     _on_voice_timing_sync_changed()
-    # This is a media-generation policy, not an editor action. Keep it in
-    # Media Workflow so the timeline toolbar stays focused on editing.
-    media_workflow_card, media_workflow_layout = _build_collapsible_section("Media Workflow")
+
+    media_workflow_card, media_workflow_layout = _build_collapsible_section("Quy trình âm thanh")
     timing_card, timing_layout = _section_card()
-    timing_title = QLabel("Voice timing synchronization")
+    timing_title = QLabel("Đồng bộ thời lượng giọng đọc")
     timing_title.setObjectName("sectionTitle")
-    timing_hint = QLabel("Controls how generated voice timing follows the subtitle timeline.")
+    timing_hint = QLabel("Điều khiển cách thời lượng giọng đọc bám sát theo trục thời gian phụ đề.")
     timing_hint.setObjectName("helperLabel")
     timing_hint.setWordWrap(True)
     timing_layout.addWidget(timing_title)
@@ -530,39 +630,160 @@ def build_start_group(gui, left_layout):
     media_layout.addWidget(media_workflow_card)
     gui.free_voice_combo.currentIndexChanged.connect(gui.on_selected_voice_changed)
     gui.voice_engine_combo.currentIndexChanged.connect(gui.on_voice_engine_changed)
-    gui.preview_voice_btn = QPushButton("Preview Selected Voice")
+    gui.preview_voice_btn = QPushButton("Nghe thử giọng đọc")
     gui.preview_voice_btn.clicked.connect(gui.preview_selected_voice_sample)
-    gui.voice_preview_meta_label = QLabel("Listen to a short sample before generating the full voice track.", gui)
+    gui.voice_preview_meta_label = QLabel("Nghe đoạn đọc mẫu ngắn trước khi tạo toàn bộ audio.", gui)
     gui.voice_preview_meta_label.setObjectName("helperLabel")
     gui.voice_preview_meta_label.setWordWrap(True)
     gui.voice_preview_meta_label.hide()
     voice_setup_card, voice_setup_layout = _section_card()
-    voice_setup_title = QLabel("Voice Setup")
+    voice_setup_title = QLabel("Tạo giọng đọc")
     voice_setup_title.setObjectName("sectionTitle")
+    voice_setup_title.setStyleSheet("font-size: 15px; font-weight: 800; color: #ffffff;")
     voice_setup_layout.addWidget(voice_setup_title)
-    voice_setup_layout.addWidget(QLabel("Voice engine"))
-    voice_setup_layout.addWidget(gui.voice_engine_combo)
+
+    # Segmented mode toggle: [Một giọng] | [Phân vai]
+    mode_bar = QFrame()
+    mode_bar.setStyleSheet(
+        "QFrame { background: #0c1524; border-radius: 8px; padding: 2px; border: 1px solid #203550; }"
+    )
+    mode_layout = QHBoxLayout(mode_bar)
+    mode_layout.setContentsMargins(2, 2, 2, 2)
+    mode_layout.setSpacing(4)
+    gui.voice_single_mode_btn = QPushButton("Một giọng")
+    gui.voice_single_mode_btn.setCheckable(True)
+    gui.voice_single_mode_btn.setStyleSheet(
+        "QPushButton { background: transparent; color: #a0b4cc; font-weight: bold; border-radius: 6px; padding: 6px 12px; border: none; }"
+        "QPushButton:checked { background: #1f3b5c; color: #ffffff; }"
+    )
+    gui.voice_role_mode_btn = QPushButton("Phân vai")
+    gui.voice_role_mode_btn.setCheckable(True)
+    gui.voice_role_mode_btn.setChecked(True)
+    gui.voice_role_mode_btn.setStyleSheet(
+        "QPushButton { background: transparent; color: #a0b4cc; font-weight: bold; border-radius: 6px; padding: 6px 12px; border: none; }"
+        "QPushButton:checked { background: #1f3b5c; color: #ffffff; }"
+    )
+    gui.voice_mode_button_group = QButtonGroup(gui)
+    gui.voice_mode_button_group.addButton(gui.voice_single_mode_btn)
+    gui.voice_mode_button_group.addButton(gui.voice_role_mode_btn)
+    mode_layout.addWidget(gui.voice_single_mode_btn)
+    mode_layout.addWidget(gui.voice_role_mode_btn)
+    voice_setup_layout.addWidget(mode_bar)
+
     gui.fast_voice_panel = QWidget()
     fast_voice_layout = QVBoxLayout(gui.fast_voice_panel)
-    fast_voice_layout.setContentsMargins(0, 0, 0, 0)
+    fast_voice_layout.setContentsMargins(0, 4, 0, 0)
     fast_voice_layout.setSpacing(8)
-    fast_voice_layout.addWidget(QLabel("Fast voice"))
-    fast_voice_layout.addWidget(gui.free_voice_combo)
-    fast_voice_layout.addWidget(QLabel("Voice type"))
+    fast_voice_layout.addWidget(QLabel("Bộ đọc giọng"))
+    fast_voice_layout.addWidget(gui.voice_engine_combo)
+    fast_voice_layout.addWidget(QLabel("Loại giọng / Giới tính"))
     fast_voice_layout.addWidget(gui.voice_gender_combo)
+    fast_voice_layout.addWidget(QLabel("Giọng đọc"))
+    fast_voice_layout.addWidget(gui.free_voice_combo)
+    fast_voice_layout.addWidget(gui.preview_voice_btn)
+    fast_voice_layout.addWidget(gui.voice_preview_meta_label)
+    gui.sync_capcut_voice_btn = QPushButton("🎙️ Đồng bộ giọng từ CapCut PC…")
+    gui.sync_capcut_voice_btn.setStyleSheet(
+        "background-color: #00897b; color: #ffffff; font-weight: bold; padding: 7px 14px; border-radius: 4px; margin-top: 4px;"
+    )
+    gui.sync_capcut_voice_btn.clicked.connect(gui.open_capcut_sync_dialog)
+    fast_voice_layout.addWidget(gui.sync_capcut_voice_btn)
     voice_setup_layout.addWidget(gui.fast_voice_panel)
-    # Voice preview belongs to the global/default voice configuration.  It is
-    # deliberately kept outside the per-speaker diarization controls below.
-    voice_setup_layout.addWidget(gui.preview_voice_btn)
-    voice_setup_layout.addWidget(gui.voice_preview_meta_label)
-    # These legacy tuning controls are retained for internal compatibility
-    # after removing the Voice Tuning panel, but must never become orphaned
-    # top-level widgets.
-    gui.ai_dubbing_rewrite_cb = QCheckBox("Use AI Rewrite Dubbing for voice timing", gui)
+
+    # Detected speakers card for role casting mode
+    gui.detected_speakers_card, detected_speakers_layout = _section_card()
+    gui.auto_assign_gender_voices_btn = QPushButton("⚡ Tự động phân vai thông minh")
+    gui.auto_assign_gender_voices_btn.setStyleSheet(
+        "background-color: #4f46e5; color: #ffffff; font-weight: bold; padding: 9px 14px; border-radius: 6px;"
+    )
+    gui.auto_assign_gender_voices_btn.setToolTip(
+        "Tự động nhận diện giới tính và phân vai nhân vật theo âm thanh gốc"
+    )
+    detected_speakers_layout.addWidget(gui.auto_assign_gender_voices_btn)
+    gui.detected_speakers_hint_label = QLabel(
+        "Nhân vật được nhận diện và gán giọng tương ứng bên dưới:"
+    )
+    gui.detected_speakers_hint_label.setObjectName("helperLabel")
+    gui.detected_speakers_hint_label.setWordWrap(True)
+    detected_speakers_layout.addWidget(gui.detected_speakers_hint_label)
+
+    gui.detected_speakers_list = QWidget()
+    gui.detected_speakers_list_layout = QVBoxLayout(gui.detected_speakers_list)
+    gui.detected_speakers_list_layout.setContentsMargins(0, 0, 0, 0)
+    gui.detected_speakers_list_layout.setSpacing(8)
+    detected_speakers_layout.addWidget(gui.detected_speakers_list)
+    voice_setup_layout.addWidget(gui.detected_speakers_card)
+
+    def _on_voice_studio_mode_changed():
+        single = gui.voice_single_mode_btn.isChecked()
+        gui.fast_voice_panel.setVisible(single)
+        gui.detected_speakers_card.setVisible(not single)
+
+    gui.voice_single_mode_btn.toggled.connect(_on_voice_studio_mode_changed)
+    gui.voice_role_mode_btn.toggled.connect(_on_voice_studio_mode_changed)
+    _on_voice_studio_mode_changed()
+
+    # Speed and Tone Sliders
+    sliders_card = QFrame()
+    sliders_card.setStyleSheet("background: transparent;")
+    sliders_layout = QVBoxLayout(sliders_card)
+    sliders_layout.setContentsMargins(0, 6, 0, 0)
+    sliders_layout.setSpacing(6)
+
+    # Speed slider row
+    speed_row = QHBoxLayout()
+    speed_row.addWidget(QLabel("Tốc độ đọc:"))
+    gui.voice_speed_slider = QSlider(Qt.Horizontal)
+    gui.voice_speed_slider.setRange(5, 20)
+    gui.voice_speed_slider.setValue(10)
+    gui.voice_speed_slider_label = QLabel("1.0x")
+    gui.voice_speed_slider_label.setFixedWidth(36)
+    def _on_speed_slider_changed(v):
+        factor = v / 10.0
+        gui.voice_speed_slider_label.setText(f"{factor:.1f}x")
+        gui.voice_speed_spin.setCurrentText(f"{factor:.1f}x")
+    gui.voice_speed_slider.valueChanged.connect(_on_speed_slider_changed)
+    speed_row.addWidget(gui.voice_speed_slider, 1)
+    speed_row.addWidget(gui.voice_speed_slider_label)
+    sliders_layout.addLayout(speed_row)
+
+    # Tone / Pitch slider row
+    pitch_row = QHBoxLayout()
+    pitch_row.addWidget(QLabel("Cao độ giọng:"))
+    gui.voice_pitch_slider = QSlider(Qt.Horizontal)
+    gui.voice_pitch_slider.setRange(-5, 5)
+    gui.voice_pitch_slider.setValue(0)
+    gui.voice_pitch_slider_label = QLabel("0")
+    gui.voice_pitch_slider_label.setFixedWidth(36)
+    def _on_pitch_slider_changed(v):
+        gui.voice_pitch_slider_label.setText(f"{v:+d}" if v != 0 else "0")
+    gui.voice_pitch_slider.valueChanged.connect(_on_pitch_slider_changed)
+    pitch_row.addWidget(gui.voice_pitch_slider, 1)
+    pitch_row.addWidget(gui.voice_pitch_slider_label)
+    sliders_layout.addLayout(pitch_row)
+    voice_setup_layout.addWidget(sliders_card)
+
+    # Big action button: Tạo giọng cho tất cả
+    gui.generate_all_voices_btn = QPushButton("✨ Tạo giọng cho tất cả")
+    gui.generate_all_voices_btn.setMinimumHeight(44)
+    gui.generate_all_voices_btn.setStyleSheet(
+        "QPushButton { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #00d2ff, stop:1 #0078d4); "
+        "color: #ffffff; font-weight: 800; font-size: 13px; border: none; border-radius: 8px; padding: 10px; } "
+        "QPushButton:hover { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #33dcff, stop:1 #198cff); }"
+    )
+    gui.generate_all_voices_btn.setToolTip("Tạo toàn bộ âm thanh lồng tiếng theo thiết lập phân vai hiện tại")
+    # An explicit user request to regenerate all voices must bypass the voice
+    # cache even when a stale signature was accidentally persisted.
+    gui.generate_all_voices_btn.clicked.connect(
+        lambda _checked=False: gui.run_voiceover(force_refresh=True)
+    )
+    voice_setup_layout.addWidget(gui.generate_all_voices_btn)
+
+    gui.ai_dubbing_rewrite_cb = QCheckBox("Dùng AI viết lại lời khi lồng tiếng để khớp thời gian", gui)
     gui.ai_dubbing_rewrite_cb.setChecked(False)
     gui.ai_dubbing_rewrite_cb.hide()
     gui.ai_dubbing_rewrite_hint_label = QLabel(
-        "Keeps subtitle text readable, but lets AI create a shorter spoken version for TTS when timing is tight.",
+        "Giữ nguyên văn bản phụ đề, nhưng cho phép AI tóm gọn câu khi đọc nếu đoạn âm thanh quá ngắn.",
         gui,
     )
     gui.ai_dubbing_rewrite_hint_label.setObjectName("helperLabel")
@@ -570,35 +791,16 @@ def build_start_group(gui, left_layout):
     gui.ai_dubbing_rewrite_hint_label.hide()
     voice_layout.addWidget(voice_setup_card)
 
-    gui.detected_speakers_card, detected_speakers_layout = _section_card()
-    detected_speakers_title = QLabel("Detected Speakers")
-    detected_speakers_title.setObjectName("sectionTitle")
-    detected_speakers_layout.addWidget(detected_speakers_title)
-    gui.detected_speakers_hint_label = QLabel(
-        "Run Speaker Diarization to assign a dedicated voice to each detected speaker. "
-        "Unassigned speakers use the default voice above."
-    )
-    gui.detected_speakers_hint_label.setObjectName("helperLabel")
-    gui.detected_speakers_hint_label.setWordWrap(True)
-    detected_speakers_layout.addWidget(gui.detected_speakers_hint_label)
-    gui.detected_speakers_list = QWidget()
-    gui.detected_speakers_list_layout = QVBoxLayout(gui.detected_speakers_list)
-    gui.detected_speakers_list_layout.setContentsMargins(0, 0, 0, 0)
-    gui.detected_speakers_list_layout.setSpacing(8)
-    detected_speakers_layout.addWidget(gui.detected_speakers_list)
-    gui.detected_speakers_card.hide()
-    voice_layout.addWidget(gui.detected_speakers_card)
-
     voice_page.layout().addWidget(voice_card)
 
-    subtitle_card, subtitle_layout = _build_collapsible_section("Subtitle Style", start_expanded=True)
-    base_style_label = QLabel("Presets")
+    subtitle_card, subtitle_layout = _build_collapsible_section("Kiểu phụ đề", start_expanded=True)
+    base_style_label = QLabel("Mẫu định sẵn (Presets)")
     base_style_label.setObjectName("sectionTitle")
     subtitle_layout.addWidget(base_style_label)
     gui.subtitle_preset_tiktok_radio = QRadioButton("TikTok")
     gui.subtitle_preset_youtube_radio = QRadioButton("YouTube")
-    gui.subtitle_preset_minimal_radio = QRadioButton("Short")
-    gui.subtitle_preset_custom_radio = QRadioButton("Custom")
+    gui.subtitle_preset_minimal_radio = QRadioButton("Ngắn gọn")
+    gui.subtitle_preset_custom_radio = QRadioButton("Tùy chỉnh")
     gui.subtitle_preset_youtube_radio.setChecked(True)
     gui.subtitle_preset_group = QButtonGroup(gui)
     gui.subtitle_preset_group.addButton(gui.subtitle_preset_tiktok_radio)
@@ -612,37 +814,37 @@ def build_start_group(gui, left_layout):
     preset_grid.setVerticalSpacing(8)
     preset_grid.setColumnStretch(0, 1)
     preset_grid.setColumnStretch(1, 1)
-    preset_grid.addWidget(_build_style_preset_card("TikTok", "TRENDING", "WORDS POP", gui.subtitle_preset_tiktok_radio), 0, 0)
-    preset_grid.addWidget(_build_style_preset_card("YouTube", "Clean subtitle", "with solid box", gui.subtitle_preset_youtube_radio), 0, 1)
-    preset_grid.addWidget(_build_style_preset_card("Short", "HELLO", "world", gui.subtitle_preset_minimal_radio), 1, 0)
-    preset_grid.addWidget(_build_style_preset_card("Custom", "My", "style", gui.subtitle_preset_custom_radio), 1, 1)
+    preset_grid.addWidget(_build_style_preset_card("TikTok", "XU HƯỚNG", "CHỮ NỔI BẬT", gui.subtitle_preset_tiktok_radio), 0, 0)
+    preset_grid.addWidget(_build_style_preset_card("YouTube", "Phụ đề chuẩn", "hộp nền đen", gui.subtitle_preset_youtube_radio), 0, 1)
+    preset_grid.addWidget(_build_style_preset_card("Ngắn gọn", "XIN CHÀO", "các bạn", gui.subtitle_preset_minimal_radio), 1, 0)
+    preset_grid.addWidget(_build_style_preset_card("Tùy chỉnh", "Kiểu", "của bạn", gui.subtitle_preset_custom_radio), 1, 1)
     subtitle_layout.addLayout(preset_grid)
 
     style_library_card, style_library_layout = _section_card()
-    style_library_title = QLabel("Saved Styles")
+    style_library_title = QLabel("Kiểu đã lưu")
     style_library_title.setObjectName("sectionTitle")
     style_library_layout.addWidget(style_library_title)
-    gui.save_subtitle_style_btn = QPushButton("+ Save This Style")
+    gui.save_subtitle_style_btn = QPushButton("+ Lưu kiểu này")
     gui.save_subtitle_style_btn.clicked.connect(gui.save_current_subtitle_style_preset)
     gui.saved_subtitle_style_combo = QComboBox()
-    gui.saved_subtitle_style_combo.addItem("My Presets")
+    gui.saved_subtitle_style_combo.addItem("Kiểu của tôi")
     gui.saved_subtitle_style_combo.currentIndexChanged.connect(gui.load_selected_subtitle_style_preset)
     style_library_layout.addWidget(gui.save_subtitle_style_btn)
     style_library_layout.addWidget(gui.saved_subtitle_style_combo)
     subtitle_layout.addWidget(style_library_card)
     gui.style_library_card = style_library_card
 
-    highlight_card, highlight_card_layout = _build_collapsible_section("Keyword Highlight", start_expanded=False)
-    gui.subtitle_keyword_highlight_cb = QCheckBox("Highlight key words")
+    highlight_card, highlight_card_layout = _build_collapsible_section("Tô sáng từ khóa", start_expanded=False)
+    gui.subtitle_keyword_highlight_cb = QCheckBox("Tô màu làm nổi bật từ khóa")
     gui.subtitle_keyword_highlight_cb.setChecked(False)
     gui.subtitle_highlight_color_combo = QComboBox()
-    gui.subtitle_highlight_color_combo.addItems(["Yellow", "Cyan", "Green", "Pink"])
+    gui.subtitle_highlight_color_combo.addItems(["Vàng", "Xanh lơ", "Xanh lá", "Hồng"])
     gui.subtitle_highlight_mode_combo = QComboBox()
-    gui.subtitle_highlight_mode_combo.addItems(["Auto", "Manual", "Auto + Manual"])
+    gui.subtitle_highlight_mode_combo.addItems(["Tự động", "Thủ công", "Tự động + Thủ công"])
     highlight_card_layout.addWidget(gui.subtitle_keyword_highlight_cb)
 
     highlight_color_row = QHBoxLayout()
-    highlight_color_row.addWidget(QLabel("Color:"))
+    highlight_color_row.addWidget(QLabel("Màu sắc:"))
     highlight_color_row.addWidget(gui.subtitle_highlight_color_combo, 1)
     highlight_card_layout.addLayout(highlight_color_row)
 
@@ -653,7 +855,7 @@ def build_start_group(gui, left_layout):
     subtitle_layout.addWidget(highlight_card)
     gui.highlight_card = highlight_card
 
-    position_card, position_layout = _build_collapsible_section("Text Position", start_expanded=False)
+    position_card, position_layout = _build_collapsible_section("Vị trí chữ", start_expanded=False)
     position_wrapper = QFrame()
     position_wrapper.setObjectName("statusCard")
     position_wrapper_layout = QVBoxLayout(position_wrapper)
@@ -666,29 +868,29 @@ def build_start_group(gui, left_layout):
     position_grid.setVerticalSpacing(8)
 
     gui.subtitle_position_mode_combo = QComboBox()
-    gui.subtitle_position_mode_combo.addItem("Quick placement", "anchor")
-    gui.subtitle_position_mode_combo.addItem("Custom X/Y", "custom")
-    gui.subtitle_align_label = QLabel("Placement:")
+    gui.subtitle_position_mode_combo.addItem("Căn vị trí nhanh", "anchor")
+    gui.subtitle_position_mode_combo.addItem("Tọa độ X/Y tùy chỉnh", "custom")
+    gui.subtitle_align_label = QLabel("Vị trí:")
     gui.subtitle_align_combo = QComboBox()
-    gui.subtitle_align_combo.addItems(["Bottom", "Bottom Left", "Bottom Right", "Center", "Top"])
-    gui.subtitle_align_combo.setCurrentText("Bottom")
-    gui.subtitle_custom_x_label = QLabel("Custom X:")
+    gui.subtitle_align_combo.addItems(["Dưới cùng", "Dưới trái", "Dưới phải", "Chính giữa", "Trên cùng"])
+    gui.subtitle_align_combo.setCurrentText("Dưới cùng")
+    gui.subtitle_custom_x_label = QLabel("X tùy chỉnh:")
     gui.subtitle_custom_x_spin = ReliableSpinBox()
     gui.subtitle_custom_x_spin.setRange(0, 100)
     gui.subtitle_custom_x_spin.setValue(50)
     gui.subtitle_custom_x_spin.setSuffix(" %")
-    gui.subtitle_custom_y_label = QLabel("Custom Y:")
+    gui.subtitle_custom_y_label = QLabel("Y tùy chỉnh:")
     gui.subtitle_custom_y_spin = ReliableSpinBox()
     gui.subtitle_custom_y_spin.setRange(0, 100)
     gui.subtitle_custom_y_spin.setValue(86)
     gui.subtitle_custom_y_spin.setSuffix(" %")
-    gui.subtitle_bottom_offset_label = QLabel("Vertical Offset:")
+    gui.subtitle_bottom_offset_label = QLabel("Khoảng cách đáy:")
     gui.subtitle_bottom_offset_spin = ReliableSpinBox()
     gui.subtitle_bottom_offset_spin.setRange(0, 300)
     gui.subtitle_bottom_offset_spin.setValue(30)
     gui.subtitle_bottom_offset_spin.setSuffix(" px")
 
-    position_grid.addWidget(QLabel("Placement mode:"), 0, 0)
+    position_grid.addWidget(QLabel("Chế độ căn vị trí:"), 0, 0)
     position_grid.addWidget(gui.subtitle_position_mode_combo, 0, 1)
     position_grid.addWidget(gui.subtitle_align_label, 1, 0)
     position_grid.addWidget(gui.subtitle_align_combo, 1, 1)
@@ -704,7 +906,7 @@ def build_start_group(gui, left_layout):
     subtitle_layout.addWidget(position_card)
     gui.subtitle_position_card = position_card
 
-    timing_card, timing_layout = _build_collapsible_section("Animation", start_expanded=False)
+    timing_card, timing_layout = _build_collapsible_section("Hiệu ứng xuất hiện", start_expanded=False)
     timing_wrapper = QFrame()
     timing_wrapper.setObjectName("statusCard")
     timing_wrapper_layout = QVBoxLayout(timing_wrapper)
@@ -716,14 +918,14 @@ def build_start_group(gui, left_layout):
     timing_grid.setHorizontalSpacing(10)
     timing_grid.setVerticalSpacing(8)
 
-    custom_title_card, custom_title_layout = _build_collapsible_section("Text Style", start_expanded=False)
+    custom_title_card, custom_title_layout = _build_collapsible_section("Định dạng chữ", start_expanded=False)
     custom_wrapper = QFrame()
     custom_wrapper.setObjectName("statusCard")
     custom_wrapper_layout = QVBoxLayout(custom_wrapper)
     custom_wrapper_layout.setContentsMargins(12, 12, 12, 12)
     custom_wrapper_layout.setSpacing(10)
     gui.custom_settings_toggle_btn = QToolButton()
-    gui.custom_settings_toggle_btn.setText("▼ Style Details")
+    gui.custom_settings_toggle_btn.setText("▼ Chi tiết kiểu dáng")
     gui.custom_settings_toggle_btn.setCheckable(True)
     gui.custom_settings_toggle_btn.setChecked(True)
     gui.custom_settings_toggle_btn.setToolButtonStyle(Qt.ToolButtonTextOnly)
@@ -741,37 +943,35 @@ def build_start_group(gui, left_layout):
     gui.subtitle_font_combo.addItems(["Montserrat", "Roboto", "Inter", "Poppins", "Arial", "Segoe UI", "Tahoma", "Verdana", "Times New Roman"])
     gui.subtitle_font_combo.setCurrentText("Segoe UI")
     gui.subtitle_font_size_spin = ReliableSpinBox()
-    # Retained as the canonical source-video size for projects/export. The
-    # percentage picker below is the user-facing control.
     gui.subtitle_font_size_spin.setRange(30, 90)
     gui.subtitle_font_size_spin.setValue(60)
     gui.subtitle_font_scale_combo = QComboBox()
     for percent in (50, 75, 100, 125, 150):
         gui.subtitle_font_scale_combo.addItem(f"{percent}%", percent)
     gui.subtitle_font_scale_combo.setCurrentIndex(2)
-    gui.subtitle_color_btn = QPushButton("White")
+    gui.subtitle_color_btn = QPushButton("Trắng")
     gui.subtitle_color_hex = "#FFFFFF"
     gui.subtitle_color_btn.clicked.connect(gui.choose_subtitle_color)
     gui.subtitle_background_color_btn = QPushButton("#000000")
     gui.subtitle_background_color_hex = "#000000"
     gui.subtitle_background_color_btn.clicked.connect(gui.choose_subtitle_background_color)
-    gui.subtitle_background_cb = QCheckBox("Background Box")
+    gui.subtitle_background_cb = QCheckBox("Bật hộp nền")
     gui.subtitle_background_cb.setChecked(False)
-    gui.subtitle_outline_cb = QCheckBox("Text Outline")
+    gui.subtitle_outline_cb = QCheckBox("Viền chữ")
     gui.subtitle_outline_cb.setChecked(True)
-    gui.subtitle_bold_cb = QCheckBox("Bold")
+    gui.subtitle_bold_cb = QCheckBox("In đậm")
     gui.subtitle_bold_cb.setChecked(True)
-    gui.subtitle_speaker_colors_cb = QCheckBox("Use speaker colors")
+    gui.subtitle_speaker_colors_cb = QCheckBox("Dùng màu riêng cho từng người nói")
     gui.subtitle_speaker_colors_cb.setToolTip(
-        "Use each diarized speaker's TS1 color for their subtitle text."
+        "Sử dụng màu nhận diện trên TS1 của từng người nói để tô màu chữ phụ đề."
     )
-    gui.subtitle_single_line_cb = QCheckBox("Single-line subtitle (Netflix)")
+    gui.subtitle_single_line_cb = QCheckBox("Phụ đề 1 dòng (Netflix)")
     gui.subtitle_single_line_cb.setChecked(False)
     gui.subtitle_animation_combo = QComboBox()
     gui.subtitle_animation_combo.addItems(
-        ["Static", "Pop In", "Slide Up", "Fade In", "Fade Out", "Pulse", "Background Appear", "Typewriter", "Word Highlight Karaoke"]
+        ["Tĩnh", "Bật lên (Pop In)", "Trượt lên", "Mờ dần vào", "Mờ dần ra", "Nhịp đập", "Hiện nền", "Máy đánh chữ", "Karaoke nổi bật từng từ"]
     )
-    gui.subtitle_animation_combo.setCurrentText("Pop In")
+    gui.subtitle_animation_combo.setCurrentText("Bật lên (Pop In)")
     gui.subtitle_animation_combo.currentTextChanged.connect(lambda _value: gui.on_subtitle_animation_changed())
     gui.subtitle_animation_time_spin = ReliableDoubleSpinBox()
     gui.subtitle_animation_time_spin.setRange(0.1, 2.5)
@@ -779,25 +979,25 @@ def build_start_group(gui, left_layout):
     gui.subtitle_animation_time_spin.setDecimals(2)
     gui.subtitle_animation_time_spin.setValue(0.22)
     gui.subtitle_animation_time_spin.setSuffix(" s")
-    gui.subtitle_animation_time_label = QLabel("Duration")
+    gui.subtitle_animation_time_label = QLabel("Thời lượng")
     gui.subtitle_bg_alpha_spin = ReliableDoubleSpinBox()
     gui.subtitle_bg_alpha_spin.setRange(0.0, 1.0)
     gui.subtitle_bg_alpha_spin.setSingleStep(0.05)
     gui.subtitle_bg_alpha_spin.setDecimals(2)
     gui.subtitle_bg_alpha_spin.setValue(0.6)
-    gui.subtitle_bg_alpha_spin.setSuffix(" alpha")
-    gui.subtitle_karaoke_timing_label = QLabel("Text Timing")
+    gui.subtitle_bg_alpha_spin.setSuffix(" độ mờ")
+    gui.subtitle_karaoke_timing_label = QLabel("Nhịp xuất hiện")
     gui.subtitle_karaoke_timing_combo = QComboBox()
-    gui.subtitle_karaoke_timing_combo.addItem("Vietnamese pacing", "vietnamese")
-    gui.subtitle_karaoke_timing_combo.addItem("Source speech timing", "source")
+    gui.subtitle_karaoke_timing_combo.addItem("Theo nhịp Tiếng Việt", "vietnamese")
+    gui.subtitle_karaoke_timing_combo.addItem("Theo nhịp lời nói gốc", "source")
     gui.subtitle_karaoke_timing_combo.setCurrentIndex(0)
     gui.subtitle_karaoke_timing_combo.currentTextChanged.connect(lambda _value: gui.update_subtitle_preview_style())
 
-    custom_controls_layout.addWidget(QLabel("Font:"), 0, 0)
+    custom_controls_layout.addWidget(QLabel("Phông chữ:"), 0, 0)
     custom_controls_layout.addWidget(gui.subtitle_font_combo, 0, 1)
-    custom_controls_layout.addWidget(QLabel("Size:"), 1, 0)
+    custom_controls_layout.addWidget(QLabel("Kích cỡ:"), 1, 0)
     custom_controls_layout.addWidget(gui.subtitle_font_scale_combo, 1, 1)
-    custom_controls_layout.addWidget(QLabel("Text Color:"), 2, 0)
+    custom_controls_layout.addWidget(QLabel("Màu chữ:"), 2, 0)
     custom_controls_layout.addWidget(gui.subtitle_color_btn, 2, 1)
     custom_controls_layout.addWidget(gui.subtitle_outline_cb, 3, 0)
     custom_controls_layout.addWidget(gui.subtitle_bold_cb, 3, 1)
@@ -807,23 +1007,23 @@ def build_start_group(gui, left_layout):
     subtitle_layout.addWidget(custom_title_card)
     gui.custom_title_card = custom_title_card
 
-    single_line_card, single_line_layout = _build_collapsible_section("Single Line Subtitle", start_expanded=False)
+    single_line_card, single_line_layout = _build_collapsible_section("Phụ đề 1 dòng (Netflix)", start_expanded=False)
     single_line_wrapper = QFrame()
     single_line_wrapper.setObjectName("statusCard")
     single_line_grid = QGridLayout(single_line_wrapper)
     single_line_grid.setContentsMargins(12, 12, 12, 12)
-    gui.subtitle_single_line_cb.setText("Enable Netflix-style single-line subtitles")
+    gui.subtitle_single_line_cb.setText("Bật phụ đề 1 dòng kiểu Netflix")
     gui.subtitle_words_per_segment_spin = ReliableSpinBox()
     gui.subtitle_words_per_segment_spin.setRange(1, 20)
     gui.subtitle_words_per_segment_spin.setValue(4)
-    gui.subtitle_words_per_segment_spin.setSuffix(" words")
+    gui.subtitle_words_per_segment_spin.setSuffix(" từ")
     single_line_grid.addWidget(gui.subtitle_single_line_cb, 0, 0, 1, 2)
-    single_line_grid.addWidget(QLabel("Words per segment:"), 1, 0)
+    single_line_grid.addWidget(QLabel("Số từ mỗi đoạn:"), 1, 0)
     single_line_grid.addWidget(gui.subtitle_words_per_segment_spin, 1, 1)
     single_line_layout.addWidget(single_line_wrapper)
     subtitle_layout.addWidget(single_line_card)
 
-    background_card, background_layout = _build_collapsible_section("Background", start_expanded=False)
+    background_card, background_layout = _build_collapsible_section("Hộp nền phụ đề", start_expanded=False)
     background_wrapper = QFrame()
     background_wrapper.setObjectName("statusCard")
     background_wrapper_layout = QGridLayout(background_wrapper)
@@ -832,25 +1032,25 @@ def build_start_group(gui, left_layout):
     background_wrapper_layout.setVerticalSpacing(8)
     background_wrapper_layout.addWidget(gui.subtitle_background_cb, 0, 0, 1, 2)
     gui.subtitle_background_width_combo = QComboBox()
-    gui.subtitle_background_width_combo.addItem("Fit Text (per line)", "fit_text")
-    gui.subtitle_background_width_combo.addItem("Full Subtitle Block (Exact)", "full_area")
+    gui.subtitle_background_width_combo.addItem("Ôm sát từng dòng chữ", "fit_text")
+    gui.subtitle_background_width_combo.addItem("Bao trọn khối phụ đề (Chuẩn xác)", "full_area")
     gui.subtitle_background_width_combo.setToolTip(
-        "Fit Text is the fast default and wraps each subtitle line.\n"
-        "Full Subtitle Block is an advanced exact-layout option; it measures libass after editing settles."
+        "Ôm sát từng dòng: tốc độ xử lý nhanh, bọc từng dòng chữ.\n"
+        "Bao trọn khối: khung chữ cố định vuông vắn."
     )
-    background_wrapper_layout.addWidget(QLabel("Width:"), 1, 0)
+    background_wrapper_layout.addWidget(QLabel("Độ rộng:"), 1, 0)
     background_wrapper_layout.addWidget(gui.subtitle_background_width_combo, 1, 1)
     gui.subtitle_background_exact_hint = QLabel(
-        "Exact layout updates after editing stops. Fit Text is recommended for fastest editing."
+        "Bố cục chuẩn xác cập nhật sau khi hoàn tất chỉnh sửa. Khuyên dùng Ôm sát từng dòng để xem nhanh nhất."
     )
     gui.subtitle_background_exact_hint.setObjectName("subtleHint")
     gui.subtitle_background_exact_hint.setWordWrap(True)
     gui.subtitle_background_exact_hint.setVisible(False)
     background_wrapper_layout.addWidget(gui.subtitle_background_exact_hint, 2, 0, 1, 2)
-    gui.subtitle_background_shape_label = QLabel("Shape:")
+    gui.subtitle_background_shape_label = QLabel("Hình dạng:")
     gui.subtitle_background_shape_combo = QComboBox()
-    gui.subtitle_background_shape_combo.addItem("Rectangle", "rectangle")
-    gui.subtitle_background_shape_combo.setToolTip("Subtitle background shape.")
+    gui.subtitle_background_shape_combo.addItem("Hình chữ nhật", "rectangle")
+    gui.subtitle_background_shape_combo.setToolTip("Hình dạng nền phụ đề.")
     gui.subtitle_background_shape_label.setVisible(False)
     gui.subtitle_background_shape_combo.setVisible(False)
     background_wrapper_layout.addWidget(gui.subtitle_background_shape_label, 3, 0)
@@ -859,24 +1059,24 @@ def build_start_group(gui, left_layout):
     gui.subtitle_background_padding_spin.setRange(0, 30)
     gui.subtitle_background_padding_spin.setValue(6)
     gui.subtitle_background_padding_spin.setSuffix(" px")
-    background_wrapper_layout.addWidget(QLabel("Padding:"), 4, 0)
+    background_wrapper_layout.addWidget(QLabel("Khoảng đệm (Padding):"), 4, 0)
     background_wrapper_layout.addWidget(gui.subtitle_background_padding_spin, 4, 1)
     gui.subtitle_background_radius_spin = ReliableSpinBox()
     gui.subtitle_background_radius_spin.setRange(0, 80)
     gui.subtitle_background_radius_spin.setValue(0)
     gui.subtitle_background_radius_spin.setSuffix(" px")
-    gui.subtitle_background_radius_spin.setToolTip("Round the subtitle background corners.")
-    background_wrapper_layout.addWidget(QLabel("Corner radius:"), 5, 0)
+    gui.subtitle_background_radius_spin.setToolTip("Bo tròn các góc của hộp nền phụ đề.")
+    background_wrapper_layout.addWidget(QLabel("Bo tròn góc:"), 5, 0)
     background_wrapper_layout.addWidget(gui.subtitle_background_radius_spin, 5, 1)
-    background_wrapper_layout.addWidget(QLabel("Color:"), 6, 0)
+    background_wrapper_layout.addWidget(QLabel("Màu nền:"), 6, 0)
     background_wrapper_layout.addWidget(gui.subtitle_background_color_btn, 6, 1)
-    background_wrapper_layout.addWidget(QLabel("Opacity:"), 7, 0)
+    background_wrapper_layout.addWidget(QLabel("Độ mờ:"), 7, 0)
     background_wrapper_layout.addWidget(gui.subtitle_bg_alpha_spin, 7, 1)
     background_layout.addWidget(background_wrapper)
     subtitle_layout.addWidget(background_card)
     gui.subtitle_background_card = background_card
 
-    timing_grid.addWidget(QLabel("Animation:"), 0, 0)
+    timing_grid.addWidget(QLabel("Hiệu ứng:"), 0, 0)
     timing_grid.addWidget(gui.subtitle_animation_combo, 0, 1)
     timing_grid.addWidget(gui.subtitle_animation_time_label, 1, 0)
     timing_grid.addWidget(gui.subtitle_animation_time_spin, 1, 1)
@@ -901,39 +1101,39 @@ def build_start_group(gui, left_layout):
     gui.subtitle_x_offset_spin.hide()
 
     def _toggle_custom_section(checked: bool):
-        gui.custom_settings_toggle_btn.setText(("▼ " if checked else "▶ ") + "Style Details")
+        gui.custom_settings_toggle_btn.setText(("▼ " if checked else "▶ ") + "Chi tiết kiểu dáng")
         gui.custom_settings_content.setVisible(checked)
 
     gui.custom_settings_toggle_btn.toggled.connect(_toggle_custom_section)
     style_page.layout().addWidget(subtitle_card)
 
-    audio_mix_card, audio_mix_layout = _build_collapsible_section("Audio Mix", start_expanded=True)
+    audio_mix_card, audio_mix_layout = _build_collapsible_section("Hòa trộn âm thanh (Audio Mix)", start_expanded=True)
     audio_mix_inner_card, audio_mix_inner_layout = _section_card()
-    audio_mix_title = QLabel("Quick Mix Preset")
+    audio_mix_title = QLabel("Mẫu trộn nhanh")
     audio_mix_title.setObjectName("sectionTitle")
     audio_mix_inner_layout.addWidget(audio_mix_title)
     gui.audio_mix_preset_combo = QComboBox()
-    gui.audio_mix_preset_combo.addItem("Original Only", "original_only")
-    gui.audio_mix_preset_combo.addItem("Prefer Original", "prefer_original")
-    gui.audio_mix_preset_combo.addItem("Balanced", "balanced")
-    gui.audio_mix_preset_combo.addItem("Prefer Dub", "prefer_dub")
-    gui.audio_mix_preset_combo.addItem("Dub Only", "dub_only")
-    gui.audio_mix_preset_combo.addItem("Custom", "custom")
+    gui.audio_mix_preset_combo.addItem("Chỉ nghe âm thanh gốc", "original_only")
+    gui.audio_mix_preset_combo.addItem("Ưu tiên âm thanh gốc", "prefer_original")
+    gui.audio_mix_preset_combo.addItem("Cân bằng (50/50)", "balanced")
+    gui.audio_mix_preset_combo.addItem("Ưu tiên giọng lồng tiếng", "prefer_dub")
+    gui.audio_mix_preset_combo.addItem("Chỉ nghe giọng lồng tiếng", "dub_only")
+    gui.audio_mix_preset_combo.addItem("Tùy chỉnh", "custom")
     gui.audio_mix_preset_combo.setCurrentIndex(2)
     audio_mix_inner_layout.addWidget(gui.audio_mix_preset_combo)
-    gui.audio_mix_preset_hint_label = QLabel("Optional shortcut for Original/TTS. Track Volumes below remain authoritative; Music is independent.", gui)
+    gui.audio_mix_preset_hint_label = QLabel("Phím tắt nhanh cho tỷ lệ Âm thanh gốc / Lồng tiếng TTS. Thanh trượt âm lượng bên dưới điều khiển chi tiết.", gui)
     gui.audio_mix_preset_hint_label.setObjectName("helperLabel")
     gui.audio_mix_preset_hint_label.setWordWrap(True)
     audio_mix_inner_layout.addWidget(gui.audio_mix_preset_hint_label)
     audio_mix_layout.addWidget(audio_mix_inner_card)
 
     audio_tracks_card, audio_tracks_layout = _section_card()
-    tracks_title = QLabel("Track Volumes")
+    tracks_title = QLabel("Âm lượng từng kênh")
     tracks_title.setObjectName("sectionTitle")
     audio_tracks_layout.addWidget(tracks_title)
 
     a1_row = QHBoxLayout()
-    a1_label = QLabel("A1 Original")
+    a1_label = QLabel("A1 Video gốc")
     a1_label.setMinimumWidth(100)
     a1_row.addWidget(a1_label)
     gui.audio_a1_volume_slider = QSlider(Qt.Horizontal)
@@ -951,7 +1151,7 @@ def build_start_group(gui, left_layout):
     audio_tracks_layout.addLayout(a1_row)
 
     a2_row = QHBoxLayout()
-    a2_label = QLabel("TS1 Dub")
+    a2_label = QLabel("TS1 Giọng đọc AI")
     a2_label.setMinimumWidth(100)
     a2_row.addWidget(a2_label)
     gui.audio_a2_volume_slider = QSlider(Qt.Horizontal)
@@ -968,14 +1168,11 @@ def build_start_group(gui, left_layout):
     a2_row.addWidget(gui.audio_a2_volume_label)
     audio_tracks_layout.addLayout(a2_row)
 
-    # Keep the optional Music volume control as one collapsible row.  A2
-    # Music is only meaningful after a Music Layer has been added, so the
-    # row starts hidden and is shown by the timeline-state synchronizer.
     gui.audio_music_volume_row = QWidget(gui)
     music_row = QHBoxLayout(gui.audio_music_volume_row)
     music_row.setContentsMargins(0, 0, 0, 0)
     music_row.setSpacing(6)
-    music_label = QLabel("A2 Music")
+    music_label = QLabel("A2 Nhạc nền")
     music_label.setMinimumWidth(100)
     music_row.addWidget(music_label)
     gui.audio_music_volume_slider = QSlider(Qt.Horizontal)

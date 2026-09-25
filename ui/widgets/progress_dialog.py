@@ -65,7 +65,7 @@ class StepWidget(QFrame):
         
         layout.addStretch()
         
-        self.status_label = QLabel("Pending")
+        self.status_label = QLabel("Chờ xử lý")
         self.status_label.setObjectName("stepStatus")
         self.status_label.setFixedWidth(90)
         self.status_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -80,30 +80,30 @@ class StepWidget(QFrame):
     def set_status(self, status):
         self.status = status
         if status == "running":
-            self.status_label.setText("Processing")
+            self.status_label.setText("Đang xử lý")
             self.status_label.setStyleSheet("color: #00E5FF;")
             self.indicator.setStyleSheet("background-color: #00E5FF; border: 2px solid rgba(0, 229, 255, 50);")
             self.setStyleSheet(self.styleSheet() + "#stepWidget { border: 1px solid rgba(0, 229, 255, 80); background-color: rgba(0, 229, 255, 15); }")
             self.pulse_timer.start()
         elif status == "done":
-            self.status_label.setText("Completed")
+            self.status_label.setText("Hoàn thành")
             self.status_label.setStyleSheet("color: #00FF88;")
             self.indicator.setStyleSheet("background-color: #00FF88;")
             self.setStyleSheet(self.styleSheet().replace("rgba(0, 229, 255, 80)", "rgba(0, 255, 136, 40)").replace("rgba(0, 229, 255, 15)", "rgba(0, 0, 0, 180)"))
             self.pulse_timer.stop()
         elif status == "failed":
-            self.status_label.setText("Failed")
+            self.status_label.setText("Thất bại")
             self.status_label.setStyleSheet("color: #FF4444;")
             self.indicator.setStyleSheet("background-color: #FF4444;")
             self.setStyleSheet(self.styleSheet() + "#stepWidget { border: 1px solid rgba(255, 68, 68, 80); background-color: rgba(255, 68, 68, 15); }")
             self.pulse_timer.stop()
         elif status == "skipped":
-            self.status_label.setText("Skipped")
+            self.status_label.setText("Bỏ qua")
             self.status_label.setStyleSheet("color: #f5c86a;")
             self.indicator.setStyleSheet("background-color: #f5c86a;")
             self.pulse_timer.stop()
         else:
-            self.status_label.setText("Pending")
+            self.status_label.setText("Chờ xử lý")
             self.status_label.setStyleSheet("color: #666;")
             self.indicator.setStyleSheet("background-color: #444; border-radius: 5px;")
         
@@ -119,7 +119,7 @@ class PipelineProgressDialog(QDialog):
         super().__init__(parent)
         self._stopped = False
         self._drag_pos = None
-        self.setWindowTitle("CapCap AI Pipeline")
+        self.setWindowTitle("Quy trình AI TankVideo")
         self.setFixedSize(580, 700)
         # Do not force the progress dialog above QMessageBox/other dialogs.
         self.setWindowFlags(self.windowFlags() | Qt.FramelessWindowHint)
@@ -136,9 +136,9 @@ class PipelineProgressDialog(QDialog):
         self.main_frame.move(10, 10)
         self.main_frame.setStyleSheet("""
             #mainFrame {
-                background-color: #0f1724;
-                border: 1px solid #28364c;
-                border-radius: 20px;
+                background-color: #121316;
+                border: 1px solid #2d323c;
+                border-radius: 16px;
             }
         """)
         
@@ -153,8 +153,8 @@ class PipelineProgressDialog(QDialog):
         layout.setContentsMargins(30, 30, 30, 30)
         
         header_layout = QHBoxLayout()
-        self.title_label = QLabel("AI Production Pipeline")
-        self.title_label.setStyleSheet("font-size: 20px; font-weight: 800; color: white;")
+        self.title_label = QLabel("⚡ Quy trình AI TankVideo")
+        self.title_label.setStyleSheet("font-size: 20px; font-weight: 800; color: #ff7b1a;")
         header_layout.addWidget(self.title_label)
         
         self.close_btn = QPushButton("✕", self)
@@ -211,15 +211,15 @@ class PipelineProgressDialog(QDialog):
         self.steps = {}
         self.step_order = []
         
-        self.footer = QLabel("Initializing workflow engine...")
+        self.footer = QLabel("Đang khởi tạo công cụ quy trình...")
         self.footer.setStyleSheet("color: #888; font-size: 13px; margin-top: 15px;")
         layout.addWidget(self.footer)
 
-        self.total_time_label = QLabel("Total time: 00:00")
+        self.total_time_label = QLabel("Tổng thời gian: 00:00")
         self.total_time_label.setStyleSheet("color: #d7e3f4; font-size: 12px; margin-top: 6px;")
         layout.addWidget(self.total_time_label)
 
-        self.dismiss_btn = QPushButton("Close")
+        self.dismiss_btn = QPushButton("Đóng")
         self.dismiss_btn.setFixedHeight(34)
         self.dismiss_btn.setStyleSheet("""
             QPushButton {
@@ -236,7 +236,7 @@ class PipelineProgressDialog(QDialog):
         """)
         self.dismiss_btn.clicked.connect(self.hide)
 
-        self.stop_btn = QPushButton("Stop")
+        self.stop_btn = QPushButton("Dừng")
         self.stop_btn.setFixedHeight(34)
         self.stop_btn.setStyleSheet("""
             QPushButton {
@@ -301,7 +301,7 @@ class PipelineProgressDialog(QDialog):
             idx = self.step_order.index(step_id)
             val = int((idx / len(self.step_order)) * 100)
             self.overall_progress.setValue(val)
-            self.footer.setText(f"Stage {idx+1}/{len(self.step_order)}: {self.steps[step_id].name_label.text()}")
+            self.footer.setText(f"Giai đoạn {idx+1}/{len(self.step_order)}: {self.steps[step_id].name_label.text()}")
 
     def finish_step(self, step_id):
         if step_id in self.steps:
@@ -313,7 +313,7 @@ class PipelineProgressDialog(QDialog):
     def fail_step(self, step_id):
         if step_id in self.steps:
             self.steps[step_id].set_status("failed")
-            self.footer.setText(f"Error encountered during: {self.steps[step_id].name_label.text()}")
+            self.footer.setText(f"Đã xảy ra lỗi tại: {self.steps[step_id].name_label.text()}")
             self.footer.setStyleSheet("color: #FF4444; font-weight: bold; margin-top: 15px;")
             self._stop_total_timer()
 
@@ -332,7 +332,7 @@ class PipelineProgressDialog(QDialog):
             elif widget.status == "pending":
                 widget.set_status("skipped")
         self.overall_progress.setValue(100)
-        self.footer.setText("✨ Pipeline execution complete! Video is ready.")
+        self.footer.setText("✨ Thực thi quy trình hoàn tất! Video đã sẵn sàng.")
         self.footer.setStyleSheet("color: #00FF88; font-weight: bold; font-size: 14px; margin-top: 15px;")
         self._stop_total_timer()
 
@@ -342,7 +342,7 @@ class PipelineProgressDialog(QDialog):
         elapsed = int(time.monotonic() - self.workflow_start_time)
         mins = elapsed // 60
         secs = elapsed % 60
-        self.total_time_label.setText(f"Total time: {mins:02d}:{secs:02d}")
+        self.total_time_label.setText(f"Tổng thời gian: {mins:02d}:{secs:02d}")
 
     def _stop_total_timer(self):
         if self.total_timer.isActive():
@@ -351,22 +351,22 @@ class PipelineProgressDialog(QDialog):
             elapsed = int(time.monotonic() - self.workflow_start_time)
             mins = elapsed // 60
             secs = elapsed % 60
-            self.total_time_label.setText(f"Total time: {mins:02d}:{secs:02d}")
+            self.total_time_label.setText(f"Tổng thời gian: {mins:02d}:{secs:02d}")
             self.workflow_start_time = None
 
     def _on_stop(self):
         self._stopped = True
         self.stop_btn.setEnabled(False)
-        self.stop_btn.setText("Stopping...")
-        self.footer.setText("Stopping pipeline...")
+        self.stop_btn.setText("Đang dừng...")
+        self.footer.setText("Đang dừng quy trình...")
         self.footer.setStyleSheet("color: #FF6B6B; font-weight: bold; font-size: 14px; margin-top: 15px;")
         self.stop_requested.emit()
 
     def cancel_stop_request(self):
         self._stopped = False
         self.stop_btn.setEnabled(True)
-        self.stop_btn.setText("Stop")
-        self.footer.setText("Pipeline is still running.")
+        self.stop_btn.setText("Dừng")
+        self.footer.setText("Quy trình vẫn đang chạy.")
         self.footer.setStyleSheet("color: #888; font-size: 13px; margin-top: 15px;")
 
     def hideEvent(self, event):

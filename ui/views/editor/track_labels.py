@@ -63,7 +63,7 @@ class TrackLabelBar(QFrame):
         super().__init__(parent)
         self.setFixedWidth(self.TRACK_HEADER_W)
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
-        self.setStyleSheet("background-color: #142030; border: none;")
+        self.setStyleSheet("background-color: #181a20; border-right: 1px solid #282c35;")
         self._track_names: list[str] = []
         self._track_heights: list[int] = []
         self._track_locked: list[bool] = []
@@ -373,13 +373,13 @@ class TrackLabelBar(QFrame):
             is_clickable = bool(prefix)
         x = event.position().x()
         if is_clickable and x >= self.TRACK_HEADER_W - 72 and not self._controls_enabled:
-            self.setToolTip("Pause playback to edit layer controls")
+            self.setToolTip("Tạm dừng phát để chỉnh sửa điều khiển lớp")
             self.setCursor(Qt.ForbiddenCursor)
             return
         if is_clickable and x >= self.TRACK_HEADER_W - 24:
-            self.setToolTip("Unlock layer" if self._track_locked[idx] else "Lock layer")
+            self.setToolTip("Mở khóa lớp" if self._track_locked[idx] else "Khóa lớp")
         elif is_clickable and x >= self.TRACK_HEADER_W - 48 and prefix in SUBTITLE_PREFIXES:
-            self.setToolTip("Hide subtitle track" if self._track_subtitle_shown[idx] else "Show subtitle track")
+            self.setToolTip("Ẩn track phụ đề" if self._track_subtitle_shown[idx] else "Hiện track phụ đề")
         elif is_clickable and x >= self.TRACK_HEADER_W - 48 and (prefix in BLUR_PREFIXES or prefix in LOGO_PREFIXES or prefix in MASK_PREFIXES or prefix in TEXT_PREFIXES):
             hidden = False
             if prefix in BLUR_PREFIXES:
@@ -390,9 +390,9 @@ class TrackLabelBar(QFrame):
                 hidden = not self._track_mask_shown[idx]
             elif prefix in TEXT_PREFIXES:
                 hidden = not self._track_text_shown[idx]
-            self.setToolTip("Show layer" if hidden else "Hide layer")
+            self.setToolTip("Hiện lớp" if hidden else "Ẩn lớp")
         elif is_clickable and x >= self.TRACK_HEADER_W - 72 and prefix in MUTE_PREFIXES:
-            self.setToolTip("Unmute track" if self._track_muted[idx] else "Mute track")
+            self.setToolTip("Bật tiếng track" if self._track_muted[idx] else "Tắt tiếng track")
             self.setCursor(Qt.PointingHandCursor)
             return
         if is_clickable and x >= self.TRACK_HEADER_W - 72:
@@ -400,7 +400,7 @@ class TrackLabelBar(QFrame):
             self.setCursor(Qt.PointingHandCursor)
             return
         if is_clickable and event.position().x() >= self.TRACK_HEADER_W - 28:
-            self.setToolTip("Unlock layer" if self._track_locked[idx] else "Lock layer")
+            self.setToolTip("Mở khóa lớp" if self._track_locked[idx] else "Khóa lớp")
         else:
             self.setToolTip("")
         self.setCursor(Qt.PointingHandCursor if is_clickable else Qt.ArrowCursor)
@@ -555,11 +555,21 @@ class TrackLabelBar(QFrame):
 
             dim_text = (muted or logo_hidden or mask_hidden or text_hidden or subtitle_hidden
                         or (prefix in BLUR_PREFIXES and not blur_on))
-            text_color = QColor("#555") if dim_text else QColor("#ffffff")
-            painter.setPen(text_color)
-            lines = self._label_lines(name, text_w, fm)
+            TRACK_DISPLAY_MAP = {
+                "V1 Video": "V1 Video",
+                "A1 Audio": "A1 Âm thanh",
+                "A2 Music": "A2 Nhạc nền",
+                "TS1": "TS1 Phụ đề",
+                "S1 Subtitle": "S1 Phụ đề",
+                "B1 Blur": "B1 Làm mờ",
+                "L1 Logo": "L1 Logo",
+                "M1 Mask": "M1 Mặt nạ",
+                "T1 Text": "T1 Chữ",
+            }
+            display_name = TRACK_DISPLAY_MAP.get(name, name)
+            lines = self._label_lines(display_name, text_w, fm)
             if not lines:
-                lines = [name or ""]
+                lines = [display_name or ""]
             line_h = fm.height()
             total_h = line_h * len(lines)
             start_y = y + max(2, (h - total_h) // 2)

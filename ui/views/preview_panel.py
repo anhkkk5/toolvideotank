@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QMenu,
@@ -19,6 +20,7 @@ from PySide6.QtWidgets import (
     QSlider,
     QSplitter,
     QStackedWidget,
+    QTabWidget,
     QTextEdit,
     QToolButton,
     QVBoxLayout,
@@ -30,6 +32,7 @@ from runtime_paths import asset_path
 from widgets import MpvVideoView, VideoView
 from utils.icon_utils import load_icon
 from utils.media_backend import is_mpv_backend_available
+from .subtitle_list_view import SubtitleListView
 
 
 def _import_editor_timeline():
@@ -706,14 +709,14 @@ class TimelineTrackLabels(QFrame):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        self.header = QLabel("Tracks")
+        self.header = QLabel("Các track")
         self.header.setFixedHeight(28)
         self.header.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
         self.header.setContentsMargins(14, 0, 0, 0)
         self.header.setObjectName("helperLabel")
         layout.addWidget(self.header)
 
-        for key, title in (("video", "Video"), ("text", "Text"), ("audio", "Audio")):
+        for key, title in (("video", "Video"), ("text", "Chữ"), ("audio", "Âm thanh")):
             row = QFrame()
             row_layout = QVBoxLayout(row)
             row_layout.setContentsMargins(14, 8, 10, 8)
@@ -742,18 +745,18 @@ def _build_timeline_track_labels(timeline):
     return TimelineTrackLabels(timeline)
 
 
-def build_preview_panel(gui):
+def build_preview_panel(gui, left_panel=None):
     right_panel = QWidget()
     right_panel.setObjectName("rightPanel")
     right_layout = QVBoxLayout(right_panel)
     right_layout.setContentsMargins(0, 0, 0, 0)
     right_layout.setSpacing(10)
 
-    gui.preview_context_label = QLabel("Choose a video to start previewing. Subtitle and voice status will appear here as you work.")
+    gui.preview_context_label = QLabel("Chọn một video để bắt đầu xem trước. Trạng thái phụ đề và giọng đọc sẽ hiển thị tại đây.")
     gui.preview_context_label.setWordWrap(True)
     gui.preview_context_label.setObjectName("previewContextLabel")
     gui.preview_context_label.hide()
-    gui.frame_preview_badge_label = QLabel("Frame Preview")
+    gui.frame_preview_badge_label = QLabel("Xem trước khung hình")
     gui.frame_preview_badge_label.setObjectName("helperLabel")
     gui.frame_preview_badge_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
     gui.frame_preview_badge_label.setStyleSheet(
@@ -761,7 +764,7 @@ def build_preview_panel(gui):
         "border-radius: 10px; padding: 4px 10px; color: #cfe6ff; font-weight: 700; }"
     )
     gui.frame_preview_badge_label.hide()
-    gui.frame_preview_status_label = QLabel("Exact frame preview updates here when available.")
+    gui.frame_preview_status_label = QLabel("Xem trước khung hình chính xác sẽ cập nhật tại đây khi khả dụng.")
     gui.frame_preview_status_label.setWordWrap(True)
     gui.frame_preview_status_label.setObjectName("helperLabel")
     gui.frame_preview_status_label.hide()
@@ -827,26 +830,26 @@ def build_preview_panel(gui):
     gui.blur_add_btn = QPushButton()
     gui.ocr_region_btn = QPushButton()
     gui.ocr_region_btn.setCheckable(True)
-    gui.ocr_translator_btn = QPushButton("OCR Translate")
+    gui.ocr_translator_btn = QPushButton("Dịch OCR")
     gui.ocr_translator_btn.setCheckable(True)
-    _set_preview_icon_button(gui.play_btn, os.path.join(icons_dir, "play.svg"), "Play or pause preview")
-    _set_preview_icon_button(gui.stop_btn, os.path.join(icons_dir, "reset.svg"), "Reset preview to the beginning")
-    _set_preview_icon_button(gui.preview_btn, os.path.join(icons_dir, "preview.svg"), "Render a fresh preview using current subtitle and audio")
-    _set_preview_icon_button(gui.blur_area_btn, os.path.join(icons_dir, "blur.svg"), "Turn blur effect on or off")
-    gui.blur_add_btn.setText("Blur")
-    gui.blur_add_btn.setToolTip("Add a blur region")
-    gui.blur_add_btn.setFixedSize(50, 38)
+    _set_preview_icon_button(gui.play_btn, os.path.join(icons_dir, "play.svg"), "Phát hoặc tạm dừng xem trước")
+    _set_preview_icon_button(gui.stop_btn, os.path.join(icons_dir, "reset.svg"), "Đặt lại xem trước về đầu")
+    _set_preview_icon_button(gui.preview_btn, os.path.join(icons_dir, "preview.svg"), "Tạo bản xem trước mới với phụ đề và âm thanh hiện tại")
+    _set_preview_icon_button(gui.blur_area_btn, os.path.join(icons_dir, "blur.svg"), "Bật hoặc tắt hiệu ứng làm mờ")
+    gui.blur_add_btn.setText("Làm mờ")
+    gui.blur_add_btn.setToolTip("Thêm vùng làm mờ")
+    gui.blur_add_btn.setFixedSize(60, 38)
     gui.blur_add_btn.setEnabled(False)
     gui.blur_add_btn.setStyleSheet(
         "QPushButton { color: #ffc15e; font-weight: bold; font-size: 13px; padding: 0; }"
     )
     gui.ocr_region_btn.setText("OCR")
-    gui.ocr_region_btn.setToolTip("Edit OCR subtitle region")
+    gui.ocr_region_btn.setToolTip("Chỉnh sửa vùng phụ đề OCR")
     gui.ocr_region_btn.setFixedSize(38, 38)
     gui.ocr_region_btn.setStyleSheet("QPushButton { color: #6ee7d6; font-weight: bold; font-size: 10px; padding: 0; }")
     gui.ocr_region_btn.hide()
     gui.ocr_translator_btn.setFixedSize(92, 38)
-    gui.ocr_translator_btn.setToolTip("Capture and translate visual text from the current video frame")
+    gui.ocr_translator_btn.setToolTip("Chụp và dịch văn bản trực tiếp từ khung hình video hiện tại")
     gui.ocr_translator_btn.setStyleSheet(
         "QPushButton { color: #d8b4fe; font-weight: bold; font-size: 11px; padding: 0 6px; }"
         "QPushButton:checked { background: #3b2557; border-color: #a855f7; color: #ffffff; }"
@@ -878,43 +881,45 @@ def build_preview_panel(gui):
     gui.add_logo_btn.setStyleSheet(
         "QPushButton { color: #6ee7d6; font-weight: bold; font-size: 13px; padding: 0; }"
     )
-    gui.add_logo_btn.setToolTip("Add a logo or watermark image to the video")
+    gui.add_logo_btn.setToolTip("Thêm logo hoặc hình mờ vào video")
     gui.add_logo_btn.clicked.connect(
         lambda: gui.on_add_timeline_layer("logo") if hasattr(gui, "on_add_timeline_layer") else None
     )
     # Dedicated Mask button (beside the Logo button). Adds a new
     # rectangular mask to the M1 track.
-    gui.add_mask_btn = QPushButton("Mask")
-    gui.add_mask_btn.setFixedSize(50, 38)
+    gui.add_mask_btn = QPushButton("Mặt nạ")
+    gui.add_mask_btn.setFixedSize(60, 38)
     gui.add_mask_btn.setEnabled(False)
     gui.add_mask_btn.setStyleSheet(
         "QPushButton { color: #c98c5a; font-weight: bold; font-size: 13px; padding: 0; }"
     )
-    gui.add_mask_btn.setToolTip("Add a rectangular mask to the video")
+    gui.add_mask_btn.setToolTip("Thêm vùng mặt nạ hình chữ nhật vào video")
     gui.add_mask_btn.clicked.connect(
         lambda: gui.on_add_timeline_layer("mask") if hasattr(gui, "on_add_timeline_layer") else None
     )
-    gui.add_text_btn = QPushButton("Text")
+    gui.add_text_btn = QPushButton("Chữ")
     gui.add_text_btn.setFixedSize(50, 38)
     gui.add_text_btn.setEnabled(False)
     gui.add_text_btn.setStyleSheet(
         "QPushButton { color: #c084fc; font-weight: bold; font-size: 13px; padding: 0; }"
     )
-    gui.add_text_btn.setToolTip("Add editable text to the video")
+    gui.add_text_btn.setToolTip("Thêm văn bản tùy chỉnh vào video")
     gui.add_text_btn.clicked.connect(
         lambda: gui.on_add_timeline_layer("text") if hasattr(gui, "on_add_timeline_layer") else None
     )
+    # Hiển thị nút Làm mờ / Mặt nạ để người dùng có thể tự vẽ hoặc chỉnh sửa khung làm mờ riêng
+    gui.blur_add_btn.show()
+    gui.add_logo_btn.hide()
+    gui.add_mask_btn.hide()
+    gui.add_text_btn.hide()
     blur_group.addWidget(gui.blur_add_btn)
-    blur_group.addWidget(gui.add_logo_btn)
-    blur_group.addWidget(gui.add_mask_btn)
-    blur_group.addWidget(gui.add_text_btn)
     blur_group.addWidget(gui.ocr_region_btn)
     blur_group.addWidget(gui.ocr_translator_btn)
 
     speed_group = QHBoxLayout()
     speed_group.setSpacing(6)
     speed_group.addStretch(0)
-    speed_group.addWidget(QLabel("Speed"))
+    speed_group.addWidget(QLabel("Tốc độ"))
     speed_group.addWidget(gui.preview_speed_combo)
 
     transport_row = QHBoxLayout()
@@ -999,85 +1004,126 @@ def build_preview_panel(gui):
     timeline_card = QFrame()
     timeline_card.setObjectName("statusCard")
     timeline_layout = QVBoxLayout(timeline_card)
-    timeline_layout.setContentsMargins(12, 10, 12, 10)
-    timeline_layout.setSpacing(8)
+    timeline_layout.setContentsMargins(8, 6, 8, 6)
+    timeline_layout.setSpacing(4)
 
     timeline_header_layout = QHBoxLayout()
-    timeline_header_layout.setSpacing(10)
-    timeline_copy_layout = QVBoxLayout()
-    timeline_copy_layout.setSpacing(1)
+    timeline_header_layout.setContentsMargins(0, 0, 0, 2)
+    timeline_header_layout.setSpacing(6)
+
     timeline_title = QLabel("Timeline")
-    timeline_title.setObjectName("statusHeadline")
-    timeline_meta = QLabel("Editor-first layout with dedicated video, audio, and subtitle lanes.")
-    timeline_meta.setObjectName("helperLabel")
-    timeline_copy_layout.addWidget(timeline_title)
-    timeline_copy_layout.addWidget(timeline_meta)
-    timeline_header_layout.addLayout(timeline_copy_layout, 0)
-    gui.timeline_undo_btn = QPushButton("Undo")
-    gui.timeline_undo_btn.setFixedWidth(58)
+    timeline_title.setStyleSheet("font-weight: bold; font-size: 13px; color: #8ad7ff; padding-right: 4px;")
+    timeline_header_layout.addWidget(timeline_title)
+
+    # Style chung cho nút toolbar timeline chuẩn CapCut
+    tb_btn_style = (
+        "QPushButton { background: #141f2e; color: #c5d6ea; border: 1px solid #25384e; "
+        "border-radius: 4px; font-size: 11px; padding: 0px; } "
+        "QPushButton:hover { background: #22344a; color: #ffffff; border-color: #3b587d; } "
+        "QPushButton:pressed { background: #0e1722; } "
+        "QPushButton:checked { background: #1b3d63; color: #71adff; border-color: #4a8cff; } "
+        "QPushButton:disabled { background: #0f1620; color: #48596c; border-color: #1a2533; }"
+    )
+
+    gui.timeline_undo_btn = QPushButton("↶")
+    gui.timeline_undo_btn.setFixedSize(28, 26)
+    gui.timeline_undo_btn.setStyleSheet(tb_btn_style)
     gui.timeline_undo_btn.setEnabled(False)
-    gui.timeline_redo_btn = QPushButton("Redo")
-    gui.timeline_redo_btn.setFixedWidth(58)
+    gui.timeline_undo_btn.setToolTip("Hoàn tác (Ctrl+Z)")
+
+    gui.timeline_redo_btn = QPushButton("↷")
+    gui.timeline_redo_btn.setFixedSize(28, 26)
+    gui.timeline_redo_btn.setStyleSheet(tb_btn_style)
     gui.timeline_redo_btn.setEnabled(False)
-    gui.timeline_split_btn = QPushButton("Split")
-    gui.timeline_split_btn.setFixedWidth(58)
+    gui.timeline_redo_btn.setToolTip("Làm lại (Ctrl+Shift+Z / Ctrl+Y)")
+
+    gui.timeline_split_btn = QPushButton("✂ Tách")
+    gui.timeline_split_btn.setFixedSize(58, 26)
+    gui.timeline_split_btn.setStyleSheet(
+        "QPushButton { background: #18283c; color: #71adff; border: 1px solid #2f4b6e; "
+        "border-radius: 4px; font-weight: bold; font-size: 11px; } "
+        "QPushButton:hover { background: #254064; color: #ffffff; border-color: #4a8cff; } "
+        "QPushButton:disabled { background: #0f1620; color: #48596c; border-color: #1a2533; }"
+    )
     gui.timeline_split_btn.setEnabled(False)
-    gui.timeline_delete_btn = QPushButton("Delete")
-    gui.timeline_delete_btn.setFixedWidth(62)
+    gui.timeline_split_btn.setToolTip("Tách đoạn tại vị trí kim thời gian (Ctrl+B)")
+
+    gui.timeline_split_sentences_btn = QPushButton("📑")
+    gui.timeline_split_sentences_btn.setFixedSize(28, 26)
+    gui.timeline_split_sentences_btn.setStyleSheet(tb_btn_style)
+    gui.timeline_split_sentences_btn.setEnabled(False)
+    gui.timeline_split_sentences_btn.setToolTip("Tự động tách câu thoại thông minh bằng AI")
+
+    gui.timeline_delete_btn = QPushButton("🗑")
+    gui.timeline_delete_btn.setFixedSize(28, 26)
+    gui.timeline_delete_btn.setStyleSheet(tb_btn_style)
     gui.timeline_delete_btn.setEnabled(False)
+    gui.timeline_delete_btn.setToolTip("Xóa đoạn đang chọn (Delete)")
+
     gui.timeline_undo_btn.clicked.connect(gui.undo_last_timeline_timing_edit)
     gui.timeline_redo_btn.clicked.connect(gui.redo_last_timeline_timing_edit)
     gui.timeline_split_btn.clicked.connect(gui.split_selected_timeline_segment)
+    gui.timeline_split_sentences_btn.clicked.connect(gui.split_selected_segment_by_sentences)
     gui.timeline_delete_btn.clicked.connect(gui.delete_selected_timeline_segment)
-    gui.timeline_selection_mode_btn = QPushButton("Select Range")
+
+    gui.timeline_snap_btn = QPushButton("🧲")
+    gui.timeline_snap_btn.setCheckable(True)
+    gui.timeline_snap_btn.setChecked(True)
+    gui.timeline_snap_btn.setFixedSize(28, 26)
+    gui.timeline_snap_btn.setStyleSheet(tb_btn_style)
+    gui.timeline_snap_btn.setToolTip("Tự động hút dính vào các mép đoạn và kim phát (Snap)")
+    gui.timeline_snap_btn.toggled.connect(gui.timeline.set_snap_enabled)
+
+    gui.timeline_selection_mode_btn = QPushButton("⬚")
     gui.timeline_selection_mode_btn.setCheckable(True)
-    gui.timeline_selection_mode_btn.setFixedWidth(96)
-    gui.timeline_selection_mode_btn.setToolTip("Enable Selection Range Mode")
-    gui.timeline_selection_mode_btn.setStyleSheet(
-        "QPushButton:checked { background:#244b6d; border-color:#71adff; color:#ffffff; }"
-    )
+    gui.timeline_selection_mode_btn.setFixedSize(28, 26)
+    gui.timeline_selection_mode_btn.setStyleSheet(tb_btn_style)
+    gui.timeline_selection_mode_btn.setToolTip("Bật chế độ chọn khoảng thời gian (Range)")
     gui.timeline_selection_mode_btn.toggled.connect(gui.timeline.set_selection_mode)
-    gui.timeline_clear_selection_btn = QPushButton("Clear Range")
-    gui.timeline_clear_selection_btn.setFixedWidth(96)
-    gui.timeline_clear_selection_btn.setToolTip("Clear the timeline selection range (Esc)")
+
+    gui.timeline_clear_selection_btn = QPushButton("Bỏ chọn")
+    gui.timeline_clear_selection_btn.setFixedSize(65, 26)
+    gui.timeline_clear_selection_btn.setStyleSheet(tb_btn_style)
+    gui.timeline_clear_selection_btn.setToolTip("Xóa vùng chọn timeline (Esc)")
     gui.timeline_clear_selection_btn.setEnabled(False)
     gui.timeline_clear_selection_btn.hide()
     gui.timeline_clear_selection_btn.clicked.connect(gui.timeline.clear_selection_range)
-    gui.timeline_alt_transcribe_btn = QPushButton("Alt Transcribe")
-    gui.timeline_alt_transcribe_btn.setFixedWidth(118)
-    gui.timeline_alt_transcribe_btn.setToolTip("Retranscribe the Selection Range with custom Whisper or OCR settings")
+
+    gui.timeline_alt_transcribe_btn = QPushButton("Chép lại")
+    gui.timeline_alt_transcribe_btn.setFixedSize(68, 26)
+    gui.timeline_alt_transcribe_btn.setStyleSheet(tb_btn_style)
+    gui.timeline_alt_transcribe_btn.setToolTip("Chép lời lại đoạn được chọn bằng cài đặt Whisper hoặc OCR tùy chỉnh")
     gui.timeline_alt_transcribe_btn.hide()
     gui.timeline_alt_transcribe_btn.clicked.connect(gui.transcribe_selected_range_alternate)
+
     def _on_range_changed(_start, _end):
         gui.timeline_clear_selection_btn.setEnabled(True)
         gui.timeline_clear_selection_btn.show()
         if hasattr(gui, "_update_alt_transcribe_button_label"):
             gui._update_alt_transcribe_button_label()
         gui.timeline_alt_transcribe_btn.show()
-        # Range signals can arrive in the middle of the media-state update.
-        # Refresh once on the next event-loop turn so the action is enabled
-        # after the timeline has entered paused/edit mode.
         if hasattr(gui, "refresh_ui_state"):
             QtCore.QTimer.singleShot(0, gui.refresh_ui_state)
+
     def _on_range_cleared():
         gui.timeline_clear_selection_btn.setEnabled(False)
         gui.timeline_clear_selection_btn.hide()
         gui.timeline_alt_transcribe_btn.hide()
+
     gui.timeline.selectionRangeChanged.connect(_on_range_changed)
     gui.timeline.selectionRangeCleared.connect(_on_range_cleared)
+
     def _on_selection_mode_changed(enabled):
         gui.timeline_selection_mode_btn.blockSignals(True)
         gui.timeline_selection_mode_btn.setChecked(bool(enabled))
         gui.timeline_selection_mode_btn.blockSignals(False)
-        gui.timeline_selection_mode_btn.setText("Selecting" if enabled else "Select Range")
-        gui.timeline_selection_mode_btn.setToolTip(
-            "Selection Range Mode active: drag the ruler to create or adjust a range"
-            if enabled else "Enable Selection Range Mode"
-        )
+
     gui.timeline.selectionModeChanged.connect(_on_selection_mode_changed)
-    gui.timeline_layers_btn = QPushButton("Layers")
-    gui.timeline_layers_btn.setFixedWidth(76)
-    gui.timeline_layers_btn.setToolTip("Show or hide layers on the timeline only")
+
+    gui.timeline_layers_btn = QPushButton("Lớp ⌄")
+    gui.timeline_layers_btn.setFixedSize(58, 26)
+    gui.timeline_layers_btn.setStyleSheet(tb_btn_style)
+    gui.timeline_layers_btn.setToolTip("Hiện hoặc ẩn các lớp trên timeline")
     gui.timeline_layers_menu = QMenu(gui.timeline_layers_btn)
     gui.timeline_layers_menu.setStyleSheet(
         "QMenu { background: #142030; color: #dbe5f3; border: 1px solid #2f4868; padding: 5px; }"
@@ -1092,46 +1138,83 @@ def build_preview_panel(gui):
         lambda: gui.populate_timeline_layers_menu() if hasattr(gui, "populate_timeline_layers_menu") else None
     )
     gui.timeline_layers_btn.setMenu(gui.timeline_layers_menu)
-    gui.timeline_zoom_out_btn = QPushButton("-")
-    gui.timeline_zoom_out_btn.setFixedWidth(34)
+
+    gui.timeline_zoom_out_btn = QPushButton("−")
+    gui.timeline_zoom_out_btn.setFixedSize(22, 22)
+    gui.timeline_zoom_out_btn.setStyleSheet(tb_btn_style)
+    gui.timeline_zoom_slider = QSlider(Qt.Horizontal)
+    gui.timeline_zoom_slider.setRange(30, 500)
+    gui.timeline_zoom_slider.setValue(100)
+    gui.timeline_zoom_slider.setFixedWidth(75)
+    gui.timeline_zoom_slider.setToolTip("Thu phóng trục thời gian (Ctrl + Con lăn chuột)")
+    gui.timeline_zoom_slider.valueChanged.connect(gui.timeline.set_pixels_per_second)
+    gui.timeline.zoomChanged.connect(
+        lambda _val: (
+            gui.timeline_zoom_slider.blockSignals(True),
+            gui.timeline_zoom_slider.setValue(getattr(gui.timeline, "pixels_per_second", 100)),
+            gui.timeline_zoom_slider.blockSignals(False),
+        )
+    )
     gui.timeline_zoom_label = QLabel(f"{gui.timeline.zoom_percent()}%")
     gui.timeline_zoom_label.setObjectName("helperLabel")
     gui.timeline_zoom_label.setAlignment(Qt.AlignCenter)
-    gui.timeline_zoom_label.setFixedWidth(48)
+    gui.timeline_zoom_label.setFixedWidth(38)
     gui.timeline_zoom_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
     gui.timeline_zoom_in_btn = QPushButton("+")
-    gui.timeline_zoom_in_btn.setFixedWidth(34)
-    gui.timeline_zoom_reset_btn = QPushButton("Fit")
-    gui.timeline_zoom_reset_btn.setFixedWidth(52)
+    gui.timeline_zoom_in_btn.setFixedSize(22, 22)
+    gui.timeline_zoom_in_btn.setStyleSheet(tb_btn_style)
+    gui.timeline_zoom_reset_btn = QPushButton("Vừa")
+    gui.timeline_zoom_reset_btn.setFixedSize(38, 24)
+    gui.timeline_zoom_reset_btn.setStyleSheet(tb_btn_style)
+    gui.timeline_zoom_reset_btn.setToolTip("Căn vừa timeline với độ rộng khung nhìn")
     gui.timeline_zoom_out_btn.clicked.connect(gui.timeline.zoom_out)
     gui.timeline_zoom_in_btn.clicked.connect(gui.timeline.zoom_in)
     gui.timeline_zoom_reset_btn.clicked.connect(gui.timeline.reset_zoom)
 
-    edit_group = QHBoxLayout()
-    edit_group.setSpacing(4)
-    edit_group.addWidget(gui.timeline_undo_btn)
-    edit_group.addWidget(gui.timeline_redo_btn)
-    edit_group.addWidget(_make_sep())
-    edit_group.addWidget(gui.timeline_split_btn)
-    edit_group.addWidget(gui.timeline_delete_btn)
-    edit_group.addWidget(_make_sep())
-    edit_group.addWidget(gui.timeline_selection_mode_btn)
-    edit_group.addWidget(gui.timeline_clear_selection_btn)
-    edit_group.addWidget(gui.timeline_alt_transcribe_btn)
-    edit_group.addWidget(_make_sep())
-    edit_group.addWidget(gui.timeline_layers_btn)
+    # Dãy nút bên trái (Tools)
+    timeline_header_layout.addWidget(gui.timeline_undo_btn)
+    timeline_header_layout.addWidget(gui.timeline_redo_btn)
+    timeline_header_layout.addWidget(_make_sep())
+    timeline_header_layout.addWidget(gui.timeline_split_btn)
+    timeline_header_layout.addWidget(gui.timeline_delete_btn)
+    timeline_header_layout.addWidget(gui.timeline_split_sentences_btn)
+    timeline_header_layout.addWidget(_make_sep())
+    timeline_header_layout.addWidget(gui.timeline_snap_btn)
+    timeline_header_layout.addWidget(gui.timeline_selection_mode_btn)
+    timeline_header_layout.addWidget(gui.timeline_clear_selection_btn)
+    timeline_header_layout.addWidget(gui.timeline_alt_transcribe_btn)
 
-    gui.add_layer_btn = QPushButton("+ Layer")
-    gui.add_layer_btn.setFixedWidth(82)
-    gui.add_layer_btn.setToolTip("Add a new layer")
-    # Keep this menu button visually consistent with the dark timeline toolbar.
-    # QMenu buttons can otherwise fall back to the platform's light palette.
+    timeline_header_layout.addStretch(1)
+
+    # Dãy nút bên phải (Zoom & Layers)
+    timeline_header_layout.addWidget(gui.timeline_zoom_out_btn)
+    timeline_header_layout.addWidget(gui.timeline_zoom_slider)
+    timeline_header_layout.addWidget(gui.timeline_zoom_in_btn)
+    timeline_header_layout.addWidget(gui.timeline_zoom_label)
+    timeline_header_layout.addWidget(gui.timeline_zoom_reset_btn)
+    timeline_header_layout.addWidget(_make_sep())
+    timeline_header_layout.addWidget(gui.timeline_layers_btn)
+
+    gui.timeline_view_bilingual_btn = QPushButton("📋 Bảng dịch")
+    gui.timeline_view_bilingual_btn.setFixedHeight(26)
+    gui.timeline_view_bilingual_btn.setStyleSheet(
+        "QPushButton { background: #162a42; color: #4ecdc4; border: 1px solid #23486e; "
+        "border-radius: 4px; padding: 2px 8px; font-weight: bold; font-size: 11px; }"
+        "QPushButton:hover { background: #1e395a; color: #ffffff; border-color: #3b74af; }"
+    )
+    gui.timeline_view_bilingual_btn.setToolTip("Mở bảng đối chiếu phụ đề gốc và phụ đề đã dịch song song")
+    gui.timeline_view_bilingual_btn.clicked.connect(gui.open_subtitle_alignment_dialog)
+    timeline_header_layout.addWidget(gui.timeline_view_bilingual_btn)
+
+    gui.add_layer_btn = QPushButton("+ Thêm lớp")
+    gui.add_layer_btn.setFixedHeight(26)
+    gui.add_layer_btn.setToolTip("Thêm một lớp mới vào timeline")
     gui.add_layer_btn.setStyleSheet(
-        "QPushButton { background: #213248; color: #ffffff; border: 1px solid #304b69; "
-        "border-radius: 10px; padding: 8px 10px; font-weight: bold; font-size: 11px; }"
-        "QPushButton:hover { background: #2d4665; border-color: #4575a8; }"
+        "QPushButton { background: #1e324a; color: #ffffff; border: 1px solid #2f4e73; "
+        "border-radius: 4px; padding: 2px 10px; font-weight: bold; font-size: 11px; }"
+        "QPushButton:hover { background: #2a476a; border-color: #4575a8; }"
         "QPushButton:pressed { background: #182a3d; border-color: #6ee7d6; }"
-        "QPushButton:disabled { background: #182636; color: #8ea3bb; border-color: #29405d; }"
+        "QPushButton:disabled { background: #121d2b; color: #5a6e84; border-color: #1e2e42; }"
     )
     gui.add_layer_btn.setEnabled(False)
     gui._layer_menu = QMenu(gui.add_layer_btn)
@@ -1142,18 +1225,15 @@ def build_preview_panel(gui):
         "QMenu::item:disabled { color: #71839a; }"
     )
     gui.add_subtitle_segment_action = gui._layer_menu.addAction(
-        "Subtitle Segment", lambda: gui.on_add_timeline_layer("subtitle")
+        "Đoạn phụ đề", lambda: gui.on_add_timeline_layer("subtitle")
     )
-    gui._layer_menu.addAction("Text", lambda: gui.on_add_timeline_layer("text"))
-    gui._layer_menu.addAction("Logo / Watermark", lambda: gui.on_add_timeline_layer("logo"))
-    gui._layer_menu.addAction("Blur", lambda: gui.on_add_timeline_layer("blur"))
-    gui._layer_menu.addAction("Mask", lambda: gui.on_add_timeline_layer("mask"))
+    gui._layer_menu.addAction("Chữ", lambda: gui.on_add_timeline_layer("text"))
+    gui._layer_menu.addAction("Logo / Hình mờ", lambda: gui.on_add_timeline_layer("logo"))
+    gui._layer_menu.addAction("Làm mờ", lambda: gui.on_add_timeline_layer("blur"))
+    gui._layer_menu.addAction("Mặt nạ", lambda: gui.on_add_timeline_layer("mask"))
     gui.add_layer_btn.setMenu(gui._layer_menu)
-    edit_group.addWidget(_make_sep())
-    edit_group.addWidget(gui.add_layer_btn)
+    timeline_header_layout.addWidget(gui.add_layer_btn)
 
-    timeline_header_layout.addStretch(1)
-    timeline_header_layout.addLayout(edit_group)
     timeline_layout.addLayout(timeline_header_layout)
 
     timeline_body_layout = QHBoxLayout()
@@ -1211,10 +1291,10 @@ def build_preview_panel(gui):
     timeline_layout.addWidget(gui.progress_bar)
 
     gui.translated_text = QTextEdit()
-    gui.translated_text.setPlaceholderText("Vietnamese subtitle text will appear here. You can edit it before export.")
+    gui.translated_text.setPlaceholderText("Văn bản phụ đề tiếng Việt sẽ xuất hiện ở đây. Bạn có thể chỉnh sửa trước khi xuất.")
     gui.translated_text.hide()
     gui.transcript_text = QTextEdit()
-    gui.transcript_text.setPlaceholderText("The original subtitle transcript will appear here...")
+    gui.transcript_text.setPlaceholderText("Bản chép lời gốc sẽ xuất hiện ở đây...")
     gui.transcript_text.hide()
 
     inspector_shell = QWidget()
@@ -1244,7 +1324,7 @@ def build_preview_panel(gui):
     inspector_header.setSpacing(8)
     inspector_copy = QVBoxLayout()
     inspector_copy.setSpacing(2)
-    inspector_title = QLabel("Subtitle Inspector")
+    inspector_title = QLabel("Kiểm tra phụ đề")
     inspector_title.setObjectName("statusHeadline")
     inspector_copy.addWidget(inspector_title)
     gui.subtitle_inspector_summary_label = QLabel("")
@@ -1256,45 +1336,91 @@ def build_preview_panel(gui):
     inspector_header.addStretch(0)
     inspector_layout.addLayout(inspector_header)
 
-    # --- Action buttons at top ---
-    inspector_actions_row = QHBoxLayout()
-    inspector_actions_row.setSpacing(8)
-    gui.rewrite_translation_btn = QPushButton("Rewrite")
-    gui.subtitle_editor_btn = QPushButton("Subtitle Editor")
-    gui.import_translation_btn = QPushButton("Import SRT")
-    gui.normalizer_dict_btn = QPushButton("Normalizer Dictionary")
-    gui.normalizer_dict_btn.setToolTip("Project-specific Piper pronunciation dictionary")
-    gui.audio_inspector_regenerate_voice_btn = QPushButton("Regenerate voice")
-    gui.audio_inspector_regenerate_voice_btn.setToolTip(
-        "Re-generate the dubbed voice for the currently selected segment."
+    # --- 3-Tab Subtitle Inspector: [Phong cách] | [Hoạt ảnh] | [Giọng nói] ---
+    gui.subtitle_inspector_tabs = QTabWidget()
+    gui.subtitle_inspector_tabs.setStyleSheet(
+        "QTabWidget::pane { border: 1px solid #1f3550; border-radius: 8px; background: #0c1524; padding: 4px; }"
+        "QTabBar::tab { background: #142236; color: #a0b4cc; font-weight: bold; padding: 6px 14px; margin-right: 3px; border-top-left-radius: 6px; border-top-right-radius: 6px; }"
+        "QTabBar::tab:selected { background: #1f3b5c; color: #ffffff; }"
     )
-    gui.rewrite_translation_btn.setEnabled(False)
-    gui.subtitle_editor_btn.setEnabled(False)
-    gui.normalizer_dict_btn.setEnabled(False)
-    gui.audio_inspector_regenerate_voice_btn.setEnabled(False)
-    gui.rewrite_translation_btn.setVisible(False)
-    gui.subtitle_editor_btn.setVisible(False)
-    gui.normalizer_dict_btn.setVisible(False)
-    gui.audio_inspector_regenerate_voice_btn.setVisible(False)
-    gui.subtitle_editor_btn.clicked.connect(gui.open_subtitle_editor)
-    inspector_actions_row.addWidget(gui.rewrite_translation_btn)
-    inspector_actions_row.addWidget(gui.subtitle_editor_btn)
-    inspector_actions_row.addWidget(gui.normalizer_dict_btn)
-    inspector_actions_row.addStretch(1)
-    inspector_layout.addLayout(inspector_actions_row)
 
-    # Keep the voice-generation action on its own row.  The other subtitle
-    # review actions can have long labels as well, and placing all of them in
-    # one row caused the Regenerate voice label to be clipped in the compact
-    # inspector.  The same button instance is retained so its visibility,
-    # enablement, and existing signal wiring are unchanged.
-    inspector_voice_actions_row = QHBoxLayout()
-    inspector_voice_actions_row.setSpacing(8)
-    inspector_voice_actions_row.addWidget(gui.import_translation_btn)
-    inspector_voice_actions_row.addWidget(gui.audio_inspector_regenerate_voice_btn)
-    inspector_voice_actions_row.addStretch(1)
-    inspector_layout.addLayout(inspector_voice_actions_row)
-    gui.inspector_voice_actions_row = inspector_voice_actions_row
+    # --- Tab 1: Phong cách ---
+    tab_style = QWidget()
+    style_layout = QVBoxLayout(tab_style)
+    style_layout.setContentsMargins(6, 6, 6, 6)
+    style_layout.setSpacing(6)
+    style_grid = QGridLayout()
+    style_grid.setHorizontalSpacing(8)
+    style_grid.setVerticalSpacing(6)
+    style_grid.addWidget(QLabel("Phông chữ:"), 0, 0)
+    style_grid.addWidget(gui.subtitle_font_combo, 0, 1)
+    style_grid.addWidget(QLabel("Kích cỡ:"), 1, 0)
+    style_grid.addWidget(gui.subtitle_font_scale_combo, 1, 1)
+    style_grid.addWidget(gui.subtitle_bold_cb, 2, 0)
+    style_grid.addWidget(gui.subtitle_outline_cb, 2, 1)
+    style_grid.addWidget(QLabel("Màu chữ:"), 3, 0)
+    style_grid.addWidget(gui.subtitle_color_btn, 3, 1)
+    style_grid.addWidget(gui.subtitle_background_cb, 4, 0)
+    style_grid.addWidget(gui.subtitle_background_color_btn, 4, 1)
+    style_grid.addWidget(QLabel("Căn vị trí:"), 5, 0)
+    style_grid.addWidget(gui.subtitle_align_combo, 5, 1)
+    style_layout.addLayout(style_grid)
+
+    sync_row = QHBoxLayout()
+    sync_row.setSpacing(6)
+    gui.sync_style_role_btn = QPushButton("Đồng bộ phân vai")
+    gui.sync_style_role_btn.setToolTip("Áp dụng định dạng này cho toàn bộ câu thoại của nhân vật đang chọn")
+    gui.sync_style_role_btn.setStyleSheet("QPushButton { background: #1f3b5c; color: #8ad7ff; font-weight: bold; border-radius: 4px; padding: 6px; } QPushButton:hover { background: #2a4e7a; }")
+    gui.sync_style_role_btn.clicked.connect(gui.update_subtitle_preview_style)
+    gui.sync_style_all_btn = QPushButton("Đồng bộ TẤT CẢ")
+    gui.sync_style_all_btn.setToolTip("Áp dụng định dạng này cho tất cả phụ đề trong dự án")
+    gui.sync_style_all_btn.setStyleSheet("QPushButton { background: #1a4268; color: #6ee7d6; font-weight: bold; border-radius: 4px; padding: 6px; } QPushButton:hover { background: #23598c; }")
+    gui.sync_style_all_btn.clicked.connect(gui.update_subtitle_preview_style)
+    sync_row.addWidget(gui.sync_style_role_btn)
+    sync_row.addWidget(gui.sync_style_all_btn)
+    style_layout.addLayout(sync_row)
+    gui.subtitle_inspector_tabs.addTab(tab_style, "Phong cách")
+
+    # --- Tab 2: Hoạt ảnh ---
+    tab_anim = QWidget()
+    anim_layout = QVBoxLayout(tab_anim)
+    anim_layout.setContentsMargins(6, 6, 6, 6)
+    anim_layout.setSpacing(6)
+    anim_grid = QGridLayout()
+    anim_grid.setHorizontalSpacing(8)
+    anim_grid.setVerticalSpacing(6)
+    anim_grid.addWidget(QLabel("Hiệu ứng:"), 0, 0)
+    anim_grid.addWidget(gui.subtitle_animation_combo, 0, 1)
+    anim_grid.addWidget(QLabel("Thời lượng:"), 1, 0)
+    anim_grid.addWidget(gui.subtitle_animation_time_spin, 1, 1)
+    anim_grid.addWidget(QLabel("Nhịp Karaoke:"), 2, 0)
+    anim_grid.addWidget(gui.subtitle_karaoke_timing_combo, 2, 1)
+    anim_layout.addLayout(anim_grid)
+    anim_layout.addWidget(gui.subtitle_single_line_cb)
+    anim_layout.addStretch()
+    gui.subtitle_inspector_tabs.addTab(tab_anim, "Hoạt ảnh")
+
+    # --- Tab 3: Giọng nói ---
+    tab_voice = QWidget()
+    voice_layout = QVBoxLayout(tab_voice)
+    voice_layout.setContentsMargins(6, 6, 6, 6)
+    voice_layout.setSpacing(8)
+    gui.rewrite_translation_btn = QPushButton("Viết lại câu (AI)")
+    gui.subtitle_editor_btn = QPushButton("Sửa phụ đề")
+    gui.import_translation_btn = QPushButton("Nhập SRT")
+    gui.normalizer_dict_btn = QPushButton("Từ điển phát âm")
+    gui.audio_inspector_regenerate_voice_btn = QPushButton("Tạo lại giọng câu này")
+    gui.subtitle_editor_btn.clicked.connect(gui.open_subtitle_editor)
+    voice_layout.addWidget(gui.audio_inspector_regenerate_voice_btn)
+    voice_layout.addWidget(gui.rewrite_translation_btn)
+    voice_layout.addWidget(gui.normalizer_dict_btn)
+    voice_layout.addWidget(gui.import_translation_btn)
+    voice_layout.addWidget(gui.subtitle_editor_btn)
+    voice_layout.addStretch()
+    gui.subtitle_inspector_tabs.addTab(tab_voice, "Giọng nói")
+
+    inspector_layout.addWidget(gui.subtitle_inspector_tabs)
+    gui.inspector_voice_actions_row = QHBoxLayout()
 
     # The original transcript is shown immediately above the editable
     # "Text shown on screen" field inside the selected subtitle card.  Do
@@ -1328,7 +1454,7 @@ def build_preview_panel(gui):
     audio_copy = QVBoxLayout()
     audio_copy.setSpacing(0)
     audio_copy.setContentsMargins(0, 0, 0, 0)
-    audio_title = QLabel("Audio")
+    audio_title = QLabel("Âm thanh")
     audio_title.setObjectName("statusHeadline")
     audio_copy.addWidget(audio_title)
     # Information labels (track name, layer count) are kept for
@@ -1347,7 +1473,7 @@ def build_preview_panel(gui):
     audio_header.addLayout(audio_copy, 1)
     audio_layout.addLayout(audio_header)
 
-    gui.audio_inspector_summary_label = QLabel("Select an audio track to view its settings.")
+    gui.audio_inspector_summary_label = QLabel("Chọn một track âm thanh để xem cài đặt.")
     gui.audio_inspector_summary_label.setObjectName("helperLabel")
     gui.audio_inspector_summary_label.setWordWrap(True)
     audio_layout.addWidget(gui.audio_inspector_summary_label)
@@ -1385,8 +1511,8 @@ def build_preview_panel(gui):
 
     # Helpful tip
     gui.audio_inspector_tip_label = QLabel(
-        "Volume and gain affect this audio track during preview. "
-        "Mute toggles the track's audio output. Speed changes playback rate."
+        "Âm lượng và khuếch đại ảnh hưởng đến track âm thanh này khi xem trước. "
+        "Tắt tiếng để tắt âm thanh. Tốc độ thay đổi tốc độ phát lại."
     )
     gui.audio_inspector_tip_label.setObjectName("helperLabel")
     gui.audio_inspector_tip_label.setWordWrap(True)
@@ -1403,7 +1529,7 @@ def build_preview_panel(gui):
         """Add common start/end controls for timeline-backed overlay layers."""
         timing_row = QHBoxLayout()
         timing_row.setSpacing(6)
-        timing_row.addWidget(QLabel("Start"))
+        timing_row.addWidget(QLabel("Bắt đầu"))
         start_spin = ReliableDoubleSpinBox()
         start_spin.setRange(0.0, 86400.0)
         start_spin.setDecimals(2)
@@ -1412,7 +1538,7 @@ def build_preview_panel(gui):
         start_spin.setMinimumWidth(104)
         setattr(gui, f"{prefix}_inspector_start_spin", start_spin)
         timing_row.addWidget(start_spin, 1)
-        timing_row.addWidget(QLabel("End"))
+        timing_row.addWidget(QLabel("Kết thúc"))
         end_spin = ReliableDoubleSpinBox()
         end_spin.setRange(0.1, 86400.0)
         end_spin.setDecimals(2)
@@ -1433,7 +1559,7 @@ def build_preview_panel(gui):
     blur_layout.setContentsMargins(12, 10, 12, 10)
     blur_layout.setSpacing(6)
 
-    blur_title = QLabel("Blur")
+    blur_title = QLabel("Làm mờ")
     blur_title.setObjectName("statusHeadline")
     blur_layout.addWidget(blur_title)
     gui.blur_inspector_track_name_label = QLabel("-")
@@ -1445,8 +1571,7 @@ def build_preview_panel(gui):
     gui.blur_inspector_layer_count_label.setVisible(False)
     blur_layout.addWidget(gui.blur_inspector_layer_count_label)
     gui.blur_inspector_summary_label = QLabel(
-        "Blur regions in this track. Use the B1 layer visibility control "
-        "in the timeline to show or hide the effect."
+        "Các vùng làm mờ trên track này. Dùng nút B1 trên timeline để bật/tắt hiệu ứng."
     )
     gui.blur_inspector_summary_label.setObjectName("helperLabel")
     gui.blur_inspector_summary_label.setWordWrap(True)
@@ -1455,7 +1580,7 @@ def build_preview_panel(gui):
 
     # --- Blur Radius ---
     radius_row = QHBoxLayout()
-    radius_label = QLabel("Blur radius")
+    radius_label = QLabel("Bán kính mờ")
     radius_label.setObjectName("sectionTitle")
     radius_label.setFixedWidth(90)
     radius_row.addWidget(radius_label)
@@ -1463,7 +1588,7 @@ def build_preview_panel(gui):
     gui.blur_inspector_radius_slider.setRange(1, 20)
     gui.blur_inspector_radius_slider.setValue(20)
     gui.blur_inspector_radius_slider.setToolTip(
-        "How strong the blur is (1 = light, 20 = heavy)."
+        "Độ mạnh của hiệu ứng làm mờ (1 = nhẹ, 20 = mạnh)."
     )
     radius_row.addWidget(gui.blur_inspector_radius_slider, 1)
     gui.blur_inspector_radius_value_label = QLabel("20")
@@ -1473,7 +1598,7 @@ def build_preview_panel(gui):
 
     # --- Blur Opacity ---
     blur_opacity_row = QHBoxLayout()
-    blur_opacity_label = QLabel("Opacity")
+    blur_opacity_label = QLabel("Độ mờ đục")
     blur_opacity_label.setObjectName("sectionTitle")
     blur_opacity_label.setFixedWidth(90)
     blur_opacity_row.addWidget(blur_opacity_label)
@@ -1481,8 +1606,7 @@ def build_preview_panel(gui):
     gui.blur_inspector_opacity_slider.setRange(0, 100)
     gui.blur_inspector_opacity_slider.setValue(100)
     gui.blur_inspector_opacity_slider.setToolTip(
-        "Transparency of the blurred region (0% fully transparent, "
-        "100% fully visible)."
+        "Độ trong suốt của vùng làm mờ (0% trong suốt hoàn toàn, 100% hiện rõ)."
     )
     blur_opacity_row.addWidget(gui.blur_inspector_opacity_slider, 1)
     gui.blur_inspector_opacity_value_label = QLabel("100%")
@@ -1492,14 +1616,14 @@ def build_preview_panel(gui):
 
     # --- Pixelate toggle ---
     pixelate_row = QHBoxLayout()
-    pixelate_label = QLabel("Pixelate")
+    pixelate_label = QLabel("Pixel hóa")
     pixelate_label.setObjectName("sectionTitle")
     pixelate_label.setFixedWidth(90)
     pixelate_row.addWidget(pixelate_label)
-    gui.blur_inspector_pixelate_cb = QCheckBox("Enable pixelate (mosaic)")
+    gui.blur_inspector_pixelate_cb = QCheckBox("Bật pixel hóa (mosaic)")
     gui.blur_inspector_pixelate_cb.setChecked(False)
     gui.blur_inspector_pixelate_cb.setToolTip(
-        "Replace the blur with a mosaic / pixelate effect over the region."
+        "Thay thế làm mờ bằng hiệu ứng mosaic / điểm ảnh trên vùng chọn."
     )
     pixelate_row.addWidget(gui.blur_inspector_pixelate_cb)
     pixelate_row.addStretch(1)
@@ -1507,7 +1631,7 @@ def build_preview_panel(gui):
 
     # --- Pixelate size ---
     pixel_size_row = QHBoxLayout()
-    pixel_size_label = QLabel("Pixel size")
+    pixel_size_label = QLabel("Cỡ pixel")
     pixel_size_label.setObjectName("sectionTitle")
     pixel_size_label.setFixedWidth(90)
     pixel_size_row.addWidget(pixel_size_label)
@@ -1515,7 +1639,7 @@ def build_preview_panel(gui):
     gui.blur_inspector_pixel_size_slider.setRange(2, 60)
     gui.blur_inspector_pixel_size_slider.setValue(12)
     gui.blur_inspector_pixel_size_slider.setToolTip(
-        "Mosaic cell size in pixels (larger = chunkier pixels)."
+        "Kích thước ô mosaic tính bằng pixel (lớn hơn = ô pixel to hơn)."
     )
     pixel_size_row.addWidget(gui.blur_inspector_pixel_size_slider, 1)
     gui.blur_inspector_pixel_size_value_label = QLabel("12")
@@ -1524,9 +1648,8 @@ def build_preview_panel(gui):
     blur_layout.addLayout(pixel_size_row)
 
     gui.blur_inspector_tip_label = QLabel(
-        "Each click of the 'Blur' button adds a new blur region to this "
-        "track. Toggle 'Show on preview' to hide the visual blur while "
-        "keeping the layers."
+        "Mỗi lần nhấn nút 'Làm mờ' sẽ thêm một vùng mờ mới vào track này. "
+        "Bật/tắt B1 trên timeline để ẩn/hiện hiệu ứng."
     )
     gui.blur_inspector_tip_label.setObjectName("helperLabel")
     gui.blur_inspector_tip_label.setWordWrap(True)
@@ -1547,9 +1670,8 @@ def build_preview_panel(gui):
     logo_title.setObjectName("statusHeadline")
     logo_layout.addWidget(logo_title)
     gui.logo_inspector_summary_label = QLabel(
-        "Adjust the watermark image on the video. Drag the logo on the "
-        "preview to reposition; use the controls below for opacity and "
-        "rotation."
+        "Điều chỉnh hình mờ trên video. Kéo logo trên khung xem trước để đổi "
+        "vị trí; dùng các nút bên dưới để chỉnh độ mờ và xoay."
     )
     gui.logo_inspector_summary_label.setObjectName("helperLabel")
     gui.logo_inspector_summary_label.setWordWrap(True)
@@ -1558,7 +1680,7 @@ def build_preview_panel(gui):
 
     # --- Opacity ---
     opacity_row = QHBoxLayout()
-    opacity_label = QLabel("Opacity")
+    opacity_label = QLabel("Độ mờ đục")
     opacity_label.setObjectName("sectionTitle")
     opacity_label.setFixedWidth(90)
     opacity_row.addWidget(opacity_label)
@@ -1566,7 +1688,7 @@ def build_preview_panel(gui):
     gui.logo_inspector_opacity_slider.setRange(0, 100)
     gui.logo_inspector_opacity_slider.setValue(100)
     gui.logo_inspector_opacity_slider.setToolTip(
-        "Set the transparency of the logo (0% invisible, 100% fully visible)."
+        "Đặt độ trong suốt của logo (0% ẩn, 100% hiện rõ)."
     )
     opacity_row.addWidget(gui.logo_inspector_opacity_slider, 1)
     gui.logo_inspector_opacity_value_label = QLabel("100%")
@@ -1576,7 +1698,7 @@ def build_preview_panel(gui):
 
     # --- Rotation ---
     rotation_row = QHBoxLayout()
-    rotation_label = QLabel("Rotation")
+    rotation_label = QLabel("Góc xoay")
     rotation_label.setObjectName("sectionTitle")
     rotation_label.setFixedWidth(90)
     rotation_row.addWidget(rotation_label)
@@ -1584,7 +1706,7 @@ def build_preview_panel(gui):
     gui.logo_inspector_rotation_slider.setRange(-180, 180)
     gui.logo_inspector_rotation_slider.setValue(0)
     gui.logo_inspector_rotation_slider.setToolTip(
-        "Rotate the logo in degrees (-180 to 180)."
+        "Xoay logo theo độ (-180 đến 180 độ)."
     )
     rotation_row.addWidget(gui.logo_inspector_rotation_slider, 1)
     gui.logo_inspector_rotation_value_label = QLabel("0°")
@@ -1593,8 +1715,8 @@ def build_preview_panel(gui):
     logo_layout.addLayout(rotation_row)
 
     gui.logo_inspector_tip_label = QLabel(
-        "Tip: drag the logo on the video preview to reposition it; "
-        "use the corner handles to resize. The X button deletes the logo."
+        "Mẹo: Kéo logo trên bản xem trước video để định vị lại; dùng các góc "
+        "để thu phóng. Nút X để xóa logo."
     )
     gui.logo_inspector_tip_label.setObjectName("helperLabel")
     gui.logo_inspector_tip_label.setWordWrap(True)
@@ -1618,13 +1740,12 @@ def build_preview_panel(gui):
     mask_layout.setContentsMargins(12, 10, 12, 10)
     mask_layout.setSpacing(6)
 
-    mask_title = QLabel("M1 Mask")
+    mask_title = QLabel("M1 Mặt nạ")
     mask_title.setObjectName("statusHeadline")
     mask_layout.addWidget(mask_title)
     gui.mask_inspector_summary_label = QLabel(
-        "Drag the mask on the video to move it. Drag a corner to "
-        "resize. The X button deletes the mask. The mask is applied "
-        "while the video is playing."
+        "Kéo mặt nạ trên video để di chuyển. Kéo các góc để thay đổi "
+        "kích thước. Nút X để xóa mặt nạ. Mặt nạ được áp dụng khi video phát."
     )
     gui.mask_inspector_summary_label.setObjectName("helperLabel")
     gui.mask_inspector_summary_label.setWordWrap(True)
@@ -1633,15 +1754,14 @@ def build_preview_panel(gui):
 
     # --- Colour ---
     color_row = QHBoxLayout()
-    color_label = QLabel("Colour")
+    color_label = QLabel("Màu sắc")
     color_label.setObjectName("sectionTitle")
     color_label.setFixedWidth(90)
     color_row.addWidget(color_label)
     gui.mask_inspector_color_btn = QPushButton("#000000")
     gui.mask_inspector_color_btn.setFixedWidth(110)
     gui.mask_inspector_color_btn.setToolTip(
-        "Pick the colour that the mask will paint over the selected "
-        "region while the video is playing."
+        "Chọn màu sắc mặt nạ phủ lên vùng chọn khi video phát."
     )
     color_row.addWidget(gui.mask_inspector_color_btn)
     color_row.addStretch(1)
@@ -1649,7 +1769,7 @@ def build_preview_panel(gui):
 
     # --- Opacity ---
     m_opacity_row = QHBoxLayout()
-    m_opacity_label = QLabel("Opacity")
+    m_opacity_label = QLabel("Độ mờ đục")
     m_opacity_label.setObjectName("sectionTitle")
     m_opacity_label.setFixedWidth(90)
     m_opacity_row.addWidget(m_opacity_label)
@@ -1657,7 +1777,7 @@ def build_preview_panel(gui):
     gui.mask_inspector_opacity_slider.setRange(0, 100)
     gui.mask_inspector_opacity_slider.setValue(100)
     gui.mask_inspector_opacity_slider.setToolTip(
-        "Mask transparency (0% invisible, 100% fully visible)."
+        "Độ trong suốt của mặt nạ (0% ẩn, 100% hiện rõ)."
     )
     m_opacity_row.addWidget(gui.mask_inspector_opacity_slider, 1)
     gui.mask_inspector_opacity_value_label = QLabel("100%")
@@ -1666,9 +1786,8 @@ def build_preview_panel(gui):
     mask_layout.addLayout(m_opacity_row)
 
     gui.mask_inspector_tip_label = QLabel(
-        "Tip: position and resize the mask on the video preview. The "
-        "mask effect is only applied while the player is playing; it "
-        "is cleared on pause / stop."
+        "Mẹo: Định vị và chỉnh kích thước mặt nạ trên khung xem trước. "
+        "Hiệu ứng mặt nạ áp dụng khi phát video; bị xóa khi tạm dừng / dừng."
     )
     gui.mask_inspector_tip_label.setObjectName("helperLabel")
     gui.mask_inspector_tip_label.setWordWrap(True)
@@ -1684,61 +1803,62 @@ def build_preview_panel(gui):
     text_layout = QVBoxLayout(text_inspector_card)
     text_layout.setContentsMargins(12, 10, 12, 10)
     text_layout.setSpacing(8)
-    text_title = QLabel("Text Layer")
+    text_title = QLabel("Lớp chữ")
     text_title.setObjectName("statusHeadline")
     text_layout.addWidget(text_title)
     _add_layer_timing_controls(text_layout, "text")
     gui.text_inspector_content = QTextEdit()
-    gui.text_inspector_content.setPlaceholderText("Enter text")
+    gui.text_inspector_content.setPlaceholderText("Nhập văn bản")
     gui.text_inspector_content.setFixedHeight(82)
     text_layout.addWidget(gui.text_inspector_content)
     font_row = QHBoxLayout()
-    font_row.addWidget(QLabel("Font"))
+    font_row.addWidget(QLabel("Phông chữ"))
     gui.text_inspector_font_combo = QComboBox()
     gui.text_inspector_font_combo.addItems(["Montserrat", "Roboto", "Inter", "Poppins", "Arial", "Segoe UI", "Tahoma", "Verdana", "Times New Roman"])
     font_row.addWidget(gui.text_inspector_font_combo, 1)
     text_layout.addLayout(font_row)
     size_row = QHBoxLayout()
-    size_row.addWidget(QLabel("Font size"))
+    size_row.addWidget(QLabel("Cỡ chữ"))
     gui.text_inspector_size_combo = QComboBox()
     # Keep the same 60 px base used by subtitle-compatible Text layers, but
     # expose smaller presets for captions and compact labels.
     for percent in (25, 35, 50, 75, 100, 125, 150):
         gui.text_inspector_size_combo.addItem(f"{percent}%", percent)
     gui.text_inspector_size_combo.setCurrentIndex(4)
-    gui.text_inspector_size_combo.setToolTip("Matches the subtitle font-size presets (60 px at 100%).")
+    gui.text_inspector_size_combo.setToolTip("Khớp với các mức cỡ chữ phụ đề (60 px tại 100%).")
     size_row.addWidget(gui.text_inspector_size_combo, 1)
     text_layout.addLayout(size_row)
     color_row = QHBoxLayout()
-    color_row.addWidget(QLabel("Text color"))
+    color_row.addWidget(QLabel("Màu chữ"))
     gui.text_inspector_color_btn = QPushButton("#FFFFFF")
     gui.text_inspector_color_btn.setFixedWidth(110)
     color_row.addWidget(gui.text_inspector_color_btn)
     color_row.addStretch(1)
     text_layout.addLayout(color_row)
     background_row = QHBoxLayout()
-    background_row.addWidget(QLabel("Background"))
-    gui.text_inspector_background_btn = QPushButton("None")
+    background_row.addWidget(QLabel("Nền"))
+    gui.text_inspector_background_btn = QPushButton("Không")
     gui.text_inspector_background_btn.setFixedWidth(110)
     background_row.addWidget(gui.text_inspector_background_btn)
     background_row.addStretch(1)
     text_layout.addLayout(background_row)
     background_opacity_row = QHBoxLayout()
-    background_opacity_row.addWidget(QLabel("Background opacity"))
+    background_opacity_row.addWidget(QLabel("Độ mờ nền"))
     gui.text_inspector_background_opacity_slider = QSlider(Qt.Horizontal)
     gui.text_inspector_background_opacity_slider.setRange(0, 100)
     gui.text_inspector_background_opacity_slider.setValue(50)
-    gui.text_inspector_background_opacity_slider.setToolTip("Adjust the Text layer background transparency.")
+    gui.text_inspector_background_opacity_slider.setToolTip("Điều chỉnh độ trong suốt nền của lớp chữ.")
     background_opacity_row.addWidget(gui.text_inspector_background_opacity_slider, 1)
     gui.text_inspector_background_opacity_value = QLabel("50%")
     gui.text_inspector_background_opacity_value.setMinimumWidth(42)
     gui.text_inspector_background_opacity_value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
     background_opacity_row.addWidget(gui.text_inspector_background_opacity_value)
     text_layout.addLayout(background_opacity_row)
-    gui.text_inspector_summary_label = QLabel("Click or drag the selected text on the video preview to position it.")
+    gui.text_inspector_summary_label = QLabel("Nhấp hoặc kéo văn bản đã chọn trên bản xem trước video để định vị.")
     gui.text_inspector_summary_label.setObjectName("helperLabel")
     gui.text_inspector_summary_label.setWordWrap(True)
     text_layout.addWidget(gui.text_inspector_summary_label)
+    text_layout.addStretch(1)
     text_layout.addStretch(1)
 
     # --- Default / empty inspector ---
@@ -1750,11 +1870,11 @@ def build_preview_panel(gui):
     default_layout = QVBoxLayout(default_inspector_card)
     default_layout.setContentsMargins(14, 14, 14, 14)
     default_layout.setSpacing(10)
-    default_title = QLabel("Track Inspector")
+    default_title = QLabel("Kiểm tra track")
     default_title.setObjectName("statusHeadline")
     default_layout.addWidget(default_title)
     gui.default_inspector_summary_label = QLabel(
-        "Click a layer on a track to view its settings."
+        "Nhấp vào một lớp trên track để xem cài đặt của nó."
     )
     gui.default_inspector_summary_label.setObjectName("helperLabel")
     gui.default_inspector_summary_label.setWordWrap(True)
@@ -1774,8 +1894,7 @@ def build_preview_panel(gui):
     video_title.setObjectName("statusHeadline")
     video_layout.addWidget(video_title)
     gui.video_inspector_summary_label = QLabel(
-        "Adjust the look of the original video. The filter is applied to the "
-        "export and the live preview."
+        "Điều chỉnh giao diện video gốc. Bộ lọc áp dụng cho cả xuất video và xem trước trực tiếp."
     )
     gui.video_inspector_summary_label.setObjectName("helperLabel")
     gui.video_inspector_summary_label.setWordWrap(True)
@@ -1783,23 +1902,23 @@ def build_preview_panel(gui):
 
     # --- Preset ---
     preset_row = QHBoxLayout()
-    preset_label = QLabel("Preset")
+    preset_label = QLabel("Mẫu lọc")
     preset_label.setObjectName("sectionTitle")
     preset_row.addWidget(preset_label)
     gui.video_inspector_preset_combo = QComboBox()
-    gui.video_inspector_preset_combo.setToolTip("Choose a video filter preset.")
+    gui.video_inspector_preset_combo.setToolTip("Chọn một bộ lọc video có sẵn.")
     preset_row.addWidget(gui.video_inspector_preset_combo, 1)
     video_layout.addLayout(preset_row)
 
     # --- Intensity ---
     intensity_row = QHBoxLayout()
-    intensity_label = QLabel("Intensity")
+    intensity_label = QLabel("Cường độ")
     intensity_label.setObjectName("sectionTitle")
     intensity_row.addWidget(intensity_label)
     gui.video_inspector_intensity_slider = QSlider(Qt.Horizontal)
     gui.video_inspector_intensity_slider.setRange(0, 100)
     gui.video_inspector_intensity_slider.setToolTip(
-        "How strongly the preset is applied (0 = off, 100 = full)."
+        "Mức độ áp dụng bộ lọc (0 = tắt, 100 = tối đa)."
     )
     intensity_row.addWidget(gui.video_inspector_intensity_slider, 1)
     gui.video_inspector_intensity_value_label = QLabel("0")
@@ -1810,12 +1929,12 @@ def build_preview_panel(gui):
     # --- Adjust sliders (brightness/contrast/saturation/...) ---
     gui.video_inspector_adjust_sliders = {}
     adjust_fields = [
-        ("brightness", "Brightness"),
-        ("contrast", "Contrast"),
-        ("saturation", "Saturation"),
-        ("temperature", "Temperature"),
+        ("brightness", "Độ sáng"),
+        ("contrast", "Độ tương phản"),
+        ("saturation", "Độ bão hòa"),
+        ("temperature", "Nhiệt độ màu"),
         ("gamma", "Gamma"),
-        ("hue", "Hue"),
+        ("hue", "Sắc độ"),
     ]
     for field_key, field_label in adjust_fields:
         row = QHBoxLayout()
@@ -1839,8 +1958,8 @@ def build_preview_panel(gui):
     gui.video_inspector_status_label.setWordWrap(True)
     video_layout.addWidget(gui.video_inspector_status_label)
     action_row = QHBoxLayout()
-    gui.video_inspector_reset_btn = QPushButton("Reset")
-    gui.video_inspector_reset_btn.setToolTip("Reset all video filters to their defaults.")
+    gui.video_inspector_reset_btn = QPushButton("Đặt lại")
+    gui.video_inspector_reset_btn.setToolTip("Đặt lại tất cả bộ lọc video về mặc định.")
     action_row.addWidget(gui.video_inspector_reset_btn)
     action_row.addStretch(1)
     video_layout.addLayout(action_row)
@@ -1871,7 +1990,7 @@ def build_preview_panel(gui):
     gui.inspector_stack.addWidget(_wrap_in_scroll(mask_inspector_card))   # 6: mask (M1)
     gui.inspector_stack.addWidget(_wrap_in_scroll(text_inspector_card))   # 7: text (T1)
     gui.subtitle_inspector_card = inspector_card
-    gui.inspector_stack.setCurrentIndex(4)
+    gui.inspector_stack.setCurrentIndex(0)
 
     # Style the scroll bar so it matches the dark theme
     gui.inspector_stack.setStyleSheet(
@@ -1888,92 +2007,68 @@ def build_preview_panel(gui):
     inspector_shell_layout.addWidget(gui.inspector_stack, 1)
 
     gui.subtitle_inspector_shell = inspector_shell
-    # Initial width; the actual value is recomputed by
-    # `_sync_subtitle_inspector_shell_width` based on the active card.
-    inspector_shell.setMinimumWidth(34)
-    inspector_shell.setMaximumWidth(800)
+    inspector_shell.hide()
 
-    workspace_row = QHBoxLayout()
-    workspace_row.setSpacing(10)
-    # Inspector takes more horizontal space than the preview so the
-    # audio/subtitle controls and segment editor are comfortable.
-    workspace_row.addWidget(preview_card, 2)
-    workspace_row.addWidget(inspector_shell, 3)
+    # --- TOP STAGE SPLITTER: [Left Panel (Voice/Media)] + [Center (Video Preview)] ---
+    gui.workspace_splitter = QSplitter(Qt.Horizontal)
+    gui.workspace_splitter.setObjectName("workspaceSplitter")
+    gui.workspace_splitter.setChildrenCollapsible(False)
+    gui.workspace_splitter.setOpaqueResize(True)
+    gui.workspace_splitter.setHandleWidth(6)
+    gui.workspace_splitter.setStyleSheet(
+        "QSplitter::handle { background: #162436; margin: 0 2px; } "
+        "QSplitter::handle:hover { background: #38bdf8; }"
+    )
+    if left_panel is not None:
+        gui.workspace_splitter.addWidget(left_panel)
+    gui.workspace_splitter.addWidget(preview_card)
 
-    # Keep Preview + Inspector and Timeline independently resizable.  The
-    # previous 3:5 layout gave a 16:9 source only enough height to occupy a
-    # small central portion of a wide preview panel.  A 45:55 default gives
-    # the preview about 20% more vertical room while leaving the timeline
-    # comfortably usable.  MpvVideoView recalculates its canvas and overlays
-    # on every resize, so this does not alter any source/canvas coordinates.
-    workspace_widget = QWidget()
-    workspace_widget.setObjectName("previewWorkspace")
-    workspace_widget.setLayout(workspace_row)
-    gui.preview_workspace_widget = workspace_widget
-    gui.preview_workspace_layout = workspace_row
+    if left_panel is not None:
+        gui.workspace_splitter.setStretchFactor(0, 0)
+        gui.workspace_splitter.setStretchFactor(1, 1)
+        gui.workspace_splitter.setSizes([340, 760])
+
+    gui.preview_workspace_widget = gui.workspace_splitter
+    gui.preview_workspace_layout = None
+
+    # Minimum heights mềm cho phép kéo co giãn linh hoạt
+    preview_card.setMinimumHeight(150)
+    timeline_card.setMinimumHeight(140)
+    gui._responsive_workspace_minimum_height = 150
+    gui._responsive_timeline_minimum_height = 140
     gui.timeline_card = timeline_card
-    # 270 px preview + transport row + card margins/spacing.  This prevents
-    # the native MPV surface from extending over the transport controls when
-    # the splitter is dragged upward on a smaller window.
-    workspace_widget.setMinimumHeight(350)
-    # Keep the original practical minimum for the editor timeline.
-    timeline_card.setMinimumHeight(360)
-    gui._responsive_workspace_minimum_height = 350
-    gui._responsive_timeline_minimum_height = 360
 
+    # --- LEFT VERTICAL SPLITTER: [Top Stage (Video/Voice)] / [Bottom (Timeline)] ---
+    # Timeline chỉ nằm dưới Video và Left Panel (chuẩn 100% như Hình 1)
     gui.preview_timeline_splitter = QSplitter(Qt.Vertical)
     gui.preview_timeline_splitter.setObjectName("previewTimelineSplitter")
     gui.preview_timeline_splitter.setChildrenCollapsible(False)
     gui.preview_timeline_splitter.setOpaqueResize(True)
-    gui.preview_timeline_splitter.setHandleWidth(7)
+    gui.preview_timeline_splitter.setHandleWidth(6)
     gui.preview_timeline_splitter.setStyleSheet(
         "QSplitter::handle { background: #1b2a3d; margin: 2px 0; }"
         "QSplitter::handle:hover { background: #3a6289; }"
     )
-    gui.preview_timeline_splitter.addWidget(workspace_widget)
+    gui.preview_timeline_splitter.addWidget(gui.workspace_splitter)
     gui.preview_timeline_splitter.addWidget(timeline_card)
     gui.preview_timeline_splitter.handle(1).setEnabled(True)
     gui.preview_timeline_splitter.handle(1).setCursor(Qt.SplitVCursor)
-    gui.preview_timeline_splitter.setStretchFactor(0, 45)
-    gui.preview_timeline_splitter.setStretchFactor(1, 55)
+    gui.preview_timeline_splitter.setStretchFactor(0, 52)
+    gui.preview_timeline_splitter.setStretchFactor(1, 48)
 
-    # Do not permit an extreme Preview expansion to clip the Timeline card
-    # below a usable viewport. The normal 45/55 layout remains unchanged;
-    # this guard applies only at the lower end of the splitter range.
-    gui._constraining_preview_timeline_splitter = False
+    # --- Subtitle list view kept hidden in background for API compatibility ---
+    gui.subtitle_list_view = SubtitleListView(gui)
+    gui.subtitle_list_view.hide()
 
-    def _keep_timeline_accessible(_pos, _index):
-        splitter = gui.preview_timeline_splitter
-        if getattr(gui, "_constraining_preview_timeline_splitter", False):
-            return
-        sizes = splitter.sizes()
-        if len(sizes) != 2:
-            return
-        min_timeline_height = int(
-            getattr(gui, "_responsive_timeline_minimum_height", 360) or 360
-        )
-        if sizes[1] >= min_timeline_height:
-            return
-        available = sum(sizes)
-        if available <= min_timeline_height:
-            return
-        gui._constraining_preview_timeline_splitter = True
-        try:
-            splitter.setSizes([max(1, available - min_timeline_height), min_timeline_height])
-        finally:
-            gui._constraining_preview_timeline_splitter = False
-
-    gui.preview_timeline_splitter.splitterMoved.connect(_keep_timeline_accessible)
+    # Hiển thị trực tiếp preview & timeline toàn màn hình không còn cột phải
     right_layout.addWidget(gui.preview_timeline_splitter, 1)
 
     def _set_default_preview_timeline_sizes():
         splitter = gui.preview_timeline_splitter
         available = sum(splitter.sizes())
         if available > 0:
-            preview_height = int(round(available * 0.45))
+            preview_height = int(round(available * 0.52))
             splitter.setSizes([preview_height, max(1, available - preview_height)])
 
-    # MainWindow calls this from its first show event, when the splitter has
-    # real dimensions but before the editor's first visible paint.
     gui._set_default_preview_timeline_sizes = _set_default_preview_timeline_sizes
     return right_panel

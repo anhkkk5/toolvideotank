@@ -77,7 +77,7 @@ class VoiceCatalogService:
                 if not voice.get("enabled", True):
                     continue
                 provider = str(voice.get("provider", "")).strip().lower()
-                if provider not in {"piper", "edge"}:
+                if provider not in {"piper", "edge", "capcut"}:
                     continue
                 voice_id = str(voice.get("id", "")).strip()
                 # In remote mode the backend API owns the models, so skip the local file check.

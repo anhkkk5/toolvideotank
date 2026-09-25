@@ -44,3 +44,14 @@ recent_projects.json
 *.spec
 dist_installer/
 installer/*.exe
+
+# Private / Heavy binaries
+license.tank
+gender_voice_ai_windows_package/
+scratch/
+raw_tts/
+render_jobs/
+*.wav
+*.mp3
+.codegraph/
+assets/voices/

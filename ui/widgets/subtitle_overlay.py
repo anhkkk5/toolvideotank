@@ -23,6 +23,7 @@ class SubtitleOverlayItem(QGraphicsItem):
         self.background_box = False
         self.background_color = QColor(0, 0, 0, 170)
         self.single_line = False
+        self.bold = True
         self.x_offset = 0
         self.bottom_offset = 30
         self.custom_position_enabled = False
@@ -31,6 +32,19 @@ class SubtitleOverlayItem(QGraphicsItem):
         # The libmpv overlay exposes this same switch.  Keep the Qt fallback
         # API-compatible so a machine that cannot load libmpv still starts.
         self._text_rendering_enabled = True
+        self._editable = False
+        self._suppressed = False
+
+    def set_editable(self, editable: bool):
+        self._editable = bool(editable)
+        self.setFlag(QGraphicsItem.ItemIsMovable, self._editable)
+
+    def set_suppressed(self, suppressed: bool):
+        self._suppressed = bool(suppressed)
+        if self._suppressed:
+            self.hide()
+        else:
+            self.show()
 
     def set_text_rendering(self, enabled: bool):
         """Enable/disable Qt text painting while retaining the drag item.
@@ -85,8 +99,13 @@ class SubtitleOverlayItem(QGraphicsItem):
         background_box=None,
         background_color=None,
         single_line=None,
+        bold=None,
+        **kwargs,
     ):
         changed = False
+        if bold is not None and bool(bold) != self.bold:
+            self.bold = bool(bold)
+            changed = True
         if font_name and font_name != self.font_name:
             self.font_name = font_name
             changed = True
@@ -115,6 +134,12 @@ class SubtitleOverlayItem(QGraphicsItem):
             changed = True
         if changed:
             self.update()
+
+    def set_effects(self, *, highlight_color=None, highlight_phrases=None,
+                    karaoke_word_index=-1, auto_keyword_highlight=False,
+                    animation_style="Static", animation_progress=1.0, **kwargs):
+        """API-compatible effect setter for Qt SubtitleOverlayItem."""
+        pass
 
     def set_alignment(self, alignment: str):
         self.alignment = alignment or "Bottom Center"

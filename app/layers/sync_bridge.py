@@ -122,6 +122,9 @@ def sync_segments_to_dub_subtitle_layers(
                 k: v for k, v in d.items() if k != "text"
             }
             existing.metadata["_seg_index"] = int(orig_idx)
+            spk = str(d.get("speaker", "") or "").strip()
+            if spk:
+                existing.metadata["speaker"] = spk
             raw_ae = d.get("_audio_end")
             if raw_ae is not None:
                 try:
@@ -150,6 +153,9 @@ def sync_segments_to_dub_subtitle_layers(
                 k: v for k, v in d.items() if k != "text"
             }
             layer.metadata["_seg_index"] = int(orig_idx)
+            spk = str(d.get("speaker", "") or "").strip()
+            if spk:
+                layer.metadata["speaker"] = spk
             raw_ae = d.get("_audio_end")
             if raw_ae is not None:
                 try:

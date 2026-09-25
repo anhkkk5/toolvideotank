@@ -243,20 +243,45 @@ class QtMediaPlayerBackend(QObject):
 
         self.backend_name = "qt"
         self.video_view = video_view
+        self._source_path = ""
+        self._original_audio_path = ""
+        self._audio_path = ""
+        self._dubbed_loaded_path = ""
+
+        # Main video player
         self._player = QMediaPlayer()
         self._audio_output = QAudioOutput()
         self._player.setAudioOutput(self._audio_output)
         if isinstance(video_view, VideoView):
             self._player.setVideoOutput(video_view.video_item)
+
+        # Dubbed audio player sidecar (TTS voice)
+        self._dubbed_player = QMediaPlayer()
+        self._dubbed_output = QAudioOutput()
+        self._dubbed_player.setAudioOutput(self._dubbed_output)
+
         self._player.positionChanged.connect(self.positionChanged.emit)
         self._player.durationChanged.connect(self.durationChanged.emit)
-        self._player.stateChanged.connect(lambda s: self.stateChanged.emit(int(s.value)))
+
+        if hasattr(self._player, "playbackStateChanged"):
+            self._player.playbackStateChanged.connect(lambda s: self.stateChanged.emit(int(getattr(s, "value", s))))
+        elif hasattr(self._player, "stateChanged"):
+            self._player.stateChanged.connect(lambda s: self.stateChanged.emit(int(getattr(s, "value", s))))
+
         # When the clip reaches the end, the QMediaPlayer goes to
         # StoppedState — surface this so the timeline can stop too
         # (Bug 2: video not pausing at end, timeline keeps running).
         self._player.mediaStatusChanged.connect(self._on_media_status)
         self._mute_original = False
         self._mute_dubbed = False
+        self._original_volume = 100.0
+        self._dubbed_volume = 100.0
+
+        # Audio synchronization timer
+        self._sync_timer = QTimer(self)
+        self._sync_timer.setInterval(400)
+        self._sync_timer.timeout.connect(self._sync_dubbed_audio)
+        self._sync_timer.start()
 
     def _on_media_status(self, status):
         try:
@@ -265,7 +290,41 @@ class QtMediaPlayerBackend(QObject):
                 # Pause (hold last frame) and emit StoppedState so the
                 # timeline play state is re-synced to "not playing".
                 self._player.pause()
+                if self._dubbed_loaded_path:
+                    try:
+                        self._dubbed_player.pause()
+                    except Exception:
+                        pass
                 self.stateChanged.emit(int(QMediaPlayer.PausedState.value))
+        except Exception:
+            pass
+
+    def _sync_dubbed_audio(self):
+        if not self._dubbed_loaded_path:
+            return
+        try:
+            v_playing = self.is_playing()
+            d_state = self._dubbed_player.playbackState()
+            d_playing = (d_state == QMediaPlayer.PlayingState)
+
+            if not v_playing and d_playing:
+                self._dubbed_player.pause()
+                return
+
+            if v_playing and not d_playing:
+                v_pos = self._player.position()
+                if abs(self._dubbed_player.position() - v_pos) > 100:
+                    self._dubbed_player.setPosition(v_pos)
+                self._dubbed_player.play()
+                return
+
+            # When both are playing smoothly, DO NOT seek or flush audio buffer.
+            # Only resync if catastrophic drift occurs (> 2000ms).
+            if v_playing and d_playing:
+                v_pos = self._player.position()
+                d_pos = self._dubbed_player.position()
+                if abs(v_pos - d_pos) > 2000:
+                    self._dubbed_player.setPosition(v_pos)
         except Exception:
             pass
 
@@ -274,16 +333,40 @@ class QtMediaPlayerBackend(QObject):
         self._player.setSource(source)
 
     def play(self):
+        v_pos = self._player.position()
         self._player.play()
+        if self._dubbed_loaded_path:
+            try:
+                if abs(self._dubbed_player.position() - v_pos) > 100:
+                    self._dubbed_player.setPosition(v_pos)
+                self._dubbed_player.play()
+            except Exception:
+                pass
 
     def pause(self):
         self._player.pause()
+        if self._dubbed_loaded_path:
+            try:
+                self._dubbed_player.pause()
+            except Exception:
+                pass
 
     def stop(self):
         self._player.stop()
+        if self._dubbed_loaded_path:
+            try:
+                self._dubbed_player.stop()
+                self._dubbed_player.setPosition(0)
+            except Exception:
+                pass
 
     def setPosition(self, position):
         self._player.setPosition(position)
+        if self._dubbed_loaded_path:
+            try:
+                self._dubbed_player.setPosition(position)
+            except Exception:
+                pass
 
     def position(self):
         return self._player.position()
@@ -304,22 +387,51 @@ class QtMediaPlayerBackend(QObject):
         return None
 
     def set_audio_file(self, audio_path):
-        return None
+        if not audio_path or not os.path.exists(audio_path):
+            self.clear_audio()
+            return
+        self._audio_path = str(audio_path)
+        if self._dubbed_loaded_path != self._audio_path:
+            self._dubbed_player.setSource(QUrl.fromLocalFile(self._audio_path))
+            self._dubbed_loaded_path = self._audio_path
+        self._dubbed_output.setMuted(bool(self._mute_dubbed))
+        self._dubbed_output.setVolume(max(0.0, min(2.0, self._dubbed_volume / 100.0)))
+        try:
+            pos = self._player.position()
+            if pos > 0:
+                self._dubbed_player.setPosition(pos)
+        except Exception:
+            pass
 
     def clear_audio(self):
-        return None
+        self._audio_path = ""
+        self._dubbed_loaded_path = ""
+        try:
+            self._dubbed_player.stop()
+            self._dubbed_player.setSource(QUrl())
+        except Exception:
+            pass
 
     def set_original_audio_file(self, audio_path):
-        return None
+        self._original_audio_path = str(audio_path or "")
 
     def _clear_original_audio(self):
-        return None
+        self._original_audio_path = ""
 
     def set_blur_region(self, blur_region=None):
         return None
 
     def clear_blur_region(self):
         return None
+
+    def set_mask_region(self, mask_region=None):
+        return None
+
+    def clear_mask_region(self):
+        return None
+
+    def log(self, msg):
+        pass
 
     def set_color_filter_state(self, state=None):
         return None
@@ -331,22 +443,23 @@ class QtMediaPlayerBackend(QObject):
         return None
 
     def set_volume(self, percent):
-        value = max(0, min(100, int(percent)))
+        value = max(0.0, min(100.0, float(percent)))
         self._audio_output.setVolume(value / 100.0)
+        self._dubbed_output.setVolume(value / 100.0)
 
     def set_original_volume(self, percent):
-        value = max(0, min(200, int(percent))) / 100.0
-        self._audio_output.setVolume(value)
+        self._original_volume = max(0.0, min(200.0, float(percent)))
+        self._audio_output.setVolume(self._original_volume / 100.0)
 
     def set_dubbed_volume(self, percent):
-        value = max(0, min(200, int(percent))) / 100.0
-        self._audio_output.setVolume(value)
+        self._dubbed_volume = max(0.0, min(200.0, float(percent)))
+        self._dubbed_output.setVolume(self._dubbed_volume / 100.0)
 
     def original_volume(self):
-        return int(round(self._audio_output.volume() * 100.0))
+        return int(round(self._original_volume))
 
     def dubbed_volume(self):
-        return int(round(self._audio_output.volume() * 100.0))
+        return int(round(self._dubbed_volume))
 
     def volume(self):
         return int(round(self._audio_output.volume() * 100.0))
@@ -354,18 +467,19 @@ class QtMediaPlayerBackend(QObject):
     def set_muted(self, muted):
         self._mute_original = bool(muted)
         self._mute_dubbed = bool(muted)
-        self._audio_output.setMuted(bool(muted))
+        self._audio_output.setMuted(self._mute_original)
+        self._dubbed_output.setMuted(self._mute_dubbed)
 
     def is_muted(self):
-        return bool(self._audio_output.isMuted())
+        return self._mute_original and self._mute_dubbed
 
     def set_mute_original(self, muted):
         self._mute_original = bool(muted)
-        self._audio_output.setMuted(self._mute_original and self._mute_dubbed)
+        self._audio_output.setMuted(self._mute_original)
 
     def set_mute_dubbed(self, muted):
         self._mute_dubbed = bool(muted)
-        self._audio_output.setMuted(self._mute_original and self._mute_dubbed)
+        self._dubbed_output.setMuted(self._mute_dubbed)
 
     def is_original_muted(self):
         return self._mute_original
@@ -375,7 +489,10 @@ class QtMediaPlayerBackend(QObject):
 
     def set_playback_rate(self, rate):
         try:
-            self._player.setPlaybackRate(float(rate))
+            r = float(rate)
+            self._player.setPlaybackRate(r)
+            if self._dubbed_loaded_path:
+                self._dubbed_player.setPlaybackRate(r)
         except Exception:
             pass
 

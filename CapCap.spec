@@ -7,9 +7,15 @@ import faster_whisper
 import rapidocr
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
-project_root = Path(r"D:\CodingTime\CapCap")
+_spec_dir = globals().get("SPECPATH")
+if _spec_dir:
+    project_root = Path(_spec_dir).resolve()
+else:
+    project_root = Path(__file__).resolve().parent
+
 ui_root = project_root / "ui"
 app_root = project_root / "app"
+
 
 datas = [
     (str(project_root / "assets"), "assets"),
@@ -21,7 +27,8 @@ datas = [
     (str(project_root / "app" / "voice_download_catalog.json"), "app"),
     (str(project_root / "app" / "voice_preview_catalog.release.json"), "app"),
     (str(project_root / "app" / "translation" / "prompts"), "app/translation/prompts"),
-    (str(project_root / "models" / "piper" / "ngochuyen.onnx"), "models/piper"),
+    *( (str(p), "models/piper") for p in (project_root / "models" / "piper").glob("*.onnx") ),
+    *( (str(p), "models/piper-en") for p in (project_root / "models" / "piper-en").glob("*") if p.is_file() ),
     # piper-new uses one shared config/voice manifest for all Vietnamese
     # models; PiperVoice receives this config explicitly at runtime.
     (str(project_root / "models" / "piper" / "config.json"), "models/piper"),
@@ -46,12 +53,22 @@ datas = [
     (os.path.join(os.path.dirname(rapidocr.__file__), "config.yaml"), "rapidocr"),
     (os.path.join(os.path.dirname(rapidocr.__file__), "default_models.yaml"), "rapidocr"),
     (str(project_root / "ui" / "views" / "editor"), "views/editor"),
+    (str(project_root / "gender_voice_ai_windows_package"), "gender_voice_ai_windows_package"),
+    (str(project_root / "app" / "vieneu_worker.py"), "app"),
+    (str(project_root / ".env"), "."),
+    (str(project_root / "license.tank"), "."),
 ]
+# Filter out optional files not present on disk so PyInstaller doesn't abort
+datas = [(s, d) for s, d in datas if Path(s).exists()]
 datas += collect_data_files("piper")
+
 # The normalizer package ships its built-in CSV rules as package data.  Keep
 # them in the frozen build; project dictionaries are stored separately in
 # each project's state.json and are not bundled.
 datas += collect_data_files("vietnormalizer")
+if (project_root / "assets" / "voices").is_dir():
+    datas.append((str(project_root / "assets" / "voices"), "assets/voices"))
+
 
 # RapidOCR selects its ONNX implementation through runtime configuration.
 # Listing only ``rapidocr`` misses these dynamically imported modules in a
@@ -151,6 +168,8 @@ a = Analysis(
         "faster_whisper",
         "ctranslate2",
         "edge_tts",
+        "requests",
+        "urllib3",
         "dotenv",
         "huggingface_hub",
         "tts_processor",
@@ -176,6 +195,36 @@ a = Analysis(
         "cv2",
         "omegaconf",
         "pyclipper",
+        # Group A — Proven required (Gender AI offline deserialization)
+        "joblib",
+        "sklearn.pipeline",
+        # Group B — Application dynamic/lazy modules (Step 8/9 pipeline & UI adapters)
+        "ui.dialogs.login_license_dialog",
+        "ui.dialogs.select_master_dialog",
+        "ui.dialogs.pipeline_b_progress_dialog",
+        "ui.dialogs.single_voice_setup_dialog",
+        "ui.dialogs.single_voice_progress_dialog",
+        "app.models.subtitle_segment",
+        "app.models.master_dataset",
+        "app.services.gender_service",
+        "app.services.video_creator_service",
+        "app.services.voice_mapping_service",
+        "app.services.audio_mixing_service",
+        "app.services.duration_fitting_service",
+        "app.services.video_export_service",
+        "app.services.voiceover_service",
+        "app.services.original_audio_extractor",
+        "app.services.tts_pipeline_service",
+        "app.services.vieneu_backend",
+        "app.services.license_service",
+        "app.services.master_dataset_service",
+        "app.services.deepseek_service",
+        "app.services.subtitle_translation_service",
+        "app.services.voice_gender_check_service",
+        "app.services.temporal_gender_smoothing",
+        "app.services.fuzzy_duplicate_service",
+        "app.services.decision_fusion_service",
+        "ui.worker_adapters.video_creator_adapter",
     ] + rapidocr_hiddenimports,
     hookspath=[],
     hooksconfig={},
@@ -219,16 +268,14 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="CapCap",
+    name="TankVideo",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
     upx_dir=str(project_root / "upx"),
-    # Keep the console build as the debugging/default configuration.  The
-    # windowed production spec sets CAPCAP_WINDOWED_BUILD=1 before executing
-    # this file.
-    console=os.environ.get("CAPCAP_WINDOWED_BUILD", "0").strip() != "1",
+    # Ẩn hoàn toàn cửa sổ console đen cho bản dựng ứng dụng máy tính chính thức
+    console=False,
     icon=str(project_root / "assets" / "capcap.ico"),
     disable_windowed_traceback=False,
 )
@@ -241,5 +288,5 @@ coll = COLLECT(
     upx=True,
     upx_dir=str(project_root / "upx"),
     upx_exclude=["onnxruntime*", "ffmpeg*", "ffprobe*", "mpv*", "cudnn*", "cublas*", "cudart*", "libomp*"],
-    name="CapCap",
+    name="TankVideo",
 )

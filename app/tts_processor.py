@@ -527,6 +527,241 @@ def edge_tts_to_wav_16k_mono(
     return wav_path
 
 
+_VIENEU_SERVER_PROC = None
+
+
+def _ensure_vieneu_server(vieneu_python: str, worker_path: str, port: int = 53239, preload_model: str = "") -> bool:
+    global _VIENEU_SERVER_PROC
+    import urllib.request
+    import urllib.error
+    import time
+    import sys
+
+    # Check if already running
+    try:
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/ping")
+        with urllib.request.urlopen(req, timeout=1.0) as resp:
+            if resp.status == 200:
+                return True
+    except Exception:
+        pass
+
+    # Launch server
+    cmd = [
+        vieneu_python,
+        "-X", "utf8",
+        worker_path,
+        "--server",
+        "--port", str(port),
+    ]
+    if preload_model and os.path.isdir(preload_model):
+        cmd.extend(["--preload", preload_model])
+
+    try:
+        creationflags = 0
+        if sys.platform == "win32":
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        _VIENEU_SERVER_PROC = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=creationflags,
+        )
+        for _ in range(25):
+            time.sleep(0.4)
+            try:
+                req = urllib.request.Request(f"http://127.0.0.1:{port}/ping")
+                with urllib.request.urlopen(req, timeout=1.0) as resp:
+                    if resp.status == 200:
+                        return True
+            except Exception:
+                pass
+    except Exception as e:
+        print(f"[VieNeu] Failed to launch server daemon: {e}")
+
+    return False
+
+
+def vieneu_tts_to_wav_16k_mono(
+    *,
+    text: str,
+    wav_path: str,
+    voice_name: str = "Cô gái hoạt bát",
+    model_path: str | None = None,
+    model_key: str | None = None,
+    speed: float = 1.0,
+    tmp_dir: str | None = None,
+    on_progress: callable = None,
+) -> str:
+    if tmp_dir is None:
+        tmp_dir = temp_path()
+
+    os.makedirs(os.path.dirname(wav_path) or ".", exist_ok=True)
+    os.makedirs(tmp_dir, exist_ok=True)
+
+    vieneu_python = os.getenv("VIENEU_PYTHON", "").strip()
+
+    # Dynamic model mapping
+    vieneu_models = {
+        "cogai": os.getenv("VIENEU_MODEL_COGAI", "").strip() or os.getenv("VIENEU_MODEL_DIR", "").strip(),
+        "thanhnien": os.getenv("VIENEU_MODEL_THANHNIEN", "").strip(),
+    }
+
+    resolved_model_path = (model_path or "").strip()
+    if not resolved_model_path:
+        key = str(model_key or "").strip().lower()
+        if not key:
+            norm_voice = str(voice_name or "").lower()
+            if "thanh niên" in norm_voice or "thanhnien" in norm_voice:
+                key = "thanhnien"
+            else:
+                key = "cogai"
+        resolved_model_path = vieneu_models.get(key) or os.getenv("VIENEU_MODEL_DIR", "").strip()
+
+    default_voice = os.getenv(
+        "VIENEU_DEFAULT_VOICE",
+        "Cô gái hoạt bát",
+    ).strip()
+
+    selected_voice = str(voice_name or "").strip() or default_voice
+
+    worker_path = os.path.join(BASE_DIR, "vieneu_worker.py")
+
+    if not vieneu_python or not os.path.isfile(vieneu_python):
+        raise FileNotFoundError(
+            f"VieNeu Python not found: {vieneu_python}"
+        )
+
+    if not resolved_model_path or not os.path.isdir(resolved_model_path):
+        raise FileNotFoundError(
+            f"VieNeu model not found for '{model_key or voice_name}': {resolved_model_path}"
+        )
+
+    if not os.path.isfile(worker_path):
+        raise FileNotFoundError(
+            f"VieNeu worker not found: {worker_path}"
+        )
+
+    if on_progress:
+        on_progress(f"Đang tạo giọng {selected_voice}...")
+
+    base = _sanitize_filename(
+        os.path.splitext(os.path.basename(wav_path))[0]
+        or "vieneu"
+    )
+
+    raw_wav = os.path.join(
+        tmp_dir,
+        f"{base}_vieneu_48k.wav",
+    )
+
+    # 1. Try super-fast persistent server mode first
+    synth_success = False
+    server_port = int(os.getenv("VIENEU_SERVER_PORT", "53239") or "53239")
+    if _ensure_vieneu_server(vieneu_python, worker_path, port=server_port, preload_model=resolved_model_path):
+        try:
+            import urllib.request
+            req_data = json.dumps({
+                "text": text,
+                "model": resolved_model_path,
+                "voice": selected_voice,
+                "output": raw_wav,
+            }).encode("utf-8")
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{server_port}/synthesize",
+                data=req_data,
+                headers={"Content-Type": "application/json; charset=utf-8"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                if resp.status == 200:
+                    resp_json = json.loads(resp.read().decode("utf-8"))
+                    if resp_json.get("ok") and os.path.isfile(raw_wav):
+                        synth_success = True
+        except Exception as srv_exc:
+            print(f"[VieNeu Server] Request warning: {srv_exc}, falling back to CLI")
+
+    # 2. Fallback to CLI subprocess if server is not available
+    if not synth_success:
+        cmd = [
+            vieneu_python,
+            "-X",
+            "utf8",
+            worker_path,
+            "--model",
+            resolved_model_path,
+            "--output",
+            raw_wav,
+            "--voice",
+            selected_voice,
+        ]
+
+        kw = subprocess_text_kwargs()
+        kw["errors"] = "strict"
+
+        proc = subprocess.run(
+            cmd,
+            input=text,
+            capture_output=True,
+            **kw,
+        )
+
+        if proc.returncode != 0:
+            raise RuntimeError(
+                "VieNeu synthesis failed:\n"
+                + str(proc.stderr or proc.stdout)
+            )
+
+    if not os.path.isfile(raw_wav):
+        raise RuntimeError(
+            f"VieNeu output not created: {raw_wav}"
+        )
+
+    ffmpeg = _ffmpeg_path()
+
+    if not os.path.isfile(ffmpeg):
+        raise FileNotFoundError(
+            f"FFmpeg not found: {ffmpeg}"
+        )
+
+    speed_value = _speed_to_float(speed)
+    speed_value = max(0.5, min(2.0, speed_value))
+
+    cmd = [
+        ffmpeg,
+        "-y",
+        "-i",
+        raw_wav,
+        "-filter:a",
+        f"atempo={speed_value}",
+        "-ar",
+        "16000",
+        "-ac",
+        "1",
+        wav_path,
+    ]
+
+    proc = subprocess.run(
+        cmd,
+        capture_output=True,
+        **subprocess_text_kwargs(),
+    )
+
+    if proc.returncode != 0:
+        raise RuntimeError(
+            "VieNeu FFmpeg conversion failed:\n"
+            + str(proc.stderr or proc.stdout)
+        )
+
+    _validate_generated_wav(wav_path)
+
+    try:
+        os.remove(raw_wav)
+    except OSError:
+        pass
+
+    return wav_path
+    
 def preload_tts_voice(voice: str, on_progress: callable = None) -> bool:
     catalog_path = _voice_catalog_path()
     with open(catalog_path, "r", encoding="utf-8") as f:
@@ -641,6 +876,52 @@ def synthesize_text_to_wav_16k_mono(
             rate=edge_rate,
             tmp_dir=tmp_dir,
         )
+    elif provider == "capcut":
+        # CapCut voices are intended for CapCut PC synchronization.
+        # When synthesizing directly within CapCap, fallback to natural Neural TTS (Female/Male)
+        # so speech is immediately audible and never fails with silence!
+        gender = str(voice_entry.get("gender", "")).lower()
+        fallback_voice = "vi-VN-HoaiMyNeural" if gender != "male" else "vi-VN-NamMinhNeural"
+        speed_value = _speed_to_float(speed)
+        edge_rate_percent = int(round((speed_value - 1.0) * 100.0))
+        edge_rate = f"{edge_rate_percent:+d}%"
+        try:
+            return edge_tts_to_wav_16k_mono(
+                text=text,
+                wav_path=wav_path,
+                voice=fallback_voice,
+                rate=edge_rate,
+                tmp_dir=tmp_dir,
+            )
+        except Exception as exc:
+            local_id = "ngochuyen" if gender != "male" else "vietthao3886"
+            model_path = _resolve_piper_model_path(f"models/piper/{local_id}.onnx")
+            if os.path.isfile(model_path):
+                return piper_tts_to_wav_16k_mono(
+                    text=text,
+                    wav_path=wav_path,
+                    model_path=model_path,
+                    language="vi",
+                    speed=speed,
+                    tmp_dir=tmp_dir,
+                    on_progress=on_progress,
+                    normalizer_dictionary=normalizer_dictionary,
+                )
+            raise ValueError(f"Không thể tạo giọng đọc cho {voice_entry.get('name')}: {exc}")
+    elif provider == "vieneu":
+        model_key = voice_entry.get("model_key")
+        return vieneu_tts_to_wav_16k_mono(
+            text=text,
+            wav_path=wav_path,
+            voice_name=provider_voice,
+            model_key=model_key,
+            speed=speed,
+            tmp_dir=tmp_dir,
+            on_progress=on_progress,
+        )
     else:
-        raise ValueError(f"Unsupported TTS provider: {provider}. Only 'piper' and 'edge' are supported.")
+        raise ValueError(
+            f"Unsupported TTS provider: {provider}. "
+            "Only 'piper', 'edge', 'capcut', and 'vieneu' are supported."
+        )
 

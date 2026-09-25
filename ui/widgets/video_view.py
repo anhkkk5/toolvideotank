@@ -9,7 +9,20 @@ from .subtitle_overlay import SubtitleOverlayItem
 class VideoView(QGraphicsView):
     """Hosts video and subtitle overlay in one scene."""
 
+    blurRegionChanged = Signal()
+    blurEditFinished = Signal()
+    subtitlePositionChanged = Signal(int, int)
+    subtitleDragStarted = Signal()
     framingChanged = Signal(float, float)
+    logoMoved = Signal(float, float, float, float)
+    logoDeleted = Signal()
+    logoEditFinished = Signal()
+    maskRegionChanged = Signal()
+    maskMoved = Signal(float, float, float, float)
+    maskDeleted = Signal()
+    maskEditFinished = Signal()
+    textLayerSelected = Signal(str)
+    textLayerMoved = Signal(str, float, float)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -30,6 +43,8 @@ class VideoView(QGraphicsView):
         self.subtitle_item.hide()
         self.video_source_width = 0
         self.video_source_height = 0
+        self.subtitle_render_width = 0
+        self.subtitle_render_height = 0
         self.preview_aspect_key = "source"
         self.preview_scale_mode = "fit"
         self.preview_fill_focus_x = 0.5
@@ -37,6 +52,11 @@ class VideoView(QGraphicsView):
         self._framing_drag_active = False
         self._framing_drag_start = QPointF()
         self._framing_drag_focus = (0.5, 0.5)
+        self._subtitle_track_visible = True
+        self._logo_track_visible = True
+        self.blur_overlay = None
+        self.mask_overlay = None
+        self.text_overlay = None
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -290,6 +310,69 @@ class VideoView(QGraphicsView):
             )
             painter.setPen(Qt.NoPen)
             painter.setBrush(QColor(12, 24, 38, 210))
-            painter.drawRoundedRect(chip_rect, 9, 9)
             painter.setPen(QColor(183, 227, 255))
             painter.drawText(chip_rect, Qt.AlignCenter, label)
+
+    # --- Compatibility interface with MpvVideoView ---
+
+    def set_blur_edit_enabled(self, enabled: bool):
+        pass
+
+    def add_blur_region(self):
+        pass
+
+    def set_blur_regions_normalized(self, regions):
+        pass
+
+    def set_blur_active_index(self, index: int):
+        pass
+
+    def clear_blur_region(self):
+        pass
+
+    def get_blur_region_normalized(self, index: int = -1):
+        return None
+
+    def add_mask_region(self, *args, **kwargs):
+        pass
+
+    def set_mask_regions(self, regions, active_index: int = 0):
+        pass
+
+    def clear_mask_region(self):
+        pass
+
+    def set_logos(self, logos, active_id=""):
+        pass
+
+    def clear_logo(self):
+        pass
+
+    def set_logo_opacity(self, opacity: float):
+        pass
+
+    def set_logo_rotation(self, rotation: float):
+        pass
+
+    def set_logo_track_visible(self, visible: bool):
+        self._logo_track_visible = bool(visible)
+
+    def set_text_layers(self, layers, active_id=""):
+        pass
+
+    def set_subtitle_track_visible(self, visible: bool):
+        self._subtitle_track_visible = bool(visible)
+        if hasattr(self, "subtitle_item") and self.subtitle_item:
+            if self._subtitle_track_visible:
+                self.subtitle_item.show()
+            else:
+                self.subtitle_item.hide()
+
+    def set_subtitle_render_dimensions(self, width: int, height: int):
+        self.subtitle_render_width = max(0, int(width or 0))
+        self.subtitle_render_height = max(0, int(height or 0))
+
+    def _restore_subtitle_overlay(self):
+        if hasattr(self, "subtitle_item") and self.subtitle_item and self._subtitle_track_visible:
+            self.subtitle_item.show()
+

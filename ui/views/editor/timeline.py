@@ -47,15 +47,16 @@ class EditorTimeline(QGraphicsView):
     CHROME_H = 24
     HANDLE_W = 8
     MIN_DUR = 0.1
-    SNAP_THRESHOLD = 0.05
+    SNAP_THRESHOLD = 0.08
     DEFAULT_PPS = 100
     MIN_PPS = 30
     MAX_PPS = 500
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._snap_enabled = True
         self.setFrameShape(QFrame.NoFrame)
-        self.setStyleSheet("background-color: #0d1220; border: none;")
+        self.setStyleSheet("background-color: #121316; border: none;")
         self.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
@@ -250,6 +251,20 @@ class EditorTimeline(QGraphicsView):
             for l in t.layers:
                 max_dur = max(max_dur, l.end)
         self._duration = max_dur
+
+        from app.layers.timeline import Track
+        from app.layers.base import LayerType
+
+        if v1 is None:
+            v1 = Track(name="V1 Video", type=LayerType.VIDEO, height=80)
+            self._timeline.tracks.insert(0, v1)
+            self._track_heights[v1.id] = v1.height
+
+        if a1 is None:
+            a1 = Track(name="A1 Audio", type=LayerType.AUDIO, height=80)
+            v1_idx = self._timeline.tracks.index(v1) if v1 in self._timeline.tracks else -1
+            self._timeline.tracks.insert(v1_idx + 1, a1)
+            self._track_heights[a1.id] = a1.height
 
         if v1 and not v1.layers:
             v1.layers.append(VideoLayer(
@@ -588,6 +603,42 @@ class EditorTimeline(QGraphicsView):
         self.pixels_per_second = self.DEFAULT_PPS
         self._redraw()
         self.zoomChanged.emit(100)
+
+    def set_pixels_per_second(self, pps: int) -> None:
+        val = max(self.MIN_PPS, min(self.MAX_PPS, int(pps)))
+        if val == self.pixels_per_second:
+            return
+        self.pixels_per_second = val
+        self._redraw()
+        self.zoomChanged.emit(int(self.pixels_per_second / self.DEFAULT_PPS * 100))
+
+    def set_snap_enabled(self, enabled: bool) -> None:
+        self._snap_enabled = bool(enabled)
+
+    def is_snap_enabled(self) -> bool:
+        return getattr(self, "_snap_enabled", True)
+
+    def _snap_time_value(self, track, layer, value: float) -> float:
+        if not getattr(self, "_snap_enabled", True):
+            return value
+        threshold = getattr(self, "SNAP_THRESHOLD", 0.08)
+        candidates = [self._playhead]
+        if self._timeline:
+            for t in self._timeline.tracks:
+                if not self.is_track_shown_on_timeline(t):
+                    continue
+                for l in t.layers:
+                    if l is not layer and l.visible:
+                        candidates.append(float(getattr(l, "start", 0.0)))
+                        candidates.append(float(getattr(l, "end", 0.0)))
+        closest = None
+        min_dist = threshold
+        for c in candidates:
+            dist = abs(value - c)
+            if dist <= min_dist:
+                min_dist = dist
+                closest = c
+        return closest if closest is not None else value
 
     def zoom_percent(self) -> int:
         return int(self.pixels_per_second / self.DEFAULT_PPS * 100)
@@ -1364,9 +1415,10 @@ class EditorTimeline(QGraphicsView):
         painter.setPen(QPen(border, 1))
         painter.drawPath(path)
 
-        if w > 40 and not hide_label:
+        if w >= 14 and not hide_label:
             painter.setPen(QColor("#ffffff"))
-            font = QFont("Segoe UI", 8)
+            font_size = 7 if w < 40 else 8
+            font = QFont("Segoe UI", font_size)
             painter.setFont(font)
             if getattr(layer, "type", None) == LayerType.DUB_SUBTITLE:
                 # Default: show dub_text (the voice-spoken text) on the
@@ -1380,7 +1432,9 @@ class EditorTimeline(QGraphicsView):
             else:
                 label = layer.name or layer.type.value.title()
             short_label = os.path.basename(label) if os.path.sep in label else label
-            text_rect = QRectF(x + 4, y, min(w - 8, view_w - x - 4), h)
+            pad_left = 2 if w < 40 else 4
+            pad_right = 2 if w < 40 else 4
+            text_rect = QRectF(x + pad_left, y, min(w - (pad_left + pad_right), view_w - x - pad_left), h)
             elided = painter.fontMetrics().elidedText(short_label, Qt.ElideRight, int(text_rect.width()))
             painter.drawText(text_rect, Qt.AlignVCenter | Qt.AlignLeft, elided)
 
@@ -1407,13 +1461,21 @@ class EditorTimeline(QGraphicsView):
                 painter.setBrush(Qt.NoBrush)
 
         if is_selected:
-            painter.setPen(QPen(QColor("#4a8cff"), 2))
-            # _draw_audio_glyph above left the brush as glyph_color
-            # (white). drawPath() strokes AND fills, so without
-            # resetting the brush the selection pass would paint the
-            # bar white on top of the orange fillPath from earlier.
+            painter.setPen(QPen(QColor("#00f0ff"), 2))
             painter.setBrush(Qt.NoBrush)
             painter.drawPath(path)
+            # CapCut-style trim handles on left and right edges
+            if w >= 16 and h >= 14:
+                handle_w = 4
+                handle_h = max(10, min(int(h * 0.55), 24))
+                handle_y = y + (h - handle_h) / 2.0
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QColor("#ffffff"))
+                # Left pull handle
+                painter.drawRoundedRect(QRectF(x + 1, handle_y, handle_w, handle_h), 2, 2)
+                # Right pull handle
+                painter.drawRoundedRect(QRectF(x + w - handle_w - 1, handle_y, handle_w, handle_h), 2, 2)
+                painter.setBrush(Qt.NoBrush)
         elif speaker and speaker == self._highlighted_speaker:
             painter.setPen(QPen(QColor("#ffe082"), 2))
             painter.setBrush(Qt.NoBrush)
@@ -1650,6 +1712,11 @@ class EditorTimeline(QGraphicsView):
                     return
 
             edge, lid = self._hit_test_edge(pos, scroll_x, scroll_y)
+            if not lid:
+                lid = self._hit_test_layer(pos, scroll_x, scroll_y)
+                if lid:
+                    edge = "body"
+
             if lid and edge in ("left", "right"):
                 track, layer = self._find_layer_by_id(lid)
                 if layer:
@@ -1699,9 +1766,6 @@ class EditorTimeline(QGraphicsView):
                 idx = self.segment_index_for_layer_id(lid)
                 if idx >= 0:
                     self._manual_subtitle_selection = True
-                    self.segmentTimingEditStarted.emit(
-                        idx, float(layer.start), float(self._get_effective_layer_end(layer))
-                    )
                     self.segmentSelected.emit(idx)
                 self._drag_state = {
                     "type": "move",
@@ -1775,20 +1839,22 @@ class EditorTimeline(QGraphicsView):
                     delta = t - float(drag["anchor_time"])
                     original_start = float(drag["start_time"])
                     original_end = float(drag["end_time"])
-                    proposed_start = original_start + delta
+                    proposed_start = self._snap_time_value(track, layer, original_start + delta)
                     new_start = self._clamp_layer_move(
                         track, layer, proposed_start, proposed_start + (original_end - original_start)
                     )
                     layer.start = new_start
                     layer.end = new_start + (original_end - original_start)
                 elif drag["type"] == "resize_left":
-                    new_start = min(t, drag["end_time"] - self.MIN_DUR)
+                    snapped_t = self._snap_time_value(track, layer, t)
+                    new_start = min(snapped_t, drag["end_time"] - self.MIN_DUR)
                     new_start = max(0.0, new_start)
                     new_start = self._clamp_layer_resize(track, layer, "left", new_start)
                     new_start = min(new_start, drag["end_time"] - self.MIN_DUR)
                     layer.start = new_start
                 elif drag["type"] == "resize_right":
-                    new_end = max(t, drag["start_time"] + self.MIN_DUR)
+                    snapped_t = self._snap_time_value(track, layer, t)
+                    new_end = max(snapped_t, drag["start_time"] + self.MIN_DUR)
                     new_end = min(new_end, self._duration)
                     new_end = self._clamp_layer_resize(track, layer, "right", new_end)
                     new_end = max(new_end, drag["start_time"] + self.MIN_DUR)
@@ -1960,3 +2026,79 @@ class EditorTimeline(QGraphicsView):
                     return layer.id
             return ""
         return ""
+
+    def contextMenuEvent(self, event) -> None:
+        from PySide6.QtWidgets import QMenu
+        pos = event.pos()
+        scroll_x = self.horizontalScrollBar().value()
+        scroll_y = self.verticalScrollBar().value()
+        lid = self._hit_test_layer(pos, scroll_x, scroll_y)
+
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            "QMenu { background: #142030; color: #dbe5f3; border: 1px solid #2f4868; padding: 4px; font-size: 11px; } "
+            "QMenu::item { padding: 6px 20px 6px 12px; border-radius: 4px; } "
+            "QMenu::item:selected { background: #1f3b5c; color: #ffffff; } "
+            "QMenu::item:disabled { color: #55667a; } "
+            "QMenu::separator { height: 1px; background: #25384e; margin: 4px 6px; }"
+        )
+
+        main_win = self.window()
+
+        if lid:
+            self._selected_layer_id = lid
+            self.layerSelected.emit(lid)
+            track, layer = self._find_layer_by_id(lid)
+            idx = self.segment_index_for_layer_id(lid)
+            if idx >= 0:
+                self._manual_subtitle_selection = True
+                self.segmentSelected.emit(idx)
+            self.viewport().update()
+
+            is_sub = self._is_subtitle_track(track) if track else False
+
+            # Menu item: Tách (Ctrl+B)
+            act_split = menu.addAction("✂ Tách tại con trỏ (Ctrl+B)")
+            act_split.triggered.connect(lambda: getattr(main_win, "split_selected_timeline_segment", lambda: None)())
+
+            # Menu item: Xóa (Delete)
+            act_del = menu.addAction("🗑 Xóa (Delete)")
+            act_del.triggered.connect(lambda: getattr(main_win, "delete_selected_timeline_segment", lambda: None)())
+
+            if is_sub:
+                act_ripple = menu.addAction("⚡ Xóa dồn (Ripple Delete - Shift+Del)")
+                act_ripple.triggered.connect(lambda: getattr(main_win, "ripple_delete_selected_timeline_segment", lambda: None)())
+
+                act_split_sent = menu.addAction("📑 Tách câu thông minh bằng AI")
+                act_split_sent.triggered.connect(lambda: getattr(main_win, "split_selected_segment_by_sentences", lambda: None)())
+
+                menu.addSeparator()
+
+                # Tạo lại TTS
+                act_tts = menu.addAction("↻ Tạo lại giọng đọc (TTS)")
+                act_tts.triggered.connect(
+                    lambda: getattr(main_win, "_on_tts_card_clicked", lambda _i: None)(idx)
+                    if hasattr(main_win, "_on_tts_card_clicked")
+                    else None
+                )
+
+            menu.addSeparator()
+
+        # Undo / Redo cho mọi trường hợp
+        act_undo = menu.addAction("↶ Hoàn tác (Ctrl+Z)")
+        act_undo.triggered.connect(lambda: getattr(main_win, "undo_last_timeline_timing_edit", lambda: None)())
+        act_redo = menu.addAction("↷ Làm lại (Ctrl+Shift+Z)")
+        act_redo.triggered.connect(lambda: getattr(main_win, "redo_last_timeline_timing_edit", lambda: None)())
+
+        menu.addSeparator()
+        act_snap = menu.addAction("🧲 Hút nam châm (Snap)")
+        act_snap.setCheckable(True)
+        act_snap.setChecked(self._snap_enabled)
+        act_snap.toggled.connect(self.set_snap_enabled)
+
+        act_fit = menu.addAction("🔍 Vừa vặn khung nhìn (Fit)")
+        act_fit.triggered.connect(self.reset_zoom)
+
+        menu.exec(event.globalPos())
+        event.accept()
+

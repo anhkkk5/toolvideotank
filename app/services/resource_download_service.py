@@ -68,7 +68,9 @@ class ResourceDownloadService:
         "diarization:embedding",
         "voice:pack",
         "voice:pack-en",
+        "voice:vieneu",
     }
+
 
     def __init__(self, workspace_root: str):
         self.workspace_root = workspace_root
@@ -541,12 +543,14 @@ class ResourceDownloadService:
     def validate_piper_voice_runtime(self, voice_id: str) -> list[tuple[str, str]]:
         """Check the chosen local Piper voice before a default Both run."""
         voice_id = str(voice_id or "").strip()
-        if not voice_id or voice_id.startswith(("edge:", "f5:")):
+        if not voice_id or voice_id.startswith(("edge:", "f5:", "capcut_")):
             return []
         issues: list[tuple[str, str]] = []
         entry = self._find_voice_entry(voice_id)
         if not entry:
             return [(f"voice:{voice_id}", f"Selected local voice is not available: {voice_id}")]
+        if entry.get("provider") in ("capcut", "edge", "f5"):
+            return []
         model_path, config_path = self._voice_local_paths(entry)
         if not os.path.isfile(model_path):
             issues.append((f"voice:{voice_id}:model", f"Piper voice model is missing: {model_path}"))
@@ -812,9 +816,37 @@ class ResourceDownloadService:
                     "description": "Offline English voices detected in the Piper storage folder.",
                 }
             )
+
+        # Gói giọng đọc VieNeu AI Neural (Cô gái hoạt ngôn & Thanh niên tự tin)
+        resources.append(
+            {
+                "id": "voice:vieneu",
+                "name": "VieNeu Neural TTS (Cô gái hoạt ngôn & Thanh niên tự tin)",
+                "kind": "voice",
+                "status": "installed" if self.is_resource_installed("voice:vieneu") else "missing",
+                "target_dir": os.path.join(self.workspace_root, "models", "vieneu"),
+                "download_url": "https://drive.google.com/file/d/1hMVIr-E0xSeKg8kEeU4EvbZYwlODkHoB/view?usp=sharing",
+                "expected_filename": "vieneu_runtime_full.zip",
+                "auto_download_supported": True,
+                "description": (
+                    "Gói giọng đọc AI Neural nâng cao (~4.5 GB) bao gồm mô hình biểu cảm và runtime "
+                    "PyTorch độc lập cho Cô gái hoạt ngôn và Thanh niên tự tin (Dành cho tài khoản VIP)."
+                ),
+            }
+        )
         return resources
 
     def is_resource_installed(self, resource_id: str) -> bool:
+        if resource_id == "voice:vieneu":
+            target_vieneu = os.path.join(self.workspace_root, "models", "vieneu")
+            if os.path.isdir(target_vieneu) and (
+                os.path.isdir(os.path.join(target_vieneu, "custom_models")) or
+                os.path.isfile(os.path.join(target_vieneu, ".venv", "Scripts", "python.exe"))
+            ):
+                return True
+            if os.path.isdir(r"D:\VieNeu-TTS\custom_models") and os.path.isfile(r"D:\VieNeu-TTS\.venv\Scripts\python.exe"):
+                return True
+            return False
         if resource_id == "ocr:engine":
             return self.is_ocr_ready()
         if resource_id == "cuda:whisper":
@@ -842,9 +874,13 @@ class ResourceDownloadService:
             return self._voice_pack_status("en") == "installed"
         if resource_id.startswith("voice:"):
             voice_id = resource_id.split(":", 1)[1].strip()
+            if voice_id.startswith(("capcut_", "edge:", "f5:")):
+                return True
             voice_entry = self._find_voice_entry(voice_id)
             if not voice_entry:
                 return False
+            if voice_entry.get("provider") in ("capcut", "edge", "f5"):
+                return True
             model_path, config_path = self._voice_local_paths(voice_entry)
             return os.path.exists(model_path) and os.path.exists(config_path)
         if resource_id == "cuda:ort":
@@ -1075,13 +1111,174 @@ class ResourceDownloadService:
         if progress_cb:
             progress_cb(100, f"Piper voices ready ({len(usable)} voices available).")
 
+    def _download_gdrive_file(
+        self,
+        file_id: str,
+        destination: str,
+        progress_cb=None,
+        label: str = "Đang tải tệp...",
+    ) -> None:
+        """Tải file lớn từ Google Drive hỗ trợ resume/chunk và xử lý cảnh báo virus."""
+        import re
+        import requests
+
+        session = requests.Session()
+        session.headers.update({
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        })
+        base_url = "https://drive.google.com/uc?export=download"
+        params = {"id": file_id}
+
+        if progress_cb:
+            progress_cb(-1, f"{label} (Đang kết nối Google Drive...)")
+
+        response = session.get(base_url, params=params, stream=True)
+
+        # Kiểm tra nếu Google Drive chuyển hướng sang trang đăng nhập (do file đặt quyền 'Hạn chế')
+        if "accounts.google.com" in response.url or "/signin" in response.url:
+            raise RuntimeError(
+                "Google Drive từ chối tải tự động vì file đang yêu cầu đăng nhập tài khoản Google.\n\n"
+                "Vui lòng bấm nút 'Mở trang tải về' để tải trực tiếp bằng trình duyệt, sau đó giải nén vào thư mục lưu trữ."
+            )
+
+        # Lấy token xác nhận vượt qua cảnh báo quét virus cho file lớn (>100MB)
+        confirm_token = None
+        for k, v in response.cookies.items():
+            if k.startswith("download_warning"):
+                confirm_token = v
+                break
+
+        # Nếu chưa thấy cookie, kiểm tra trong nội dung HTML của trang cảnh báo virus Google
+        if not confirm_token and response.headers.get("Content-Type", "").startswith("text/html"):
+            html = response.text
+            match = re.search(r'confirm=([0-9A-Za-z_-]+)', html)
+            if match:
+                confirm_token = match.group(1)
+            else:
+                uuid_match = re.search(r'uuid=([0-9A-Za-z_-]+)', html)
+                if uuid_match:
+                    confirm_token = "t"
+
+        if confirm_token:
+            params["confirm"] = confirm_token
+            response = session.get(base_url, params=params, stream=True)
+
+        if response.status_code != 200:
+            raise RuntimeError(f"Google Drive HTTP {response.status_code}: Không thể tải file.")
+
+        content_type = response.headers.get("Content-Type", "").lower()
+        if "text/html" in content_type and ("accounts.google.com" in response.url or "/signin" in response.url):
+            raise RuntimeError(
+                "Google Drive yêu cầu đăng nhập tài khoản. Vui lòng mở quyền 'Bất kỳ ai có đường liên kết' trên Drive hoặc tải qua trình duyệt."
+            )
+
+        total_size = int(response.headers.get("content-length", 0) or 0)
+        downloaded = 0
+        chunk_size = 1024 * 1024 * 4  # 4 MB chunk
+
+        os.makedirs(os.path.dirname(destination), exist_ok=True)
+        temp_dest = destination + ".part"
+
+        try:
+            with open(temp_dest, "wb") as f:
+                for chunk in response.iter_content(chunk_size=chunk_size):
+                    if not chunk:
+                        continue
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    mb = downloaded / (1024 * 1024)
+                    if total_size > 0:
+                        total_mb = total_size / (1024 * 1024)
+                        pct = min(90, int((downloaded / total_size) * 90))
+                        if progress_cb:
+                            progress_cb(pct, f"{label} ({mb:.0f}/{total_mb:.0f} MB - {pct}%)")
+                    else:
+                        if progress_cb:
+                            progress_cb(-1, f"{label} ({mb:.0f} MB đã tải)")
+
+            if os.path.exists(destination):
+                os.remove(destination)
+            os.replace(temp_dest, destination)
+        finally:
+            if os.path.exists(temp_dest):
+                try:
+                    os.remove(temp_dest)
+                except OSError:
+                    pass
+
+    def _flatten_vieneu_directory(self, target_dir: str) -> None:
+        """Nếu file zip giải nén ra 1 thư mục lồng nhau thì dọn dẹp đưa về đúng thư mục gốc."""
+        if os.path.isdir(os.path.join(target_dir, "custom_models")):
+            return
+        for item in os.listdir(target_dir):
+            sub = os.path.join(target_dir, item)
+            if os.path.isdir(sub) and os.path.isdir(os.path.join(sub, "custom_models")):
+                for sub_item in os.listdir(sub):
+                    src = os.path.join(sub, sub_item)
+                    dst = os.path.join(target_dir, sub_item)
+                    if os.path.exists(dst):
+                        if os.path.isdir(dst):
+                            shutil.rmtree(dst)
+                        else:
+                            os.remove(dst)
+                    shutil.move(src, dst)
+                try:
+                    shutil.rmtree(sub)
+                except OSError:
+                    pass
+                break
+
+    def _download_vieneu_pack(self, target_dir: str, progress_cb=None) -> None:
+        """Tải và tự động giải nén gói VieNeu Neural TTS (~4.5 GB) từ Google Drive."""
+        file_id = "1hMVIr-E0xSeKg8kEeU4EvbZYwlODkHoB"
+        os.makedirs(target_dir, exist_ok=True)
+        zip_path = os.path.join(target_dir, "vieneu_runtime_full.zip")
+
+        self._download_gdrive_file(
+            file_id=file_id,
+            destination=zip_path,
+            progress_cb=progress_cb,
+            label="Đang tải gói VieNeu Neural TTS (~4.5 GB)...",
+        )
+
+        if progress_cb:
+            progress_cb(92, "Đang giải nén gói VieNeu TTS vào thư mục lưu trữ...")
+
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            zf.extractall(target_dir)
+
+        # Xóa file zip sau khi giải nén để tiết kiệm ổ cứng
+        try:
+            if os.path.exists(zip_path):
+                os.remove(zip_path)
+        except OSError:
+            pass
+
+        self._flatten_vieneu_directory(target_dir)
+
     def download_resource(self, resource_id: str, progress_cb=None) -> None:
+        if resource_id == "voice:vieneu":
+            if self.is_resource_installed("voice:vieneu"):
+                if progress_cb:
+                    progress_cb(100, "Gói VieNeu Neural TTS đã sẵn sàng sử dụng.")
+                return
+            target_dir = os.path.join(self.workspace_root, "models", "vieneu")
+            self._download_vieneu_pack(target_dir, progress_cb)
+            if not self.is_resource_installed("voice:vieneu"):
+                raise RuntimeError(
+                    f"Tải gói VieNeu hoàn tất nhưng không tìm thấy mô hình trong {target_dir}."
+                )
+            if progress_cb:
+                progress_cb(100, "Gói VieNeu Neural TTS đã sẵn sàng sử dụng.")
+            return
+
         if resource_id.startswith("whisper:"):
             model_name = resource_id.split(":", 1)[1].strip().lower()
             zip_name = self.WHISPER_ZIP_FILES.get(model_name)
             if not zip_name:
                 raise ValueError(f"Unsupported Whisper model: {model_name}")
             zip_url = self._hf_blob_url(f"zipResource/{zip_name}")
+
             target_dir = join_root("models", "faster_whisper")
             self._download_and_extract_zip(zip_url, target_dir, progress_cb)
             if not self.is_resource_installed(resource_id):

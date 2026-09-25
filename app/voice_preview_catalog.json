@@ -2,6 +2,82 @@
   "schema_version": 2,
   "voices": [
     {
+      "id": "vieneu_cogaihoatbat",
+      "name": "Cô gái hoạt bát",
+      "provider": "vieneu",
+      "provider_voice": "Cô gái hoạt bát",
+      "model_key": "cogai",
+      "language": "vi",
+      "gender": "female",
+      "tier": "free",
+      "preview_video_url": "",
+      "preview_video_path": "",
+      "preview_audio_url": "",
+      "preview_audio_path": "assets/voices/cogaihoatbat.wav",
+      "enabled": true,
+      "tags": [
+        "vieneu",
+        "custom",
+        "local"
+      ]
+    },
+    {
+      "id": "vieneu_thanhnientutin",
+      "name": "Thanh niên tự tin",
+      "provider": "vieneu",
+      "provider_voice": "Thanh niên tự tin",
+      "model_key": "thanhnien",
+      "language": "vi",
+      "gender": "male",
+      "tier": "free",
+      "preview_video_url": "",
+      "preview_video_path": "",
+      "preview_audio_url": "",
+      "preview_audio_path": "assets/voices/thanhnientutin.wav",
+      "enabled": true,
+      "tags": [
+        "vieneu",
+        "custom",
+        "local"
+      ]
+    },
+    {
+      "id": "capcut_cogaihoatngon",
+      "name": "CapCut - Cô Gái Hoạt Ngôn",
+      "provider": "capcut",
+      "provider_voice": "BV074_streaming",
+      "language": "vi",
+      "gender": "female",
+      "tier": "free",
+      "preview_video_url": "",
+      "preview_video_path": "",
+      "preview_audio_url": "",
+      "preview_audio_path": "assets/voices/cogaihoatngon.mp3",
+      "enabled": false,
+      "tags": [
+        "capcut",
+        "cloud"
+      ]
+    },
+    {
+      "id": "capcut_anhdung",
+      "name": "CapCut - Anh Dũng",
+      "provider": "capcut",
+      "provider_voice": "BV560_streaming",
+      "language": "vi",
+      "gender": "male",
+      "tier": "free",
+      "preview_video_url": "",
+      "preview_video_path": "",
+      "preview_audio_url": "",
+      "preview_audio_path": "assets/voices/anhdung.mp3",
+      "enabled": false,
+      "tags": [
+        "capcut",
+        "cloud"
+      ]
+    },
+    {
       "id": "banmai",
       "name": "Ban Mai",
       "provider": "piper",
@@ -252,42 +328,6 @@
         "local",
         "piper"
       ]
-    },
-    {
-      "id": "en_US-amy-medium",
-      "name": "Amy (English)",
-      "provider": "piper",
-      "provider_voice": "models/piper-en/en_US-amy-medium.onnx",
-      "language": "en",
-      "gender": "female",
-      "tier": "free",
-      "enabled": true,
-      "tags": [
-        "local",
-        "piper"
-      ],
-      "preview_audio_url": "",
-      "preview_audio_path": "",
-      "preview_video_url": "",
-      "preview_video_path": ""
-    },
-    {
-      "id": "en_US-arctic-medium",
-      "name": "Arctic (English)",
-      "provider": "piper",
-      "provider_voice": "models/piper-en/en_US-arctic-medium.onnx",
-      "language": "en",
-      "gender": "male",
-      "tier": "free",
-      "enabled": true,
-      "tags": [
-        "local",
-        "piper"
-      ],
-      "preview_audio_url": "",
-      "preview_audio_path": "",
-      "preview_video_url": "",
-      "preview_video_path": ""
     },
     {
       "id": "adam1",

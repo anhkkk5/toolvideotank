@@ -4,6 +4,25 @@ import sys
 import threading
 import traceback
 
+# Ensure UI directory takes precedence, followed by project root and app directory
+_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+_UI_DIR = os.path.abspath(os.path.dirname(__file__))
+_APP_DIR = os.path.join(_PROJECT_ROOT, "app")
+
+for _p in (_UI_DIR, _PROJECT_ROOT, _APP_DIR):
+    while _p in sys.path:
+        sys.path.remove(_p)
+
+sys.path.insert(0, _APP_DIR)
+sys.path.insert(0, _PROJECT_ROOT)
+sys.path.insert(0, _UI_DIR)
+
+# Ensure .env is loaded into environment immediately at application startup
+from dotenv import load_dotenv
+_ENV_PATH = os.path.join(_PROJECT_ROOT, ".env")
+if os.path.isfile(_ENV_PATH):
+    load_dotenv(_ENV_PATH, override=True)
+
 _SINGLE_INSTANCE_HANDLE = None
 
 
@@ -23,7 +42,7 @@ def _acquire_single_instance() -> bool:
         # A stable name makes separate launches of the packaged EXE share the
         # same kernel mutex, while avoiding the Global namespace's permission
         # requirements on locked-down Windows accounts.
-        name = "Local\\CapCap.SingleInstance"
+        name = "Local\\TankVideo.SingleInstance"
         handle = kernel32.CreateMutexW(None, False, name)
         if not handle:
             return True
@@ -34,7 +53,7 @@ def _acquire_single_instance() -> bool:
         return True
 
 from PySide6.QtCore import QTimer, QUrl
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QDialog
 
 # Keep the worker entrypoint before the GUI import.  In a windowed PyInstaller
 # build importing main_window first can initialize Qt/UI resources and hide the
@@ -190,12 +209,41 @@ def _bootstrap_env(app_root: str) -> None:
             os.environ.setdefault(key, value.strip())
 
 
+def _bootstrap_workspace() -> None:
+    """Ensure all required runtime directories exist and are writable before launching the app."""
+    try:
+        from app.runtime_paths import ensure_runtime_directories
+        ensure_runtime_directories()
+    except Exception as exc:
+        sys.stderr.write(f"[Startup Error] Không thể khởi tạo thư mục làm việc: {exc}\n")
+        sys.stderr.flush()
+        raise SystemExit(1)
+
+
 if __name__ == "__main__":
     app_root = _app_root()
     _bootstrap_env(app_root)
+    _bootstrap_workspace()
     os.chdir(app_root)
     runtime_logs = _capture_runtime_output()
     app = QApplication(sys.argv)
+
+    # 1. Cửa ngõ xác thực bản quyền (License Gate)
+    from app.services.license_service import LicenseService
+    from ui.dialogs.login_license_dialog import LoginLicenseDialog
+
+    lic_svc = LicenseService(app_root)
+    lic_status = lic_svc.get_license_status()
+
+    if not lic_status.get("licensed", False):
+        login_dlg = LoginLicenseDialog(workspace_root=app_root)
+        if login_dlg.exec() != QDialog.Accepted:
+            sys.exit(0)
+
+        # Xác thực lại sau khi người dùng kích hoạt
+        lic_status = lic_svc.get_license_status()
+        if not lic_status.get("licensed", False):
+            sys.exit(0)
 
     from views.launcher import show_launcher, LauncherWindow
     video_path = show_launcher(None)
