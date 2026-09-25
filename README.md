@@ -1,82 +1,41 @@
-# <img src="assets/capcap.png" style="width: 5%; height: auto;"> CapCap
+# 🚀 TANKVIDEO AI STUDIO 2026
 
-[English](README_en.md) | [ Tiếng Việt](README.md)
+**Xưởng dịch thuật, che chữ & lồng tiếng video AI tự động chuyên nghiệp dành cho Windows.**
 
-![Giao diện CapCap](assets/preview.JPG)
+---
 
-### [🎬 Demo & Hướng dẫn sử dụng](https://www.tiktok.com/@nguyenthach617/video/7674305087023369493)
+## 📥 TẢI VỀ CÀI ĐẶT NGAY (BẢN ĐẦY ĐỦ FULL MÔ HÌNH AI)
 
-**CapCap** là ứng dụng biên tập và bản địa hóa video dành cho Windows, giúp đơn giản hóa toàn bộ quy trình từ nhận diện giọng nói, dịch nội dung, lồng tiếng, chỉnh sửa hình ảnh cho đến xuất video hoàn chỉnh.
+Bạn có thể tải ngay trọn bộ phiên bản **TankVideo AI Studio 2026 (v1.0.0)** đã tích hợp sẵn đầy đủ mô hình AI, giọng đọc và bộ giải mã tốc độ cao:
 
-CapCap hỗ trợ tạo **phụ đề tiếng Việt và tiếng Anh**, dịch nội dung video, tạo giọng đọc bằng TTS và chỉnh sửa các lớp nội dung theo thời gian trực tiếp trên timeline.
+[![Tải ngay TankVideo v1.0.0](https://img.shields.io/badge/TẢI%20XUỐNG-TANKVIDEO%20AI%20STUDIO%20(Google%20Drive)-orange?style=for-the-badge&logo=google-drive)](https://drive.google.com/file/d/132Y6CEbseVO_SqiiKd_77OVNhajxv9Ih/view?usp=sharing)
 
-## ✨ Điểm nổi bật
+> 🔗 **Link tải trực tiếp:** [https://drive.google.com/file/d/132Y6CEbseVO_SqiiKd_77OVNhajxv9Ih/view?usp=sharing](https://drive.google.com/file/d/132Y6CEbseVO_SqiiKd_77OVNhajxv9Ih/view?usp=sharing)
 
-* Quy trình xử lý trực quan theo từng bước: **Chuẩn bị → Chép lời → Dịch → TTS → Xuất video**
-* Chuyển giọng nói thành văn bản với **Faster-Whisper** hoặc **SenseVoice**
-* Trích xuất phụ đề có sẵn trong video bằng **OCR**
-* Hỗ trợ nhiều dịch vụ dịch thuật qua Cloud/API, với **Google Translate** làm phương án dự phòng
-* Hỗ trợ tạo giọng đọc bằng **Piper TTS** và **Edge TTS**
-* Tùy chọn nhận diện người nói và gán giọng đọc riêng cho từng người
-* Timeline biên tập với nhiều loại lớp nội dung:
+---
 
-  * Phụ đề
-  * Vùng làm mờ
-  * Logo
-  * Mặt nạ
-  * Văn bản
-  * Vùng chọn
-* Hỗ trợ khóa lớp để tránh chỉnh sửa ngoài ý muốn
-* **Fast Preview** giúp xem nhanh kết quả mà không cần xuất toàn bộ video
+### 📖 Hướng Dẫn Cài Đặt & Sử Dụng (1-Click):
+1. **Tải file:** Tải file `TankVideo.zip` từ đường link Google Drive ở trên về máy tính.
+2. **Giải nén:** Nhấp chuột phải vào file `TankVideo.zip` ➔ Chọn **Extract Here** (hoặc *Giải nén tại đây*).
+3. **Chạy phần mềm:** Mở thư mục vừa giải nén, nhấp đúp chuột vào file **`TankVideo.exe`** để sử dụng ngay mà không cần cài đặt phức tạp!
 
-## 🚀 Tính năng sắp tới
+---
 
-CapCap vẫn đang được phát triển tích cực, với nhiều tính năng mới và cải tiến được bổ sung theo thời gian.
+## ✨ TÍNH NĂNG NỔI BẬT
 
-👉 [Xem lộ trình phát triển](https://github.com/users/notepower2k1/projects/2)
+* 🎬 **Tạo dự án 1-click & Kéo thả:** Kéo thả video (MP4, MKV, AVI, MOV, TS,...) để khởi chạy dự án tự động.
+* 🔍 **Quét chữ Trung Quốc thông minh (RapidOCR):** Tự động nhận diện phụ đề tiếng Trung chạy ngầm.
+* 🤖 **Dịch thuật AI đỉnh cao:** Tích hợp **DeepSeek AI** (chuyên ngữ cảnh phim kiếm hiệp, tổng tài, xưng hô chuẩn), **Google AI Studio (Gemini)**, **OpenAI (GPT-4o)** và Google Translate miễn phí.
+* 🎙️ **Bộ giọng đọc AI Neural cao cấp:** Hỗ trợ hơn 25 giọng đọc Offline Piper, Edge TTS và **VieNeu AI Neural VIP** (*Cô gái hoạt ngôn & Thanh niên tự tin*).
+* 👥 **Phân tách & Nhận diện Giới tính / Nhân vật AI:** Tự động phát hiện giọng Nam/Nữ và gán giọng lồng tiếng phù hợp từng nhân vật.
+* ⏱️ **Duration Fitting & Đồng bộ nhịp điệu:** Tự động co giãn trường độ giọng đọc khớp từng mili-giây với khẩu hình và độ dài video gốc.
+* 🔇 **Audio Ducking:** Tự động giảm nhỏ nhạc nền khi có tiếng lồng tiếng và tăng âm lượng nhạc nền khi hết câu thoại.
+* 🛡️ **Bảo lưu dự án vĩnh viễn:** Toàn bộ bản quyền và danh sách dự án gần đây được lưu trữ an toàn trong Windows AppData, không lo bị đăng xuất lại.
 
-## 📚 Tài liệu
+---
 
-* [Hướng dẫn sử dụng](docs/how-to-use.md)
-* [Yêu cầu hệ thống và tài nguyên](docs/requirements.md)
-* [Công nghệ sử dụng](docs/technical-stack.md)
-* [Cấu trúc dự án](docs/project-structure.md)
-
-## 🛠️ Chạy từ mã nguồn
-
-```bash
-git clone https://github.com/notepower2k1/CapCap.git
-cd CapCap
-
-python -m venv venv
-venv\Scripts\activate
-
-pip install -r requirements-local.txt
-python ui/gui.py
-```
-
-Bạn chỉ cần sao chép `.env_example` thành `.env` nếu muốn cấu hình thủ công các dịch vụ dịch thuật hoặc máy chủ từ xa.
-
-Phần lớn thiết lập của CapCap có thể được cấu hình trực tiếp ngay trong ứng dụng.
-
-## ❤️ Ủng hộ CapCap
-
-Nếu CapCap hữu ích với bạn, bạn có thể ủng hộ để giúp dự án tiếp tục được duy trì và phát triển.
-
-### 🇻🇳 Ủng hộ tại Việt Nam
-
-Quét mã QR bên dưới:
-
-<img src="assets/qr.png" style="width: 25%; height: auto;">
-
-### 🌍 Ủng hộ quốc tế
-
-[![Buy Me a Coffee](assets/buymeacoffee.png)](https://buymeacoffee.com/hcaht)
-
-Nhấp vào hình ảnh phía trên hoặc truy cập [Buy Me a Coffee](https://buymeacoffee.com/hcaht).
-
-## 📄 Giấy phép
-
-CapCap được phát hành theo **Apache License 2.0**.
-
-Xem chi tiết tại [LICENSE](LICENSE).
+## 🛠️ YÊU CẦU HỆ THỐNG
+* **Hệ điều hành:** Windows 10 / Windows 11 (64-bit)
+* **CPU:** Intel Core i3 / AMD Ryzen 3 trở lên
+* **RAM:** Tối thiểu 8 GB RAM (Khuyên dùng 16 GB)
+* **GPU (Tùy chọn):** Card đồ họa NVIDIA hỗ trợ CUDA để tăng tốc xử lý AI nhanh gấp 5-10 lần.
