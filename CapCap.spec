@@ -55,8 +55,6 @@ datas = [
     (str(project_root / "ui" / "views" / "editor"), "views/editor"),
     (str(project_root / "gender_voice_ai_windows_package"), "gender_voice_ai_windows_package"),
     (str(project_root / "app" / "vieneu_worker.py"), "app"),
-    (str(project_root / ".env"), "."),
-    (str(project_root / "license.tank"), "."),
 ]
 # Filter out optional files not present on disk so PyInstaller doesn't abort
 datas = [(s, d) for s, d in datas if Path(s).exists()]
@@ -200,6 +198,9 @@ a = Analysis(
         "sklearn.pipeline",
         # Group B — Application dynamic/lazy modules (Step 8/9 pipeline & UI adapters)
         "ui.dialogs.login_license_dialog",
+        "ui.dialogs.update_dialog",
+        "app.services.update_service",
+        "app.version",
         "ui.dialogs.select_master_dialog",
         "ui.dialogs.pipeline_b_progress_dialog",
         "ui.dialogs.single_voice_setup_dialog",

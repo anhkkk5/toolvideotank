@@ -471,6 +471,8 @@ class _BlurRegionOverlayWindow(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WA_NoSystemBackground, True)
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
+        self.setAttribute(Qt.WA_QuitOnClose, False)
+        self.setAttribute(Qt.WA_DeleteOnClose, True)
         self.setFocusPolicy(Qt.NoFocus)
         self.setMouseTracking(True)
         self._regions: list[QRectF] = []
@@ -491,8 +493,17 @@ class _BlurRegionOverlayWindow(QWidget):
     def attach_to_view(self, view: QWidget):
         self._target_view = view
         if view and view.window():
+            if self._main_window is not None and self._main_window is not view.window():
+                try:
+                    self._main_window.removeEventFilter(self)
+                except Exception:
+                    pass
             self._main_window = view.window()
             self._main_window.installEventFilter(self)
+            try:
+                self._main_window.destroyed.connect(self.close)
+            except Exception:
+                pass
         self.sync_to_view()
 
     def set_editable(self, editable: bool):
@@ -599,9 +610,11 @@ class _BlurRegionOverlayWindow(QWidget):
 
     def eventFilter(self, watched, event):
         if watched is self._main_window:
-            if event.type() == QEvent.WindowDeactivate:
+            if event.type() in (QEvent.WindowDeactivate, QEvent.Close, QEvent.Hide):
                 self._suspended = True
                 self.hide()
+                if event.type() == QEvent.Close:
+                    self.close()
             elif event.type() == QEvent.WindowActivate:
                 self._suspended = False
                 if self._editable and self._regions and not self._has_active_popup():
@@ -1196,12 +1209,20 @@ class _TextLayerOverlayWindow(QWidget):
         super().__init__(None, Qt.FramelessWindowHint | Qt.Tool | Qt.WindowDoesNotAcceptFocus)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
+        self.setAttribute(Qt.WA_QuitOnClose, False)
+        self.setAttribute(Qt.WA_DeleteOnClose, True)
         self._target_view, self._items, self._active_id = None, [], ""
         self._drag_id, self._drag_offset, self._suppressed = "", QPointF(), False
         self._editable = False
         self.hide()
 
-    def attach_to_view(self, view): self._target_view = view
+    def attach_to_view(self, view):
+        self._target_view = view
+        if view and view.window():
+            try:
+                view.window().destroyed.connect(self.close)
+            except Exception:
+                pass
     def set_suppressed(self, suppressed):
         self._suppressed = bool(suppressed)
         if self._suppressed:

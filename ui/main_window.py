@@ -820,6 +820,37 @@ class VideoTranslatorGUI(QMainWindow, VoiceGenderMixin, ProjectSettingsMixin, Vi
         build_main_window_ui(self)
         self._setup_editor_shortcuts()
         self.sync_license_header_status()
+        self.check_update_quietly()
+
+    def open_update_dialog(self):
+        from ui.dialogs.update_dialog import UpdateDialog
+        root = getattr(self, "workspace_root", None) or os.getcwd()
+        dlg = UpdateDialog(self, workspace_root=root)
+        dlg.exec()
+
+    def check_update_quietly(self):
+        import threading
+        def _bg():
+            try:
+                from app.services.update_service import UpdateService
+                root = getattr(self, "workspace_root", None) or os.getcwd()
+                res = UpdateService(root).check_for_updates()
+                if res.get("has_update"):
+                    latest = str(res.get("latest_version", "") or "")
+                    from PySide6.QtCore import QTimer
+                    QTimer.singleShot(0, lambda: self._notify_update_available(latest))
+            except Exception:
+                pass
+        threading.Thread(target=_bg, daemon=True).start()
+
+    def _notify_update_available(self, latest_ver: str):
+        if hasattr(self, "update_btn"):
+            self.update_btn.setText(f"🔥 Có bản {latest_ver}")
+            self.update_btn.setStyleSheet(
+                "QPushButton { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #ff7b1a, stop:1 #e04800); "
+                "color: #ffffff; border: 1px solid #ff9d42; border-radius: 8px; font-weight: 800; padding: 6px 14px; font-size: 11px; } "
+                "QPushButton:hover { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #ff8c33, stop:1 #f05400); }"
+            )
 
     def open_license_dialog(self):
         from ui.dialogs.login_license_dialog import LoginLicenseDialog
@@ -5223,6 +5254,25 @@ class VideoTranslatorGUI(QMainWindow, VoiceGenderMixin, ProjectSettingsMixin, Vi
 
     def closeEvent(self, event):
         try:
+            # 1. Close and hide all floating overlays (OCR, blur, text, mask) immediately
+            for attr in ("ocr_region_overlay", "ocr_translator_overlay"):
+                overlay = getattr(self, attr, None)
+                if overlay is not None:
+                    try:
+                        overlay.hide()
+                        overlay.close()
+                    except Exception:
+                        pass
+            if hasattr(self, "video_view") and self.video_view is not None:
+                for sub_attr in ("blur_overlay", "mask_overlay", "logo_overlay", "text_overlay"):
+                    sub_overlay = getattr(self.video_view, sub_attr, None)
+                    if sub_overlay is not None:
+                        try:
+                            sub_overlay.hide()
+                            sub_overlay.close()
+                        except Exception:
+                            pass
+
             # A drag may have ended less than one debounce interval ago.
             # Flush it before teardown so the final overlay position is not
             # lost when the window is closed immediately.
@@ -5259,6 +5309,16 @@ class VideoTranslatorGUI(QMainWindow, VoiceGenderMixin, ProjectSettingsMixin, Vi
             self.save_user_settings()
             self.cleanup_temp_preview_files()
             self._terminate_workers()
+
+            # Ensure any remaining auxiliary top-level tool/overlay widgets are closed
+            from PySide6.QtWidgets import QApplication
+            for widget in list(QApplication.topLevelWidgets()):
+                if widget is not self:
+                    try:
+                        widget.hide()
+                        widget.close()
+                    except Exception:
+                        pass
         finally:
             super().closeEvent(event)
 

@@ -162,6 +162,13 @@ def _build_header_bar(gui):
     gui.license_btn.clicked.connect(lambda: getattr(gui, "open_license_dialog", lambda: None)())
     layout.addWidget(gui.license_btn)
 
+    gui.update_btn = QPushButton("🚀 Cập nhật")
+    gui.update_btn.setObjectName("secondaryActionBtn")
+    gui.update_btn.setMinimumHeight(38)
+    gui.update_btn.setToolTip("Kiểm tra và cập nhật phiên bản mới nhất của TankVideo")
+    gui.update_btn.clicked.connect(lambda: getattr(gui, "open_update_dialog", lambda: None)())
+    layout.addWidget(gui.update_btn)
+
     gui.more_actions_btn = QPushButton("⚙ Tùy chọn ▾")
     gui.more_actions_btn.setObjectName("secondaryActionBtn")
     gui.more_actions_btn.setMinimumHeight(38)
@@ -175,6 +182,9 @@ def _build_header_bar(gui):
     gui.download_original_action.triggered.connect(gui.download_original_script)
     gui.preview_5s_action = more_menu.addAction("Fast Preview (5 seconds)")
     gui.preview_5s_action.triggered.connect(gui.preview_5s_btn.click)
+    more_menu.addSeparator()
+    gui.update_action = more_menu.addAction("🚀 Kiểm tra cập nhật...")
+    gui.update_action.triggered.connect(lambda: getattr(gui, "open_update_dialog", lambda: None)())
     more_menu.addSeparator()
     gui.clean_project_action = more_menu.addAction("Clean Project")
     gui.clean_project_action.triggered.connect(gui.clean_current_project)

@@ -589,6 +589,7 @@ class LauncherWindow(QDialog):
         self._build_ui()
         QTimer.singleShot(0, self._load_recent)
         QTimer.singleShot(0, self._validate_resources_for_device)
+        QTimer.singleShot(2500, self._check_update_quietly)
 
     def _build_ui(self):
         root = QVBoxLayout(self)
@@ -619,6 +620,19 @@ class LauncherWindow(QDialog):
             border-radius: 6px; padding: 3px 8px;
         """)
         title_row.addWidget(pro_badge)
+
+        self.btn_update = QPushButton("🔄 Kiểm tra cập nhật")
+        self.btn_update.setCursor(Qt.PointingHandCursor)
+        self.btn_update.setToolTip("Kiểm tra phiên bản mới từ GitHub")
+        self.btn_update.setStyleSheet("""
+            QPushButton {
+                background: #111a2e; color: #38bdf8; font-size: 11px; font-weight: 700;
+                border: 1px solid #1e3a8a; border-radius: 6px; padding: 3px 10px;
+            }
+            QPushButton:hover { background: #1e293b; color: #7dd3fc; border-color: #38bdf8; }
+        """)
+        self.btn_update.clicked.connect(self._on_check_update)
+        title_row.addWidget(self.btn_update)
         title_row.addStretch()
         header_brand.addLayout(title_row)
 
@@ -745,6 +759,32 @@ class LauncherWindow(QDialog):
         self.split_btn.clicked.connect(self._on_split_video)
         toolbar_grid.addWidget(self.split_btn, 1, 1)
 
+        self.btn_update = QPushButton("🚀 Cập nhật")
+        self.btn_update.setMinimumHeight(38)
+        self.btn_update.setStyleSheet("""
+            QPushButton {
+                background: #1e293b; color: #94a3b8; font-weight: 700; font-size: 12px;
+                border-radius: 8px; border: 1px solid #334155; padding: 6px 14px;
+            }
+            QPushButton:hover { background: #334155; color: #f8fafc; }
+        """)
+        self.btn_update.setToolTip("Kiểm tra và nâng cấp phiên bản mới nhất của TankVideo")
+        self.btn_update.clicked.connect(self._on_check_update)
+        toolbar_grid.addWidget(self.btn_update, 0, 2)
+
+        self.project_folder_btn = QPushButton("📁 Thư mục")
+        self.project_folder_btn.setMinimumHeight(38)
+        self.project_folder_btn.setStyleSheet("""
+            QPushButton {
+                background: #1e293b; color: #94a3b8; font-weight: 700; font-size: 12px;
+                border-radius: 8px; border: 1px solid #334155; padding: 6px 14px;
+            }
+            QPushButton:hover { background: #334155; color: #f8fafc; }
+        """)
+        self.project_folder_btn.setToolTip("Mở thư mục chứa các dự án video")
+        self.project_folder_btn.clicked.connect(self._on_open_project_folder)
+        toolbar_grid.addWidget(self.project_folder_btn, 1, 2)
+
         header.addLayout(toolbar_grid)
         root.addLayout(header)
 
@@ -861,6 +901,9 @@ class LauncherWindow(QDialog):
         self.loading_label.setStyleSheet("color: #ff7b1a; font-size: 15px; font-weight: 700; padding: 12px;")
         self.loading_label.hide()
         root.addWidget(self.loading_label)
+
+        # Kiểm tra bản cập nhật ngầm sau khi hiển thị Launcher
+        QTimer.singleShot(1500, self._check_update_quietly)
 
     def _on_file_dropped(self, video_path: str):
         if video_path and os.path.exists(video_path):
@@ -1150,6 +1193,38 @@ class LauncherWindow(QDialog):
         from ui.dialogs.ai_settings_dialog import AiSettingsDialog
         dlg = AiSettingsDialog(self, workspace_root=workspace_root())
         dlg.exec()
+
+    def _on_check_update(self):
+        from ui.dialogs.update_dialog import UpdateDialog
+        dlg = UpdateDialog(self, workspace_root=workspace_root())
+        dlg.exec()
+
+    def _check_update_quietly(self):
+        import threading
+        def _bg():
+            try:
+                from app.services.update_service import UpdateService
+                res = UpdateService(workspace_root()).check_for_updates()
+                if res.get("has_update"):
+                    latest = str(res.get("latest_version", "") or "")
+                    QTimer.singleShot(0, lambda: self._notify_update_available(latest))
+            except Exception:
+                pass
+        threading.Thread(target=_bg, daemon=True).start()
+
+    def _notify_update_available(self, latest_ver: str):
+        if hasattr(self, "btn_update"):
+            self.btn_update.setText(f"🔥 Có bản mới {latest_ver}")
+            self.btn_update.setStyleSheet("""
+                QPushButton {
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #ff7b1a, stop:1 #e04800);
+                    color: #ffffff; font-size: 11px; font-weight: 800;
+                    border: 1px solid #ff9d42; border-radius: 6px; padding: 3px 10px;
+                }
+                QPushButton:hover {
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #ff8c33, stop:1 #f05400);
+                }
+            """)
 
     def _on_open_project_folder(self):
         from PySide6.QtWidgets import QMessageBox

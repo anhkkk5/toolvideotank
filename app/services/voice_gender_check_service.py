@@ -115,48 +115,10 @@ class VoiceGenderCheckService:
                 for index, cue in enumerate(cues, start=1)
             ]
 
-            # 3. Subtitle translation & Contextual Role Cast (DeepSeek ưu tiên)
-            notify("Đang dịch kịch bản & phân tích vai nhân vật (DeepSeek AI)…")
-            try:
-                import dotenv
-                dotenv.load_dotenv(override=False)
-            except Exception:
-                pass
-
-            deepseek_key = str(os.getenv("DEEPSEEK_API_KEY", "")).strip()
-            translated_cues = []
-            deepseek_genders: dict[int, str] = {}
-
-            from services.subtitle_translation_service import SubtitleTranslationService
-            if deepseek_key:
-                try:
-                    from services.deepseek_service import DeepSeekService
-                    ds_svc = DeepSeekService(api_key=deepseek_key)
-                    sub_trans_svc = SubtitleTranslationService(ds_svc)
-                    translated_cues, _ = sub_trans_svc.translate_with_deepseek(
-                        indexed_cues,
-                        overwrite_manual=True,
-                        progress=lambda msg, cur, tot: notify(f"DeepSeek đang dịch & phân vai ngữ cảnh ({cur}/{tot})…"),
-                    )
-                    for tc in translated_cues:
-                        cid = tc.get("id")
-                        g = str(tc.get("gender", "") or "").lower().strip()
-                        if g in {"male", "female"}:
-                            deepseek_genders[cid] = g
-                except Exception as ds_err:
-                    print(f"[Voice Gender Check] DeepSeek translation warning: {ds_err}")
-                    translated_cues = []
-
-            if not translated_cues:
-                translated_cues = SubtitleTranslationService().translate_cues(
-                    indexed_cues,
-                    target_lang="vi",
-                    progress=notify,
-                )
-
-            # 4. Gender AI offline inference (Mô hình âm học chạy trên Master Cues)
-            speech_cues = [c for c in translated_cues if c.get("status") != "static_text" and not c.get("is_noise")]
-            static_cues = [c for c in translated_cues if c.get("status") == "static_text" or c.get("is_noise")]
+            # 3. Audio-First: Nhận diện giọng nói vật lý bằng Gender AI offline trước
+            notify("Đang nhận diện âm học giọng nói (Gender AI Audio-First)…")
+            speech_cues = [c for c in indexed_cues if c.get("status") != "static_text" and not c.get("is_noise")]
+            static_cues = [c for c in indexed_cues if c.get("status") == "static_text" or c.get("is_noise")]
             for sc in static_cues:
                 sc["gender"] = "none"
                 sc["skip_tts"] = True
@@ -188,16 +150,117 @@ class VoiceGenderCheckService:
             else:
                 detected_speech = []
 
-            id_to_cue = {c.get("id"): c for c in (detected_speech + static_cues)}
-            detected = [id_to_cue.get(c.get("id"), c) for c in translated_cues]
+            id_to_cue = {}
+            for c in (detected_speech + static_cues):
+                raw_id = c.get("id")
+                id_to_cue[raw_id] = c
+                id_to_cue[str(raw_id)] = c
 
-            # 5. Anchor-Based Temporal Smoothing kết hợp DeepSeek Continuity
+            detected = []
+            for c in indexed_cues:
+                cid = c.get("id")
+                matched = id_to_cue.get(cid) or id_to_cue.get(str(cid))
+                detected.append(matched if matched else c)
+
+            # 4. Xác lập Mốc Âm Học (Acoustic Anchors) & Quán tính lời thoại (Continuation Inertia)
+            for i, c in enumerate(detected):
+                dur = float(c.get("end", 0.0)) - float(c.get("start", 0.0))
+                c["duration"] = round(dur, 2)
+                if i > 0:
+                    prev = detected[i - 1]
+                    gap = round(float(c.get("start", 0.0)) - float(prev.get("end", 0.0)), 3)
+                    prev_g = str(prev.get("raw_gender") or "").lower()
+                    prev_conf = float(prev.get("raw_gender_confidence", 0.0) or 0.0)
+                    if prev_conf > 1.0:
+                        prev_conf /= 100.0
+                    curr_g = str(c.get("raw_gender") or "").lower()
+                    curr_conf = float(c.get("raw_gender_confidence", 0.0) or 0.0)
+                    if curr_conf > 1.0:
+                        curr_conf /= 100.0
+
+                    # Quán tính lời thoại: Chỉ áp dụng khi câu này cùng giới tính hoặc âm học câu này yếu/unknown (< 75%)
+                    # Tuyệt đối không ép quán tính khi câu này đã có âm thanh đối lập rõ rệt (>= 75%)
+                    is_opposing = (curr_g in {"male", "female"} and curr_g != prev_g and curr_conf >= 0.75)
+                    if gap <= 0.60 and dur <= 1.2 and prev_g in {"male", "female"} and prev_conf >= 0.85:
+                        if not is_opposing:
+                            c["continuation_gender"] = prev_g
+
+                # Gán nhãn sơ bộ cho DeepSeek dựa trên mốc âm học đáng tin cậy
+                rg = str(c.get("raw_gender") or "").lower()
+                rc = float(c.get("raw_gender_confidence", 0.0) or 0.0)
+                if rc > 1.0:
+                    rc /= 100.0
+                cont_g = c.get("continuation_gender")
+
+                if cont_g in {"male", "female"}:
+                    c["speaker_label"] = "Nam" if cont_g == "male" else "Nữ"
+                    c["gender"] = cont_g
+                elif rg in {"male", "female"} and rc >= 0.88 and dur >= 1.2:
+                    c["speaker_label"] = "Nam" if rg == "male" else "Nữ"
+                    c["gender"] = rg
+                else:
+                    c["speaker_label"] = "Chưa rõ"
+                    c["gender"] = "unknown"
+
+            # 5. Dịch kịch bản & phân vai ngữ cảnh (DeepSeek AI với Mốc Âm Học)
+            notify("Đang dịch kịch bản & phân tích vai nhân vật (DeepSeek AI)…")
+            try:
+                import dotenv
+                dotenv.load_dotenv(override=False)
+            except Exception:
+                pass
+
+            deepseek_key = str(os.getenv("DEEPSEEK_API_KEY", "")).strip()
+            translated_cues = []
+            deepseek_genders: dict[int, str] = {}
+
+            from services.subtitle_translation_service import SubtitleTranslationService
+            if deepseek_key:
+                try:
+                    from services.deepseek_service import DeepSeekService
+                    ds_svc = DeepSeekService(api_key=deepseek_key)
+                    sub_trans_svc = SubtitleTranslationService(ds_svc)
+                    translated_cues, _ = sub_trans_svc.translate_with_deepseek(
+                        detected,
+                        overwrite_manual=True,
+                        progress=lambda msg, cur, tot: notify(f"DeepSeek đang dịch & phân vai ngữ cảnh ({cur}/{tot})…"),
+                    )
+                    for tc in translated_cues:
+                        cid = tc.get("id")
+                        g = str(tc.get("gender", "") or "").lower().strip()
+                        if g in {"male", "female"}:
+                            deepseek_genders[cid] = g
+                except Exception as ds_err:
+                    print(f"[Voice Gender Check] DeepSeek translation warning: {ds_err}")
+                    translated_cues = []
+
+            if not translated_cues:
+                translated_cues = SubtitleTranslationService().translate_cues(
+                    detected,
+                    target_lang="vi",
+                    progress=notify,
+                )
+
+            # Ghép lại bản dịch vào detected
+            trans_by_id = {c.get("id"): c for c in translated_cues}
+            merged_cues = []
+            for c in detected:
+                cid = c.get("id")
+                tc = trans_by_id.get(cid) or {}
+                merged_cues.append({
+                    **c,
+                    "translated_text": tc.get("translated_text", c.get("translated_text", "")),
+                    "is_noise": tc.get("is_noise", c.get("is_noise", False)),
+                    "deepseek_gender": deepseek_genders.get(cid, ""),
+                })
+
+            # 6. Anchor-Based Temporal Smoothing kết hợp DeepSeek Continuity
             from services.temporal_gender_smoothing import TemporalGenderSmoothingService
             continuity_groups = []
             if deepseek_genders:
                 cur_grp = []
                 cur_g = None
-                for cue in detected:
+                for cue in merged_cues:
                     cid = cue.get("id")
                     dg = deepseek_genders.get(cid)
                     if dg and dg == cur_g:
@@ -211,11 +274,11 @@ class VoiceGenderCheckService:
                     continuity_groups.append({"ids": cur_grp, "same_speaker_likelihood": 0.95})
 
             smoothed_detected = TemporalGenderSmoothingService.smooth(
-                detected,
+                merged_cues,
                 continuity_groups=continuity_groups
             )
 
-            # 6. Decision Fusion Logic (Nơi DUY NHẤT quyết định final_gender)
+            # 7. Decision Fusion Logic (Nơi DUY NHẤT quyết định final_gender)
             from services.decision_fusion_service import DecisionFusionService
             final_fused_cues = DecisionFusionService.fuse(
                 smoothed_detected,

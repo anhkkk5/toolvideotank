@@ -526,6 +526,42 @@
         "local",
         "piper"
       ]
+    },
+    {
+      "id": "en_US-amy-medium",
+      "name": "en_US-amy-medium (Local)",
+      "provider": "piper",
+      "provider_voice": "models/piper-en/en_US-amy-medium.onnx",
+      "language": "vi",
+      "gender": "",
+      "tier": "free",
+      "preview_video_url": "",
+      "preview_video_path": "",
+      "preview_audio_url": "",
+      "preview_audio_path": "",
+      "enabled": true,
+      "tags": [
+        "local",
+        "piper"
+      ]
+    },
+    {
+      "id": "en_US-arctic-medium",
+      "name": "en_US-arctic-medium (Local)",
+      "provider": "piper",
+      "provider_voice": "models/piper-en/en_US-arctic-medium.onnx",
+      "language": "vi",
+      "gender": "",
+      "tier": "free",
+      "preview_video_url": "",
+      "preview_video_path": "",
+      "preview_audio_url": "",
+      "preview_audio_path": "",
+      "enabled": true,
+      "tags": [
+        "local",
+        "piper"
+      ]
     }
   ]
 }

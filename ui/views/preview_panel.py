@@ -70,6 +70,8 @@ class OcrRegionOverlay(QWidget):
         self.setAttribute(Qt.WA_NoSystemBackground, True)
         self.setAttribute(Qt.WA_OpaquePaintEvent, False)
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
+        self.setAttribute(Qt.WA_QuitOnClose, False)
+        self.setAttribute(Qt.WA_DeleteOnClose, True)
         self.setWindowFlag(Qt.WindowDoesNotAcceptFocus, True)
         self.setStyleSheet("background: transparent;")
         self.setMouseTracking(True)
@@ -102,8 +104,17 @@ class OcrRegionOverlay(QWidget):
     def attach_to_view(self, view):
         self._target_view = view
         if view and view.window():
+            if self._main_window is not None and self._main_window is not view.window():
+                try:
+                    self._main_window.removeEventFilter(self)
+                except Exception:
+                    pass
             self._main_window = view.window()
             self._main_window.installEventFilter(self)
+            try:
+                self._main_window.destroyed.connect(self.close)
+            except Exception:
+                pass
 
     def set_editable(self, editable: bool):
         self._editable = editable
@@ -170,8 +181,10 @@ class OcrRegionOverlay(QWidget):
 
     def eventFilter(self, obj, event):
         if obj is self._main_window:
-            if event.type() == QtCore.QEvent.WindowDeactivate:
+            if event.type() in (QtCore.QEvent.WindowDeactivate, QtCore.QEvent.Close, QtCore.QEvent.Hide):
                 self.hide()
+                if event.type() == QtCore.QEvent.Close:
+                    self.close()
             elif event.type() in (QtCore.QEvent.WindowActivate, QtCore.QEvent.Resize, QtCore.QEvent.Move, QtCore.QEvent.Show):
                 if self._is_requested_visible():
                     self.sync_to_view()
@@ -381,6 +394,8 @@ class OcrTranslatorOverlay(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WA_NoSystemBackground, True)
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
+        self.setAttribute(Qt.WA_QuitOnClose, False)
+        self.setAttribute(Qt.WA_DeleteOnClose, True)
         self.setWindowFlag(Qt.WindowDoesNotAcceptFocus, True)
         self.setStyleSheet("background: transparent;")
         self.setMouseTracking(True)
@@ -397,9 +412,18 @@ class OcrTranslatorOverlay(QWidget):
     def attach_to_view(self, view):
         self._target_view = view
         if view:
+            if self._main_window is not None and self._main_window is not view.window():
+                try:
+                    self._main_window.removeEventFilter(self)
+                except Exception:
+                    pass
             self._main_window = view.window()
         if self._main_window is not None:
             self._main_window.installEventFilter(self)
+            try:
+                self._main_window.destroyed.connect(self.close)
+            except Exception:
+                pass
 
     def normalized_rect(self):
         r = self._norm
@@ -422,8 +446,10 @@ class OcrTranslatorOverlay(QWidget):
 
     def eventFilter(self, obj, event):
         if obj is self._main_window:
-            if event.type() == QtCore.QEvent.WindowDeactivate:
+            if event.type() in (QtCore.QEvent.WindowDeactivate, QtCore.QEvent.Close, QtCore.QEvent.Hide):
                 self.hide()
+                if event.type() == QtCore.QEvent.Close:
+                    self.close()
             elif event.type() in (QtCore.QEvent.WindowActivate, QtCore.QEvent.Resize, QtCore.QEvent.Move, QtCore.QEvent.Show):
                 if bool(getattr(self._main_window, "_ocr_translator_active", False)):
                     self.sync_to_view()

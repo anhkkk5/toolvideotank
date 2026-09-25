@@ -227,6 +227,17 @@ if __name__ == "__main__":
     os.chdir(app_root)
     runtime_logs = _capture_runtime_output()
     app = QApplication(sys.argv)
+    app.setQuitOnLastWindowClosed(True)
+
+    def _on_about_to_quit():
+        for widget in list(QApplication.topLevelWidgets()):
+            try:
+                widget.hide()
+                widget.close()
+            except Exception:
+                pass
+
+    app.aboutToQuit.connect(_on_about_to_quit)
 
     # 1. Cửa ngõ xác thực bản quyền (License Gate)
     from app.services.license_service import LicenseService

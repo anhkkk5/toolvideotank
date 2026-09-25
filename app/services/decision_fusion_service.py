@@ -1,13 +1,14 @@
 """Dịch vụ tổng hợp quyết định (Decision Fusion Service).
 
 NƠI DUY NHẤT CHỊU TRÁCH NHIỆM QUYẾT ĐỊNH final_gender.
-Khóa 5 nguyên tắc kiến trúc:
-1. Audio confidence >= 85% -> Nguồn bằng chứng ưu tiên cao nhất, BẢO TOÀN TUYỆT ĐỐI, DeepSeek KHÔNG ĐƯỢC OVERRIDE.
-2. Gender AI chỉ đọc audio, DeepSeek chỉ phân tích kịch bản và continuity.
-3. Speaker Boundary Guard: Ranh giới đổi người nói (ví dụ Nữ -> Nam ở câu 4) được bảo toàn,
-   không để continuity ép đổi giới tính âm học khi có bằng chứng âm học đối lập rõ rệt.
-4. DeepSeek chỉ bổ trợ khi âm học yếu (< 0.85) hoặc unknown.
-5. Ghi lý do chuẩn khoa học, không dùng thuật ngữ 'chuẩn 100%'.
+Khóa 5 nguyên tắc kiến trúc phổ quát (Universal Multi-Modal Architecture):
+1. Quán tính lời thoại (Continuation Inertia): Câu ngắn nối tiếp cùng lượt nói của nhân vật trước
+   được bảo toàn tuyệt đối, ngăn tiếng nhạc nền/tiếng thở trong audio ngắn bóp méo vai diễn.
+2. Mốc âm học tự tin cao (Acoustic Anchors >= 88%): Bằng chứng vật lý hàng đầu từ giọng người thật.
+3. Speaker Boundary Guard: Ranh giới đổi người nói (A-B-A) được bảo vệ khi có tín hiệu đối lập.
+4. DeepSeek Contextual Cast: Khi âm học chưa đạt ngưỡng chắc chắn (< 88%) hoặc bị nhiễu BGM (như câu 4),
+   DeepSeek dựa trên kịch bản đối thoại và các mốc âm học đã biết để suy luận vai chuẩn xác.
+5. Tuyệt đối KHÔNG sử dụng từ khóa hardcode của riêng bất kỳ video nào.
 """
 
 from __future__ import annotations
@@ -18,8 +19,8 @@ from typing import Any, List, Dict, Optional
 class DecisionFusionService:
     """Nơi duy nhất kết hợp các nguồn bằng chứng để đưa ra final_gender."""
 
-    ACOUSTIC_HIGH_CONFIDENCE_THRESHOLD = 0.85
-    SPEAKER_BOUNDARY_GUARD_THRESHOLD = 0.65
+    ACOUSTIC_HIGH_CONFIDENCE_THRESHOLD = 0.88
+    SPEAKER_BOUNDARY_GUARD_THRESHOLD = 0.50
 
     @classmethod
     def fuse(
@@ -35,13 +36,24 @@ class DecisionFusionService:
         deepseek_map = deepseek_genders or {}
         fused: List[Dict[str, Any]] = []
 
+        # Xây dựng danh sách các cặp (prev_id, curr_id) thuộc cùng một nhóm liên tục của DeepSeek:
+        linked_pairs = set()
+        if deepseek_continuity:
+            for grp in deepseek_continuity:
+                grp_ids = grp.get("ids", [])
+                for i in range(len(grp_ids) - 1):
+                    p_id, c_id = grp_ids[i], grp_ids[i + 1]
+                    linked_pairs.add((p_id, c_id))
+                    linked_pairs.add((str(p_id), str(c_id)))
+
         prev_final_gender = None
+        prev_cid = None
 
         for idx, cue in enumerate(cues, start=1):
             item = dict(cue)
             cid = item.get("id", idx)
 
-            # Trường hợp phụ đề tĩnh / chữ rác bao bì / không phải lời thoại
+            # 1. Trường hợp phụ đề tĩnh / chữ rác bao bì / không phải lời thoại
             if item.get("skip_tts") or item.get("status") == "static_text":
                 item["gender"] = "none"
                 item["final_gender"] = "none"
@@ -58,29 +70,51 @@ class DecisionFusionService:
             if raw_c > 1.0:
                 raw_c = raw_c / 100.0  # Chuẩn hóa về [0, 1]
 
+            dur = float(item.get("end", 0.0)) - float(item.get("start", 0.0))
+
             dg = str(deepseek_map.get(cid, "") or "").lower().strip()
             if dg not in {"male", "female"}:
                 dg = ""
 
             reasons = list(item.get("gender_reason") or [])
+            is_same_speaker_linked = ((prev_cid, cid) in linked_pairs) or ((str(prev_cid), str(cid)) in linked_pairs)
+            cont_g = item.get("continuation_gender")
 
-            # NGUYÊN TẮC 1: ÂM HỌC TỰ TIN CAO (>= 85%) -> NGUỒN BẰNG CHỨNG ƯU TIÊN CAO NHẤT
-            if raw_g in {"male", "female"} and raw_c >= cls.ACOUSTIC_HIGH_CONFIDENCE_THRESHOLD:
+            # NGUYÊN TẮC 1: QUÁN TÍNH NỐI TIẾP VỚI CÂU TRƯỚC (CONTINUATION INERTIA)
+            # Áp dụng khi câu này là câu ngắn tiếp nối cùng lượt nói của nhân vật trước
+            if cont_g in {"male", "female"}:
+                final_g = cont_g
+                final_c = 0.95
+                mode = "continuation_inertia"
+                reasons.append(
+                    f"Quán tính lời thoại: Tiếp nối cùng lượt nói của nhân vật {final_g.upper()}"
+                )
+            elif is_same_speaker_linked and prev_final_gender in {"male", "female"} and dur < 1.3:
+                final_g = prev_final_gender
+                final_c = 0.95
+                mode = "continuation_inertia"
+                reasons.append(
+                    f"Quán tính lời thoại: Tiếp nối cùng nhân vật {prev_final_gender.upper()} từ câu trước"
+                )
+
+            # NGUYÊN TẮC 2: MỐC ÂM HỌC TỰ TIN CAO (>= 88%)
+            # Nếu âm học đạt độ tin cậy rất cao (>= 88%), đây là bằng chứng vật lý hàng đầu
+            elif raw_g in {"male", "female"} and raw_c >= cls.ACOUSTIC_HIGH_CONFIDENCE_THRESHOLD:
                 final_g = raw_g
                 final_c = raw_c
                 mode = "acoustic_priority"
                 reasons.append(
-                    f"Mô hình âm học phân loại là {raw_g.upper()} ({raw_c*100:.1f}%) với độ tin cậy cao, ưu tiên bảo toàn kết quả âm học"
+                    f"Mô hình âm học phân loại là {raw_g.upper()} ({raw_c*100:.1f}%) với độ tin cậy cao, ưu tiên bảo toàn âm học"
                 )
 
-            # NGUYÊN TẮC 2: SPEAKER BOUNDARY GUARD
-            # Nếu câu trước có giới tính khác (ví dụ Câu 1-3 là Nữ, Câu 4 âm học là Nam)
-            # và âm học câu hiện tại đạt mức đáng tin cậy (>= 50%), bảo vệ ranh giới người nói
+            # NGUYÊN TẮC 3: SPEAKER BOUNDARY GUARD
+            # Khi chuyển từ Nữ sang Nam hoặc ngược lại với tín hiệu âm học rõ ràng
             elif (
                 raw_g in {"male", "female"}
-                and raw_c >= 0.50
+                and raw_c >= cls.SPEAKER_BOUNDARY_GUARD_THRESHOLD
                 and prev_final_gender in {"male", "female"}
                 and raw_g != prev_final_gender
+                and (not dg or dg == raw_g)
             ):
                 final_g = raw_g
                 final_c = raw_c
@@ -89,68 +123,37 @@ class DecisionFusionService:
                     f"Phát hiện ranh giới chuyển người nói ({prev_final_gender.upper()} -> {raw_g.upper()}), bảo toàn tín hiệu âm học ({raw_c*100:.1f}%)"
                 )
 
-            # NGUYÊN TẮC 3: ĐỒNG THUẬN ÂM HỌC VỚI CÂU KẾ TIẾP (ACOUSTIC ADJACENT HARMONY)
-            # Ví dụ Câu 1 âm học Nữ (57%) gối đầu/liền kề với Câu 2 âm học Nữ tự tin (99.9%)
-            elif raw_g in {"male", "female"} and idx < len(cues):
-                next_c = cues[idx]
-                next_g = str(next_c.get("raw_gender", "")).lower().strip()
-                next_conf = float(next_c.get("raw_gender_confidence", 0.0) or 0.0)
-                if next_conf > 1.0:
-                    next_conf /= 100.0
-                cur_e = float(item.get("end", 0.0) or 0.0)
-                nxt_s = float(next_c.get("start", cur_e) or cur_e)
-
-                if next_g == raw_g and next_conf >= cls.ACOUSTIC_HIGH_CONFIDENCE_THRESHOLD and (nxt_s - cur_e) <= 1.0:
-                    final_g = raw_g
-                    final_c = max(raw_c, 0.85)
-                    mode = "acoustic_adjacent_support"
-                    reasons.append(
-                        f"Âm học đồng thuận với câu kế tiếp ({raw_g.upper()} {next_conf*100:.1f}%), ưu tiên bảo toàn âm học"
-                    )
-                elif dg in {"male", "female"}:
-                    final_g = dg
-                    final_c = 0.85
-                    mode = "deepseek_contextual_support"
-                    reasons.append(
-                        f"DeepSeek phân tích kịch bản/vai diễn ({dg.upper()}) hỗ trợ khi âm học chưa đủ tin cậy ({raw_g.upper()} {raw_c*100:.1f}%)"
-                    )
-                else:
-                    final_g = raw_g
-                    final_c = raw_c
-                    mode = "acoustic_moderate"
-                    reasons.append(f"Mô hình âm học phân loại là {raw_g.upper()} ({raw_c*100:.1f}%)")
-
-            # NGUYÊN TẮC 4: ÂM HỌC YẾU HOẶC UNKNOWN -> DEEPSEEK BỔ TRỢ NGỮ CẢNH
+            # NGUYÊN TẮC 4: DEEPSEEK PHÂN VAI NGỮ CẢNH CHO ÂM HỌC CHƯA ĐỦ MẠNH (< 88%) HOẶC UNKNOWN
             elif dg in {"male", "female"}:
                 final_g = dg
-                final_c = 0.85
+                final_c = 0.88
                 mode = "deepseek_contextual_support"
                 reasons.append(
-                    f"DeepSeek phân tích kịch bản/vai diễn ({dg.upper()}) hỗ trợ khi âm học chưa đủ tin cậy ({raw_g.upper()} {raw_c*100:.1f}%)"
+                    f"DeepSeek phân tích kịch bản/vai diễn ({dg.upper()}) giải quyết câu đối đáp khi âm thanh chưa đủ chắc chắn (< 88%)"
                 )
 
-            # NGUYÊN TẮC 4: GIỮ KẾT QUẢ ÂM HỌC MỨC TRUNG BÌNH KHI KHÔNG CÓ DEEPSEEK
+            # NGUYÊN TẮC 5: GIỮ KẾT QUẢ ÂM HỌC NẾU CÓ
             elif raw_g in {"male", "female"}:
                 final_g = raw_g
                 final_c = raw_c
                 mode = "acoustic_moderate"
-                reasons.append(
-                    f"Mô hình âm học phân loại là {raw_g.upper()} ({raw_c*100:.1f}%)"
-                )
+                reasons.append(f"Mô hình âm học phân loại là {raw_g.upper()} ({raw_c*100:.1f}%)")
 
             else:
                 final_g = "unknown"
                 final_c = 0.50
                 mode = "unknown"
-                reasons.append("Chưa đủ bằng chứng âm học và ngữ cảnh")
+                reasons.append("Không đủ dữ liệu xác định giới tính")
 
             item["gender"] = final_g
             item["final_gender"] = final_g
             item["final_decision_confidence"] = final_c
+            item["confidence"] = final_c
             item["decision_mode"] = mode
             item["gender_reason"] = reasons
 
             prev_final_gender = final_g
+            prev_cid = cid
             fused.append(item)
 
         return fused
