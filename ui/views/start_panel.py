@@ -545,6 +545,97 @@ def build_start_group(gui, left_layout):
     output_layout.addWidget(diarization_card)
 
     media_layout.addWidget(output_card)
+
+    # -------------------------------------------------------------
+    # Thẻ Logo Thương hiệu & Watermark Bản quyền (Màn hình chính)
+    # -------------------------------------------------------------
+    branding_main_card, branding_main_layout = _section_card()
+    branding_main_title = QLabel("🏷️ Logo Thương hiệu & Watermark")
+    branding_main_title.setObjectName("sectionTitle")
+    branding_main_title.setStyleSheet("font-size: 12px; font-weight: 800; color: #ff9d42;")
+    branding_main_layout.addWidget(branding_main_title)
+
+    # Logo row
+    gui.brand_logo_main_cb = QCheckBox("Hiển thị Logo thương hiệu trên video")
+    gui.brand_logo_main_cb.setStyleSheet("font-size: 11px; font-weight: 600; color: #f8fbff;")
+    branding_main_layout.addWidget(gui.brand_logo_main_cb)
+
+    logo_picker_row = QHBoxLayout()
+    logo_picker_row.setSpacing(6)
+    gui.brand_logo_path_edit = QLineEdit()
+    gui.brand_logo_path_edit.setPlaceholderText("Chọn file ảnh logo (.png, .jpg)...")
+    gui.brand_logo_path_edit.setStyleSheet("background-color: #1a2738; color: #f8fbff; border: 1px solid #344862; border-radius: 6px; padding: 4px 6px; font-size: 11px;")
+    gui.brand_logo_browse_btn = QPushButton("Chọn ảnh...")
+    gui.brand_logo_browse_btn.setStyleSheet("background-color: #1e293b; color: #38bdf8; border: 1px solid #334155; border-radius: 6px; padding: 4px 8px; font-size: 11px; font-weight: 600;")
+    gui.brand_logo_preview_lbl = QLabel("Logo")
+    gui.brand_logo_preview_lbl.setFixedSize(32, 32)
+    gui.brand_logo_preview_lbl.setAlignment(Qt.AlignCenter)
+    gui.brand_logo_preview_lbl.setStyleSheet("border: 1px dashed #344862; border-radius: 4px; background-color: #16202e; color: #64748b; font-size: 9px;")
+    logo_picker_row.addWidget(gui.brand_logo_path_edit, 1)
+    logo_picker_row.addWidget(gui.brand_logo_browse_btn)
+    logo_picker_row.addWidget(gui.brand_logo_preview_lbl)
+    branding_main_layout.addLayout(logo_picker_row)
+
+    # Watermark row
+    gui.brand_wm_main_cb = QCheckBox("Hiển thị Watermark chữ (Chống reup)")
+    gui.brand_wm_main_cb.setStyleSheet("font-size: 11px; font-weight: 600; color: #f8fbff;")
+    branding_main_layout.addWidget(gui.brand_wm_main_cb)
+
+    gui.brand_wm_text_edit = QLineEdit()
+    gui.brand_wm_text_edit.setPlaceholderText("Nhập chữ watermark (Ví dụ: Nhím Review)...")
+    gui.brand_wm_text_edit.setStyleSheet("background-color: #1a2738; color: #f8fbff; border: 1px solid #344862; border-radius: 6px; padding: 4px 6px; font-size: 11px;")
+    branding_main_layout.addWidget(gui.brand_wm_text_edit)
+
+    from PySide6.QtCore import QSettings
+    settings = QSettings("TankVideo", "TankVideoStudio")
+    gui.brand_logo_main_cb.setChecked(settings.value("branding/enable_logo", False, type=bool))
+    init_logo_path = settings.value("branding/logo_path", "", type=str)
+    if init_logo_path:
+        gui.brand_logo_path_edit.setText(init_logo_path)
+    gui.brand_wm_main_cb.setChecked(settings.value("branding/enable_watermark", False, type=bool))
+    init_wm_text = settings.value("branding/watermark_text", "", type=str)
+    if init_wm_text:
+        gui.brand_wm_text_edit.setText(init_wm_text)
+
+    def _on_browse_logo():
+        from PySide6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getOpenFileName(
+            gui,
+            "Chọn file ảnh Logo Thương hiệu",
+            os.path.dirname(gui.brand_logo_path_edit.text().strip()) if gui.brand_logo_path_edit.text().strip() else "",
+            "File hình ảnh (*.png *.jpg *.jpeg *.webp *.bmp);;Tất cả file (*.*)",
+        )
+        if path:
+            gui.brand_logo_path_edit.setText(os.path.normpath(path))
+            gui.brand_logo_main_cb.setChecked(True)
+
+    def _sync_logo_state():
+        settings.setValue("branding/enable_logo", gui.brand_logo_main_cb.isChecked())
+        settings.setValue("branding/logo_path", gui.brand_logo_path_edit.text().strip())
+        lp = gui.brand_logo_path_edit.text().strip()
+        if lp and os.path.isfile(lp):
+            from PySide6.QtGui import QPixmap
+            pm = QPixmap(lp)
+            if not pm.isNull():
+                gui.brand_logo_preview_lbl.setPixmap(pm.scaled(30, 30, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+                gui.brand_logo_preview_lbl.setText("")
+                return
+        gui.brand_logo_preview_lbl.clear()
+        gui.brand_logo_preview_lbl.setText("Logo")
+
+    def _sync_wm_state():
+        settings.setValue("branding/enable_watermark", gui.brand_wm_main_cb.isChecked())
+        settings.setValue("branding/watermark_text", gui.brand_wm_text_edit.text().strip())
+
+    gui.brand_logo_browse_btn.clicked.connect(_on_browse_logo)
+    gui.brand_logo_main_cb.toggled.connect(lambda: _sync_logo_state())
+    gui.brand_logo_path_edit.textChanged.connect(lambda: _sync_logo_state())
+    gui.brand_wm_main_cb.toggled.connect(lambda: _sync_wm_state())
+    gui.brand_wm_text_edit.textChanged.connect(lambda: _sync_wm_state())
+    _sync_logo_state()
+
+    media_layout.addWidget(branding_main_card)
+
     if hasattr(gui, "update_speaker_diarization_availability"):
         gui.update_speaker_diarization_availability()
 

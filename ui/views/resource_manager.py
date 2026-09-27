@@ -196,6 +196,19 @@ def open_resource_manager(workspace_root: str = None, parent=None,
         if row is None or not row.get("download_supported", False):
             return
 
+        if rid == "voice:pack":
+            count = service._usable_piper_voice_count("vi")
+            if count >= 25:
+                from PySide6.QtWidgets import QMessageBox
+                QMessageBox.information(
+                    dialog,
+                    "Giọng đọc Piper đã sẵn sàng",
+                    f"Gói {count} giọng đọc Piper Tiếng Việt offline đã có đầy đủ trên máy của bạn và SẴN SÀNG sử dụng!\n\n"
+                    "Bạn không cần phải tải lại nữa.",
+                    QMessageBox.Ok,
+                )
+                return
+
         if rid == "voice:vieneu":
             if service.is_resource_installed("voice:vieneu"):
                 from PySide6.QtWidgets import QMessageBox

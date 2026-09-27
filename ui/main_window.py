@@ -270,7 +270,7 @@ class VideoTranslatorGUI(QMainWindow, VoiceGenderMixin, ProjectSettingsMixin, Vi
         self.settings = QSettings("TankVideo", "VideoTranslatorGUI")
         self.setAcceptDrops(True)
         tank_logo = asset_path("tankvideo.png")
-        self.logo_path = tank_logo if os.path.exists(tank_logo) else asset_path("capcap.png")
+        self.logo_path = tank_logo if os.path.exists(tank_logo) else asset_path("tankvideo.ico")
         if os.path.exists(self.logo_path):
             self.setWindowIcon(QIcon(self.logo_path))
         self.setWindowFlag(Qt.FramelessWindowHint)
@@ -825,7 +825,9 @@ class VideoTranslatorGUI(QMainWindow, VoiceGenderMixin, ProjectSettingsMixin, Vi
     def open_update_dialog(self):
         from ui.dialogs.update_dialog import UpdateDialog
         root = getattr(self, "workspace_root", None) or os.getcwd()
-        dlg = UpdateDialog(self, workspace_root=root)
+        info = getattr(self, "_cached_update_info", None)
+        is_mand = bool(info and info.get("has_update"))
+        dlg = UpdateDialog(self, workspace_root=root, mandatory=is_mand, preloaded_info=info)
         dlg.exec()
 
     def check_update_quietly(self):
@@ -834,14 +836,22 @@ class VideoTranslatorGUI(QMainWindow, VoiceGenderMixin, ProjectSettingsMixin, Vi
             try:
                 from app.services.update_service import UpdateService
                 root = getattr(self, "workspace_root", None) or os.getcwd()
-                res = UpdateService(root).check_for_updates()
+                res = UpdateService(root).check_for_updates(timeout=8.0)
                 if res.get("has_update"):
                     latest = str(res.get("latest_version", "") or "")
+                    self._cached_update_info = res
                     from PySide6.QtCore import QTimer
                     QTimer.singleShot(0, lambda: self._notify_update_available(latest))
+                    QTimer.singleShot(1000, lambda: self._prompt_mandatory_update(res))
             except Exception:
                 pass
         threading.Thread(target=_bg, daemon=True).start()
+
+    def _prompt_mandatory_update(self, info: dict):
+        from ui.dialogs.update_dialog import UpdateDialog
+        root = getattr(self, "workspace_root", None) or os.getcwd()
+        dlg = UpdateDialog(self, workspace_root=root, mandatory=True, preloaded_info=info)
+        dlg.exec()
 
     def _notify_update_available(self, latest_ver: str):
         if hasattr(self, "update_btn"):
@@ -1495,7 +1505,7 @@ class VideoTranslatorGUI(QMainWindow, VoiceGenderMixin, ProjectSettingsMixin, Vi
         missing_lines = "\n".join(f"- {label}" for _resource_id, label in missing)
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Warning)
-        box.setWindowTitle("CapCap Cannot Start This Step")
+        box.setWindowTitle("TankVideo Cannot Start This Step")
         box.setText(f"{action_label} cannot start because a required local component is unavailable.")
         box.setInformativeText(
             "The exact cause is listed below. Use Manage Resources for downloadable "
@@ -4971,6 +4981,7 @@ class VideoTranslatorGUI(QMainWindow, VoiceGenderMixin, ProjectSettingsMixin, Vi
             initial_orig_volume=init_orig,
             initial_tts_volume=init_tts,
             blur_rect=blur_rect,
+            workspace_root=str(getattr(self, "workspace_root", os.getcwd())),
         )
         if dialog.exec() != QDialog.Accepted:
             return
@@ -4979,6 +4990,9 @@ class VideoTranslatorGUI(QMainWindow, VoiceGenderMixin, ProjectSettingsMixin, Vi
         audio_mix = dialog.get_audio_mix_settings()
         enable_blur = dialog.is_blur_mask_enabled()
         burn_subs = dialog.is_burn_subtitles_enabled()
+        sub_cfg = dialog.get_subtitle_config()
+        brand_logo_settings = dialog.get_brand_logo_settings()
+        watermark_settings = dialog.get_watermark_settings()
 
         # 3. Kiểm tra bản quyền VIP nếu chọn giọng VieNeu
         v_id = selected_voice.get("id", "")
@@ -5049,6 +5063,9 @@ class VideoTranslatorGUI(QMainWindow, VoiceGenderMixin, ProjectSettingsMixin, Vi
             burn_subtitles=burn_subs,
             existing_cues=existing_cues if existing_cues else None,
             output_video_path=output_video_path,
+            subtitle_config=sub_cfg,
+            brand_logo_settings=brand_logo_settings,
+            watermark_settings=watermark_settings,
         )
         progress_dlg.exec()
 

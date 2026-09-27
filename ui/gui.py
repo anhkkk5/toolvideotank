@@ -256,6 +256,11 @@ if __name__ == "__main__":
         if not lic_status.get("licensed", False):
             sys.exit(0)
 
+    # 2. Cửa ngõ kiểm tra cập nhật bắt buộc (Mandatory Update Gate)
+    from ui.dialogs.update_dialog import check_mandatory_update_gate
+    if not check_mandatory_update_gate(parent=None, workspace_root=app_root):
+        sys.exit(0)
+
     from views.launcher import show_launcher, LauncherWindow
     video_path = show_launcher(None)
     if not video_path:

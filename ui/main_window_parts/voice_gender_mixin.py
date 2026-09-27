@@ -18,7 +18,7 @@ import subprocess
 from uuid import uuid4
 
 from runtime_paths import bin_path, subprocess_hidden_kwargs
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import QSettings, Qt, QUrl
 from PySide6.QtGui import QAction, QColor, QFont
 from PySide6.QtWidgets import (
     QPushButton, QSlider, QProgressBar, QLabel, QComboBox, QCheckBox, QSpinBox, QDoubleSpinBox, QLineEdit, QTextEdit, QTableWidget, QTableWidgetItem, QHeaderView, QHBoxLayout, QVBoxLayout, QGridLayout, QGroupBox, QTabWidget, QSplitter, QScrollArea, QFrame, QDialog,
@@ -1126,6 +1126,9 @@ class VoiceGenderMixin:
 
         audio_mix_settings = None
         voice_config = None
+        subtitle_config = None
+        brand_logo_settings = None
+        watermark_settings = None
         if target_dataset is None:
             init_orig = int(self.audio_a1_volume_slider.value()) if hasattr(self, "audio_a1_volume_slider") else 50
             init_tts = int(self.audio_a2_volume_slider.value()) if hasattr(self, "audio_a2_volume_slider") else 100
@@ -1142,6 +1145,9 @@ class VoiceGenderMixin:
             target_dataset = dialog.get_selected_dataset()
             audio_mix_settings = dialog.get_audio_mix_settings()
             voice_config = dialog.get_voice_mapping_config()
+            subtitle_config = dialog.get_subtitle_config()
+            brand_logo_settings = dialog.get_brand_logo_settings()
+            watermark_settings = dialog.get_watermark_settings()
 
         if not target_dataset:
             QMessageBox.warning(self, "Pipeline B", "Chưa chọn bản Master Data nào.")
@@ -1164,8 +1170,51 @@ class VoiceGenderMixin:
         from app.services.video_creator_service import VideoCreatorConfig
         creator_config = VideoCreatorConfig()
         creator_config.enable_blur_mask = True
+        if subtitle_config:
+            creator_config.subtitle_config = subtitle_config
         if voice_config:
             creator_config.voice_config = voice_config
+
+        # Nạp dự phòng từ QSettings nếu chưa có từ dialog
+        if brand_logo_settings is None or watermark_settings is None:
+            branding_st = QSettings("TankVideo", "TankVideoStudio")
+            if brand_logo_settings is None:
+                enable_l = branding_st.value("branding/enable_logo", False, type=bool)
+                l_path = branding_st.value("branding/logo_path", "", type=str)
+                brand_logo_settings = {
+                    "enable": enable_l and bool(l_path),
+                    "path": l_path,
+                    "position": branding_st.value("branding/logo_pos", "top_left", type=str),
+                    "size_percent": branding_st.value("branding/logo_size", 15, type=int),
+                    "opacity": float(branding_st.value("branding/logo_opacity", 100, type=int)) / 100.0,
+                }
+            if watermark_settings is None:
+                enable_w = branding_st.value("branding/enable_watermark", False, type=bool)
+                w_text = branding_st.value("branding/watermark_text", "", type=str)
+                watermark_settings = {
+                    "enable": enable_w and bool(w_text),
+                    "text": w_text,
+                    "position": branding_st.value("branding/watermark_pos", "center", type=str),
+                    "font_size": branding_st.value("branding/watermark_size", 36, type=int),
+                    "opacity": float(branding_st.value("branding/watermark_opacity", 35, type=int)) / 100.0,
+                    "color": "#FFFFFF",
+                }
+
+        # Áp dụng cấu hình Logo thương hiệu & Watermark bản quyền
+        if brand_logo_settings:
+            creator_config.enable_brand_logo = bool(brand_logo_settings.get("enable", False))
+            creator_config.brand_logo_path = str(brand_logo_settings.get("path", ""))
+            creator_config.brand_logo_position = str(brand_logo_settings.get("position", "top_left"))
+            creator_config.brand_logo_size_percent = int(brand_logo_settings.get("size_percent", 15))
+            creator_config.brand_logo_opacity = float(brand_logo_settings.get("opacity", 1.0))
+
+        if watermark_settings:
+            creator_config.enable_watermark = bool(watermark_settings.get("enable", False))
+            creator_config.watermark_text = str(watermark_settings.get("text", ""))
+            creator_config.watermark_position = str(watermark_settings.get("position", "center"))
+            creator_config.watermark_font_size = int(watermark_settings.get("font_size", 36))
+            creator_config.watermark_opacity = float(watermark_settings.get("opacity", 0.35))
+            creator_config.watermark_color = str(watermark_settings.get("color", "#FFFFFF"))
 
         # Áp dụng cấu hình Hòa trộn âm thanh (Audio Mix) từ dialog
         if audio_mix_settings:

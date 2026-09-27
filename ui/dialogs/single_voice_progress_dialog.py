@@ -38,6 +38,7 @@ from app.services.video_creator_service import (
     VideoCreatorResult,
     VideoCreatorService,
 )
+from app.services.video_export_service import SubtitleRenderConfig
 from app.services.voice_mapping_service import VoiceMappingConfig
 
 
@@ -62,6 +63,9 @@ class SingleVoicePipelineWorker(QThread):
         burn_subtitles: bool,
         existing_cues: list[dict[str, Any]] | None,
         output_video_path: str,
+        subtitle_config: SubtitleRenderConfig | None = None,
+        brand_logo_settings: dict[str, Any] | None = None,
+        watermark_settings: dict[str, Any] | None = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -74,6 +78,9 @@ class SingleVoicePipelineWorker(QThread):
         self.burn_subtitles = burn_subtitles
         self.existing_cues = existing_cues
         self.output_video_path = output_video_path
+        self.subtitle_config = subtitle_config or SubtitleRenderConfig()
+        self.brand_logo_settings = brand_logo_settings or {}
+        self.watermark_settings = watermark_settings or {}
 
         self._cancel_event = threading.Event()
 
@@ -198,9 +205,27 @@ class SingleVoicePipelineWorker(QThread):
         creator_config.enable_blur_mask = self.enable_blur_mask
         creator_config.blur_rect = self.blur_rect
         creator_config.burn_subtitles = self.burn_subtitles
+        creator_config.subtitle_config = self.subtitle_config
         creator_config.original_volume = float(self.audio_mix_settings.get("original_volume", 0.50))
         creator_config.tts_volume = float(self.audio_mix_settings.get("tts_volume", 1.00))
         creator_config.duck_volume = float(self.audio_mix_settings.get("duck_volume", 0.20))
+
+        # Cấu hình Logo Thương hiệu
+        if self.brand_logo_settings and isinstance(self.brand_logo_settings, dict):
+            creator_config.enable_brand_logo = bool(self.brand_logo_settings.get("enable", False))
+            creator_config.brand_logo_path = str(self.brand_logo_settings.get("path", "")).strip()
+            creator_config.brand_logo_position = str(self.brand_logo_settings.get("position", "top_left"))
+            creator_config.brand_logo_size_percent = int(self.brand_logo_settings.get("size_percent", 15))
+            creator_config.brand_logo_opacity = float(self.brand_logo_settings.get("opacity", 1.0))
+
+        # Cấu hình Hình mờ chữ Watermark
+        if self.watermark_settings and isinstance(self.watermark_settings, dict):
+            creator_config.enable_watermark = bool(self.watermark_settings.get("enable", False))
+            creator_config.watermark_text = str(self.watermark_settings.get("text", "")).strip()
+            creator_config.watermark_position = str(self.watermark_settings.get("position", "center"))
+            creator_config.watermark_font_size = int(self.watermark_settings.get("font_size", 36))
+            creator_config.watermark_opacity = float(self.watermark_settings.get("opacity", 0.35))
+            creator_config.watermark_color = str(self.watermark_settings.get("color", "#FFFFFF"))
 
         # Khóa cứng toàn bộ các vai về đúng 1 giọng đã chọn
         from app.services.voice_mapping_service import VoiceAssignment, VoiceMappingConfig
@@ -262,6 +287,9 @@ class SingleVoiceProgressDialog(QDialog):
         burn_subtitles: bool = True,
         existing_cues: list[dict[str, Any]] | None = None,
         output_video_path: str = "",
+        subtitle_config: SubtitleRenderConfig | None = None,
+        brand_logo_settings: dict[str, Any] | None = None,
+        watermark_settings: dict[str, Any] | None = None,
     ):
         super().__init__(parent)
         self.workspace_root = workspace_root
@@ -273,6 +301,9 @@ class SingleVoiceProgressDialog(QDialog):
         self.burn_subtitles = burn_subtitles
         self.existing_cues = existing_cues
         self.output_video_path = output_video_path
+        self.subtitle_config = subtitle_config or SubtitleRenderConfig()
+        self.brand_logo_settings = brand_logo_settings or {}
+        self.watermark_settings = watermark_settings or {}
 
         self._worker: SingleVoicePipelineWorker | None = None
         self._last_result: VideoCreatorResult | None = None
@@ -417,6 +448,9 @@ class SingleVoiceProgressDialog(QDialog):
             burn_subtitles=self.burn_subtitles,
             existing_cues=self.existing_cues,
             output_video_path=self.output_video_path,
+            subtitle_config=self.subtitle_config,
+            brand_logo_settings=self.brand_logo_settings,
+            watermark_settings=self.watermark_settings,
             parent=self,
         )
 

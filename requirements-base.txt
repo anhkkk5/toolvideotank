@@ -3,3 +3,4 @@ requests
 python-dotenv
 pydub
 python-mpv
+selenium

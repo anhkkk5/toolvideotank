@@ -340,6 +340,42 @@ def format_ass_time(seconds: float) -> str:
     return f"{hours}:{minutes:02d}:{sec:02d}.{cs:02d}"
 
 
+def hex_to_ass_color(hex_str: str, alpha: float = 1.0) -> str:
+    """Chuyển đổi mã màu Hex (#RRGGBB hoặc #RGB) sang định dạng chuẩn ASS &HAABBGGRR&."""
+    s = str(hex_str or "").strip().lstrip("#")
+    if len(s) == 3:
+        s = "".join(c * 2 for c in s)
+    if len(s) < 6:
+        s = "FFFFFF"
+    try:
+        r = int(s[0:2], 16)
+        g = int(s[2:4], 16)
+        b = int(s[4:6], 16)
+    except ValueError:
+        r, g, b = 255, 255, 255
+    # Trong ASS: Alpha 00 = hoàn toàn đặc (opaque), FF = trong suốt (transparent)
+    a = int(round((1.0 - max(0.0, min(1.0, float(alpha)))) * 255))
+    return f"&H{a:02X}{b:02X}{g:02X}{r:02X}&"
+
+
+def ass_color_to_hex(ass_str: str) -> str:
+    """Chuyển đổi mã màu ASS (&HAABBGGRR& hoặc &HBBGGRR&) sang Hex chuẩn #RRGGBB."""
+    clean = str(ass_str or "").replace("&H", "").replace("&", "").strip().upper()
+    if len(clean) == 8:
+        # AABBGGRR
+        b = clean[2:4]
+        g = clean[4:6]
+        r = clean[6:8]
+        return f"#{r}{g}{b}"
+    elif len(clean) == 6:
+        # BBGGRR
+        b = clean[0:2]
+        g = clean[2:4]
+        r = clean[4:6]
+        return f"#{r}{g}{b}"
+    return "#FFFFFF"
+
+
 def generate_ass_script(
     segments: list[SubtitleSegment],
     vid_w: int,
@@ -347,18 +383,64 @@ def generate_ass_script(
     cfg: "SubtitleRenderConfig",
     target_cy: int | None = None,
     enable_mask: bool = True,
+    duration: float = 0.0,
 ) -> tuple[str, int]:
-    """Sinh kịch bản ASS với mặt nạ hộp nền bo góc phong cách CapCut giống Ảnh 3."""
+    """Sinh kịch bản ASS với kiểu dáng tùy biến: hộp nền ôm sát chữ (che video gốc) và chữ rõ nét."""
     is_vertical = vid_h > vid_w
-    base_font_size = int(round(vid_w * 0.046)) if is_vertical else int(round(vid_h * 0.052))
-    font_size = max(24, getattr(cfg, "font_size", 0) if getattr(cfg, "font_size", 0) >= 24 else base_font_size)
+    scale_ref = 1080.0
+    res_scale = (vid_w / scale_ref) if is_vertical else (vid_h / scale_ref)
+    user_size = int(getattr(cfg, "font_size", 34) or 34)
+    user_scale = float(getattr(cfg, "font_scale", 1.0) or 1.0)
+    font_size = max(18, int(round(user_size * user_scale * res_scale)))
 
     if target_cy is None:
         target_cy = int(round(vid_h * (0.74 if is_vertical else 0.82)))
 
-    bg_color = getattr(cfg, "badge_bg_color", "&H00DDE5FF&")
-    text_color = getattr(cfg, "badge_text_color", "&H00111111&")
+    bg_color = getattr(cfg, "badge_bg_color", "&H00DDE5FF&") or "&H00DDE5FF&"
+    text_color = getattr(cfg, "badge_text_color", "&H00111111&") or "&H00111111&"
     font_name = getattr(cfg, "font_name", "Arial") or "Arial"
+    bold = getattr(cfg, "bold", True)
+    has_box = getattr(cfg, "background_box", True) and enable_mask
+    outline_w = getattr(cfg, "outline_width", 3) if not has_box else 0
+    outline_col = getattr(cfg, "outline_color", "&H00000000") or "&H00000000"
+    animation = str(getattr(cfg, "animation", "Pop In") or "Pop In").strip().lower()
+
+    # Thẻ hiệu ứng chữ phụ đề
+    anim_tag = ""
+    if "pop" in animation:
+        anim_tag = r"\fad(80,60)\fscx108\fscy108\t(0,180,\fscx100\fscy100)"
+    elif "fade" in animation or "mờ" in animation:
+        anim_tag = r"\fad(180,120)"
+    elif "slide" in animation or "trượt" in animation:
+        anim_tag = r"\fad(120,80)"
+
+    watermark_text = str(getattr(cfg, "watermark_text", "") or "").strip()
+    enable_watermark = bool(getattr(cfg, "enable_watermark", False)) and bool(watermark_text)
+
+    watermark_style_def = ""
+    if enable_watermark:
+        wm_pos = str(getattr(cfg, "watermark_position", "center") or "center").strip().lower()
+        align_map = {
+            "center": 5,
+            "center_bottom": 2,
+            "top_left": 7,
+            "top_right": 9,
+            "bottom_left": 1,
+            "bottom_right": 3,
+            "top_center": 8,
+        }
+        wm_align = align_map.get(wm_pos, 5)
+        wm_base_size = int(getattr(cfg, "watermark_font_size", 36) or 36)
+        wm_font_size = max(16, int(round(wm_base_size * res_scale)))
+        wm_opacity = max(0.05, min(1.0, float(getattr(cfg, "watermark_opacity", 0.35) or 0.35)))
+        wm_color_hex = str(getattr(cfg, "watermark_color", "#FFFFFF") or "#FFFFFF")
+        wm_ass_color = hex_to_ass_color(wm_color_hex, alpha=wm_opacity)
+        wm_outline_ass = hex_to_ass_color("#000000", alpha=wm_opacity * 0.7)
+        margin_lr = int(round(vid_w * 0.04))
+        margin_v = int(round(vid_h * 0.04))
+        if wm_pos == "center_bottom":
+            margin_v = int(round(vid_h * (0.28 if is_vertical else 0.20)))
+        watermark_style_def = f"Style: Watermark,{font_name},{wm_font_size},{wm_ass_color},&H000000FF,{wm_outline_ass},&H00000000,1,0,0,0,100,100,1,0,1,1,0,{wm_align},{margin_lr},{margin_lr},{margin_v},1\n"
 
     header = f"""[Script Info]
 ScriptType: v4.00+
@@ -369,16 +451,16 @@ ScaledBorderAndShadow: yes
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: BgBadge,{font_name},20,{bg_color},&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1
-Style: SubText,{font_name},{font_size},{text_color},&H000000FF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,0,0,5,0,0,0,1
-
+Style: SubText,{font_name},{font_size},{text_color},&H000000FF,{outline_col},&H00000000,{1 if bold else 0},0,0,0,100,100,0,0,1,{outline_w},0,5,0,0,0,1
+{watermark_style_def}
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
 
     dialogue_lines: list[str] = []
-    char_w = int(round(font_size * 0.52))
-    max_line_w = int(round(vid_w * 0.84))
-    max_chars_per_line = max(18, max_line_w // char_w)
+    char_w = int(round(font_size * 0.48))
+    max_line_w = int(round(vid_w * 0.86))
+    max_chars_per_line = max(16, max_line_w // max(1, char_w))
     rendered_cnt = 0
 
     for s in segments:
@@ -415,26 +497,40 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
         num_lines = len(lines)
         longest_line_chars = max(len(l) for l in lines)
-        box_w = min(max_line_w, longest_line_chars * char_w + int(font_size * 1.6))
+        # Khoảng đệm ôm sát chữ (vừa vặn, che kín video gốc, không bị to cồng kềnh)
+        pad_x = int(round(font_size * 0.55))
+        box_w = min(max_line_w, longest_line_chars * char_w + pad_x * 2)
         line_h = int(round(font_size * 1.25))
-        # Chiều cao hộp mặt nạ: tối thiểu 112px trên video dọc để phủ kín 100% dòng chữ tiếng Trung gốc
-        min_box_h = max(112 if is_vertical else 60, int(round(font_size * 2.3))) if num_lines == 1 else int(round(font_size * 1.5 * num_lines + font_size * 0.8))
-        box_h = max(min_box_h, num_lines * line_h + int(font_size * 0.9))
-        radius = min(28, box_h // 3)
+        pad_y = int(round(font_size * 0.28))
+        box_h = num_lines * line_h + pad_y * 2
+        # Đảm bảo chiều cao tối thiểu che kín dòng chữ gốc trên video
+        min_box_h = max(int(round(font_size * 1.45)), 48 if is_vertical else 38)
+        box_h = max(min_box_h, box_h)
+        radius = min(14, int(box_h * 0.22))
 
         start_t = format_ass_time(s.start)
         end_t = format_ass_time(s.end)
         ass_text = r"\N".join(lines)
 
-        if enable_mask:
+        if has_box:
             shape = make_rounded_rect_ass(box_w, box_h, radius, vid_w // 2, seg_cy)
             dialogue_lines.append(
                 f"Dialogue: 0,{start_t},{end_t},BgBadge,,0,0,0,,{{\\pos(0,0)\\p1\\1c{bg_color}\\bord0\\shad0}}{shape}{{\\p0}}"
             )
 
         dialogue_lines.append(
-            f"Dialogue: 1,{start_t},{end_t},SubText,,0,0,0,,{{\\pos({vid_w // 2},{seg_cy})\\an5\\c{text_color}\\bord0\\shad0\\b1\\fs{font_size}}}{ass_text}"
+            f"Dialogue: 1,{start_t},{end_t},SubText,,0,0,0,,{{\\pos({vid_w // 2},{seg_cy})\\an5\\c{text_color}\\bord{outline_w}\\3c{outline_col}\\shad0\\b{1 if bold else 0}\\fs{font_size}{anim_tag}}}{ass_text}"
         )
+
+    # Thêm dòng Watermark chữ chạy xuyên suốt toàn bộ video
+    if enable_watermark:
+        end_time_sec = max(float(duration or 0.0), 36000.0)
+        end_time_ass = format_ass_time(end_time_sec)
+        dialogue_lines.insert(
+            0,
+            f"Dialogue: 10,0:00:00.00,{end_time_ass},Watermark,,0,0,0,,{watermark_text}"
+        )
+        rendered_cnt += 1
 
     return header + "\n".join(dialogue_lines) + "\n", rendered_cnt
 
@@ -443,18 +539,37 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 class SubtitleRenderConfig:
     """Cấu hình hiển thị phụ đề Hardsub tiếng Việt Unicode và Mặt nạ che chữ gốc."""
     font_name: str = "Arial"
-    font_size: int = 48
-    primary_color: str = "&H00FFFFFF"     # Chữ trắng
-    outline_color: str = "&H00000000"     # Viền đen
+    font_size: int = 34                   # Kích cỡ chuẩn vừa vặn, thanh thoát
+    font_scale: float = 1.0               # Tỷ lệ co giãn (0.75x -> 1.5x)
+    primary_color: str = "&H00FFFFFF&"    # Chữ trắng
+    outline_color: str = "&H00000000&"    # Viền đen
     border_style: int = 1                 # 1 = Chữ + Outline
-    outline_width: int = 2                # Độ dày viền outline
+    outline_width: int = 3                # Độ dày viền outline
     margin_v: int = 25                    # Cách đáy video
     bold: bool = True                     # In đậm
-    enable_blur_mask: bool = True         # Mặt nạ hộp nền bo góc giống CapCut (Ảnh 3)
+    enable_blur_mask: bool = True         # Mặt nạ hộp nền bo góc phong cách hiện đại
     blur_rect: tuple[float, float, float, float] | None = None  # (x, y, w, h) normalized 0.0-1.0
     blur_strength: int = 18               # Bán kính làm mờ
-    badge_bg_color: str = "&H00DDE5FF&"    # Màu hồng pastel phong cách CapCut giống Ảnh 3
-    badge_text_color: str = "&H00111111&"  # Màu chữ đen sắc nét nổi bật trên nền pastel
+    background_box: bool = True           # Bật/tắt hộp nền
+    badge_bg_color: str = "&H00DDE5FF&"    # Màu hồng pastel ôm sát chữ che video gốc
+    badge_text_color: str = "&H00111111&"  # Màu chữ đen sắc nét nổi bật
+    box_alpha: float = 1.0                # Độ mờ của hộp nền (1.0 = đặc hoàn toàn)
+    box_radius: int = 14                  # Bo tròn góc (px)
+    animation: str = "Pop In"             # Hiệu ứng xuất hiện
+    preset_name: str = "pastel_box"       # Tên mẫu định sẵn
+    # Watermark chữ cấu hình
+    enable_watermark: bool = False
+    watermark_text: str = ""
+    watermark_position: str = "center"
+    watermark_font_size: int = 36
+    watermark_opacity: float = 0.35
+    watermark_color: str = "#FFFFFF"
+    # Logo thương hiệu cấu hình
+    enable_brand_logo: bool = False
+    brand_logo_path: str = ""
+    brand_logo_position: str = "top_left"
+    brand_logo_size_percent: int = 15
+    brand_logo_opacity: float = 1.0
 
 
 @dataclass
@@ -468,6 +583,19 @@ class VideoExportRequest:
     subtitle_config: SubtitleRenderConfig = field(default_factory=SubtitleRenderConfig)
     enable_blur_mask: bool = True
     blur_rect: tuple[float, float, float, float] | None = None
+    # Brand logo settings
+    enable_brand_logo: bool = False
+    brand_logo_path: str = ""
+    brand_logo_position: str = "top_left"
+    brand_logo_size_percent: int = 15
+    brand_logo_opacity: float = 1.0
+    # Text watermark settings
+    enable_watermark: bool = False
+    watermark_text: str = ""
+    watermark_position: str = "center"
+    watermark_font_size: int = 36
+    watermark_opacity: float = 0.35
+    watermark_color: str = "#FFFFFF"
 
 
 @dataclass
@@ -728,7 +856,53 @@ class VideoExportService:
             if target_cy is None:
                 target_cy = int(round(vid_h * (0.743 if vid_h > vid_w else 0.83)))
 
-            # Sinh kịch bản ASS với mặt nạ hộp nền bo góc phong cách CapCut giống Ảnh 3
+            # 3.3. Áp dụng Logo Thương hiệu (Brand Logo) nếu được bật
+            enable_logo = getattr(request, "enable_brand_logo", False) or getattr(cfg, "enable_brand_logo", False)
+            logo_path = str(getattr(request, "brand_logo_path", "") or getattr(cfg, "brand_logo_path", "")).strip()
+            has_logo = enable_logo and bool(logo_path) and os.path.isfile(logo_path)
+
+            if has_logo:
+                logo_pct = max(5, min(50, int(getattr(request, "brand_logo_size_percent", None) or getattr(cfg, "brand_logo_size_percent", 15) or 15)))
+                target_logo_w = max(40, int(round(vid_w * (logo_pct / 100.0))))
+                logo_alpha = max(0.1, min(1.0, float(getattr(request, "brand_logo_opacity", None) or getattr(cfg, "brand_logo_opacity", 1.0) or 1.0)))
+
+                filter_chains.append(
+                    f"[2:v]format=rgba,colorchannelmixer=aa={logo_alpha:.2f},scale={target_logo_w}:-1[brand_logo]"
+                )
+
+                logo_pos = str(getattr(request, "brand_logo_position", None) or getattr(cfg, "brand_logo_position", "top_left") or "top_left").strip().lower()
+                margin_px = max(15, int(round(vid_w * 0.025)))
+
+                if logo_pos == "top_left":
+                    pos_xy = f"{margin_px}:{margin_px}"
+                elif logo_pos == "top_right":
+                    pos_xy = f"main_w-overlay_w-{margin_px}:{margin_px}"
+                elif logo_pos == "bottom_left":
+                    pos_xy = f"{margin_px}:main_h-overlay_h-{margin_px}"
+                elif logo_pos == "bottom_right":
+                    pos_xy = f"main_w-overlay_w-{margin_px}:main_h-overlay_h-{margin_px}"
+                elif logo_pos == "center":
+                    pos_xy = "(main_w-overlay_w)/2:(main_h-overlay_h)/2"
+                elif logo_pos == "top_center":
+                    pos_xy = f"(main_w-overlay_w)/2:{margin_px}"
+                else:
+                    pos_xy = f"{margin_px}:{margin_px}"
+
+                filter_chains.append(
+                    f"[{current_v}][brand_logo]overlay={pos_xy}:repeatlast=1[v_logo]"
+                )
+                current_v = "v_logo"
+
+            # Đồng bộ cấu hình Watermark từ request sang cfg nếu có
+            if getattr(request, "enable_watermark", False):
+                cfg.enable_watermark = True
+                cfg.watermark_text = request.watermark_text
+                cfg.watermark_position = request.watermark_position
+                cfg.watermark_font_size = request.watermark_font_size
+                cfg.watermark_opacity = request.watermark_opacity
+                cfg.watermark_color = request.watermark_color
+
+            # Sinh kịch bản ASS với mặt nạ hộp nền bo góc phong cách CapCut giống Ảnh 3 và Watermark chữ
             temp_ass_path = os.path.join(
                 self.temp_dir,
                 f"export_sub_{int(time.time() * 1000)}_{os.getpid()}.ass",
@@ -740,6 +914,7 @@ class VideoExportService:
                 cfg=cfg,
                 target_cy=target_cy,
                 enable_mask=enable_blur,
+                duration=max(t_video, t_audio),
             )
 
             if ass_rendered_cnt > 0:
@@ -759,6 +934,8 @@ class VideoExportService:
                 "-i", request.original_video_path,
                 "-i", request.final_audio_path,
             ]
+            if has_logo:
+                cmd.extend(["-i", logo_path])
 
             if filter_chains:
                 filter_script_path = os.path.join(

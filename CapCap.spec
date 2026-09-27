@@ -59,6 +59,9 @@ datas = [
 # Filter out optional files not present on disk so PyInstaller doesn't abort
 datas = [(s, d) for s, d in datas if Path(s).exists()]
 datas += collect_data_files("piper")
+# Selenium ships ``selenium-manager.exe`` which auto-downloads the correct
+# ChromeDriver at runtime.  Must be bundled for the Douyin cookie extraction.
+datas += collect_data_files("selenium", include_py_files=False)
 
 # The normalizer package ships its built-in CSV rules as package data.  Keep
 # them in the frozen build; project dictionaries are stored separately in
@@ -168,6 +171,15 @@ a = Analysis(
         "edge_tts",
         "requests",
         "urllib3",
+        # Selenium is lazily imported for Douyin cookie extraction
+        "selenium",
+        "selenium.webdriver",
+        "selenium.webdriver.chrome",
+        "selenium.webdriver.chrome.options",
+        "selenium.webdriver.chrome.service",
+        "selenium.webdriver.edge",
+        "selenium.webdriver.edge.options",
+        "selenium.webdriver.edge.service",
         "dotenv",
         "huggingface_hub",
         "tts_processor",
@@ -277,7 +289,7 @@ exe = EXE(
     upx_dir=str(project_root / "upx"),
     # Ẩn hoàn toàn cửa sổ console đen cho bản dựng ứng dụng máy tính chính thức
     console=False,
-    icon=str(project_root / "assets" / "capcap.ico"),
+    icon=str(project_root / "assets" / "tankvideo.ico"),
     disable_windowed_traceback=False,
 )
 

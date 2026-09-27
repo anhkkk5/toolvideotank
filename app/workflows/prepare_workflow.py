@@ -628,7 +628,7 @@ class PrepareWorkflow:
             if readiness_issues:
                 details = "\n".join(f"- {detail}" for _code, detail in readiness_issues)
                 raise RuntimeError(
-                    "CapCap startup readiness check failed. Resolve the following before retrying:\n"
+                    "TankVideo startup readiness check failed. Resolve the following before retrying:\n"
                     f"{details}"
                 )
 

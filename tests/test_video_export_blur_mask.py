@@ -98,3 +98,41 @@ def test_video_export_builds_ass_badge_filter(tmp_path):
     # Kiểm tra filter áp dụng ASS subtitle với mặt nạ hộp nền bo góc
     assert "subtitles=" in script
     assert ".ass" in script
+
+
+def test_color_conversion_helpers():
+    from app.services.video_export_service import hex_to_ass_color, ass_color_to_hex
+    assert hex_to_ass_color("#FFE5DD") == "&H00DDE5FF&"
+    assert hex_to_ass_color("#000000") == "&H00000000&"
+    assert hex_to_ass_color("#FFFFFF") == "&H00FFFFFF&"
+    assert hex_to_ass_color("#FFD400") == "&H0000D4FF&"
+
+    assert ass_color_to_hex("&H00DDE5FF&") == "#FFE5DD"
+    assert ass_color_to_hex("&H00000000&") == "#000000"
+    assert ass_color_to_hex("&H00FFFFFF&") == "#FFFFFF"
+
+
+def test_generate_ass_script_without_box():
+    segments = [
+        SubtitleSegment(id=1, start=1.0, end=3.0, text="测试", translated_text="Chữ không nền"),
+    ]
+    cfg = SubtitleRenderConfig(background_box=False, badge_text_color="&H0000D4FF&")
+    ass_content, cnt = generate_ass_script(segments, 1080, 1920, cfg, target_cy=1440)
+    assert cnt == 1
+    assert "BgBadge" not in [line.split(",")[3] for line in ass_content.splitlines() if line.startswith("Dialogue:")]
+    assert "SubText" in ass_content
+    assert "&H0000D4FF&" in ass_content
+
+
+def test_generate_ass_script_snug_box_dimensions():
+    segments = [
+        SubtitleSegment(id=1, start=1.0, end=3.0, text="测试", translated_text="Tôn Hiểu Hiểu, khách cần thìa sao không lấy?"),
+    ]
+    cfg = SubtitleRenderConfig(background_box=True, font_size=34)
+    ass_content, cnt = generate_ass_script(segments, 1080, 1920, cfg, target_cy=1440)
+    assert cnt == 1
+    # Kiểm tra có vẽ BgBadge và SubText
+    assert r"\p1" in ass_content
+    assert "BgBadge" in ass_content
+    assert "SubText" in ass_content
+

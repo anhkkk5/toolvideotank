@@ -578,7 +578,7 @@ class ResourceDownloadService:
                     **subprocess_hidden_kwargs(),
                 )
                 if result.returncode != 0:
-                    issues.append(("ffmpeg", "FFmpeg could not start. Reinstall or re-extract CapCap."))
+                    issues.append(("ffmpeg", "FFmpeg could not start. Reinstall or re-extract TankVideo."))
             except Exception as exc:
                 issues.append(("ffmpeg", f"FFmpeg could not start: {exc}"))
 
@@ -587,7 +587,7 @@ class ResourceDownloadService:
         # front and give the user a recovery path instead of a generic 500.
         for directory_name in ("projects", "temp"):
             target_dir = os.path.join(self.workspace_root, directory_name)
-            probe_path = os.path.join(target_dir, f".capcap_write_probe_{uuid.uuid4().hex}")
+            probe_path = os.path.join(target_dir, f".tankvideo_write_probe_{uuid.uuid4().hex}")
             try:
                 os.makedirs(target_dir, exist_ok=True)
                 with open(probe_path, "x", encoding="utf-8") as handle:
@@ -601,8 +601,8 @@ class ResourceDownloadService:
                     pass
                 issues.append((
                     f"workspace:{directory_name}",
-                    f"CapCap cannot write its {directory_name} folder ({target_dir}): {exc}. "
-                    "Move CapCap to a writable folder or adjust folder permissions.",
+                    f"TankVideo cannot write its {directory_name} folder ({target_dir}): {exc}. "
+                    "Move TankVideo to a writable folder or adjust folder permissions.",
                 ))
         return issues
 

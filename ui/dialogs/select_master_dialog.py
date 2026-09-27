@@ -8,21 +8,25 @@ import os
 import re
 from typing import Any
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QBrush, QFont
+from PySide6.QtCore import QSettings, Qt
+from PySide6.QtGui import QColor, QBrush, QFont, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QCheckBox,
     QComboBox,
     QDialog,
+    QFileDialog,
     QFrame,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSlider,
     QSplitter,
     QTableWidget,
@@ -34,6 +38,7 @@ from PySide6.QtWidgets import (
 from app.models.master_dataset import MasterDataset
 from app.services.master_validator import validate_master_dataset, MasterValidationResult
 from app.services.master_dataset_service import MasterDatasetService
+from app.services.video_export_service import SubtitleRenderConfig
 from app.services.voice_mapping_service import (
     VoiceMappingService,
     VoiceMappingConfig,
@@ -41,6 +46,7 @@ from app.services.voice_mapping_service import (
     DEFAULT_MALE_VOICE,
     DEFAULT_FEMALE_VOICE,
 )
+from ui.widgets.subtitle_style_group import SubtitleStyleGroupBox
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +67,10 @@ def _load_available_voices() -> tuple[list[dict[str, str]], list[dict[str, str]]
     seen_ids = {"vieneu_cogaihoatbat", "vieneu_thanhnientutin"}
 
     # Nạp từ models/piper/voices.json nếu có
-    manifest_path = os.path.join(os.getcwd(), "models", "piper", "voices.json")
+    from app.runtime_paths import models_path
+    manifest_path = models_path("piper", "voices.json")
+    if not manifest_path or not os.path.isfile(manifest_path):
+        manifest_path = os.path.join(os.getcwd(), "models", "piper", "voices.json")
     if os.path.isfile(manifest_path):
         try:
             with open(manifest_path, "r", encoding="utf-8-sig") as f:
@@ -154,8 +163,16 @@ class SelectMasterDialog(QDialog):
         self.current_validation: MasterValidationResult | None = None
 
         self.setWindowTitle("Chọn bản phụ đề đã kiểm duyệt (Master Data) - Pipeline B")
-        self.resize(1120, 740)
-        self.setMinimumSize(900, 580)
+        from PySide6.QtWidgets import QApplication
+        screen = QApplication.primaryScreen()
+        if screen:
+            geo = screen.availableGeometry()
+            target_w = max(1180, min(1380, int(geo.width() * 0.88)))
+            target_h = max(780, min(920, int(geo.height() * 0.90)))
+            self.resize(target_w, target_h)
+        else:
+            self.resize(1280, 840)
+        self.setMinimumSize(1080, 650)
 
         self._setup_ui()
         self._apply_dark_style()
@@ -205,7 +222,7 @@ class SelectMasterDialog(QDialog):
         row_female = QHBoxLayout()
         row_female.setSpacing(6)
         lbl_female = QLabel("👩 Giọng Nữ:")
-        lbl_female.setStyleSheet("font-size: 11px; font-weight: bold; color: #ff7b72;")
+        lbl_female.setStyleSheet("font-size: 12px; font-weight: bold; color: #ff8f87;")
         lbl_female.setMinimumWidth(75)
         row_female.addWidget(lbl_female)
 
@@ -225,7 +242,7 @@ class SelectMasterDialog(QDialog):
         row_male = QHBoxLayout()
         row_male.setSpacing(6)
         lbl_male = QLabel("👨 Giọng Nam:")
-        lbl_male.setStyleSheet("font-size: 11px; font-weight: bold; color: #79c0ff;")
+        lbl_male.setStyleSheet("font-size: 12px; font-weight: bold; color: #8dcfff;")
         lbl_male.setMinimumWidth(75)
         row_male.addWidget(lbl_male)
 
@@ -245,7 +262,7 @@ class SelectMasterDialog(QDialog):
         self._on_voice_selection_changed()
 
         lbl_voice_hint = QLabel("Tự động gán cho toàn bộ câu thoại nhân vật Nam và Nữ.")
-        lbl_voice_hint.setStyleSheet("color: #8b949e; font-size: 10px;")
+        lbl_voice_hint.setStyleSheet("color: #a0b0c4; font-size: 11px;")
         voice_select_layout.addWidget(lbl_voice_hint)
 
         left_layout.addWidget(voice_select_group)
@@ -257,7 +274,7 @@ class SelectMasterDialog(QDialog):
         audio_mix_layout.setContentsMargins(10, 10, 10, 10)
 
         lbl_preset = QLabel("Mẫu trộn nhanh")
-        lbl_preset.setStyleSheet("color: #ff7b1a; font-weight: bold; font-size: 11px;")
+        lbl_preset.setStyleSheet("color: #ff9840; font-weight: bold; font-size: 12px;")
         audio_mix_layout.addWidget(lbl_preset)
 
         self.audio_mix_preset_combo = QComboBox()
@@ -272,18 +289,18 @@ class SelectMasterDialog(QDialog):
 
         lbl_hint = QLabel("Phím tắt nhanh cho tỷ lệ Âm thanh gốc / Lồng tiếng TTS. Thanh trượt bên dưới điều khiển chi tiết.")
         lbl_hint.setWordWrap(True)
-        lbl_hint.setStyleSheet("color: #8b949e; font-size: 10px; line-height: 1.2;")
+        lbl_hint.setStyleSheet("color: #a0b0c4; font-size: 11px; line-height: 1.2;")
         audio_mix_layout.addWidget(lbl_hint)
 
         lbl_track_title = QLabel("Âm lượng từng kênh")
-        lbl_track_title.setStyleSheet("font-weight: bold; font-size: 11px; color: #cfd6df; margin-top: 4px;")
+        lbl_track_title.setStyleSheet("font-weight: bold; font-size: 12px; color: #e0e6ef; margin-top: 4px;")
         audio_mix_layout.addWidget(lbl_track_title)
 
         # Row A1 Video gốc
         row_orig = QHBoxLayout()
         row_orig.setSpacing(6)
         lbl_orig = QLabel("A1 Video gốc")
-        lbl_orig.setStyleSheet("font-size: 11px; color: #cfd6df;")
+        lbl_orig.setStyleSheet("font-size: 12px; color: #e0e6ef;")
         lbl_orig.setMinimumWidth(85)
         row_orig.addWidget(lbl_orig)
 
@@ -298,7 +315,7 @@ class SelectMasterDialog(QDialog):
         self.lbl_orig_vol_val = QLabel(f"{self.initial_orig_volume}%")
         self.lbl_orig_vol_val.setMinimumWidth(38)
         self.lbl_orig_vol_val.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self.lbl_orig_vol_val.setStyleSheet("color: #ff7b1a; font-weight: bold; font-size: 11px;")
+        self.lbl_orig_vol_val.setStyleSheet("color: #ff9840; font-weight: bold; font-size: 12px;")
         row_orig.addWidget(self.lbl_orig_vol_val)
         audio_mix_layout.addLayout(row_orig)
 
@@ -306,7 +323,7 @@ class SelectMasterDialog(QDialog):
         row_tts = QHBoxLayout()
         row_tts.setSpacing(6)
         lbl_tts = QLabel("TS1 Giọng đọc AI")
-        lbl_tts.setStyleSheet("font-size: 11px; color: #cfd6df;")
+        lbl_tts.setStyleSheet("font-size: 12px; color: #e0e6ef;")
         lbl_tts.setMinimumWidth(85)
         row_tts.addWidget(lbl_tts)
 
@@ -321,14 +338,204 @@ class SelectMasterDialog(QDialog):
         self.lbl_tts_vol_val = QLabel(f"{self.initial_tts_volume}%")
         self.lbl_tts_vol_val.setMinimumWidth(38)
         self.lbl_tts_vol_val.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self.lbl_tts_vol_val.setStyleSheet("color: #58a6ff; font-weight: bold; font-size: 11px;")
+        self.lbl_tts_vol_val.setStyleSheet("color: #6db8ff; font-weight: bold; font-size: 12px;")
         row_tts.addWidget(self.lbl_tts_vol_val)
         audio_mix_layout.addLayout(row_tts)
 
         self._sync_initial_preset_selection()
         left_layout.addWidget(audio_mix_group)
 
-        splitter.addWidget(left_widget)
+        # --- KHUNG KIỂU DÁNG PHỤ ĐỀ & HỘP NỀN ---
+        self.sub_style_group = SubtitleStyleGroupBox(self, parent_window=self.parent())
+        left_layout.addWidget(self.sub_style_group)
+
+        # --- KHUNG LOGO THƯƠNG HIỆU & HÌNH MỜ (WATERMARK) ---
+        branding_box = QGroupBox("Logo Thương hiệu & Watermark bản quyền")
+        branding_layout = QVBoxLayout(branding_box)
+        branding_layout.setSpacing(10)
+        branding_layout.setContentsMargins(10, 12, 10, 10)
+
+        # === PHẦN A: LOGO THƯƠNG HIỆU ===
+        self.chk_enable_logo = QCheckBox("Bật hiển thị Logo thương hiệu xuyên suốt video")
+        self.chk_enable_logo.setStyleSheet("color: #ff9d42; font-weight: bold; font-size: 12px;")
+        branding_layout.addWidget(self.chk_enable_logo)
+
+        self.logo_container = QWidget()
+        logo_c_layout = QVBoxLayout(self.logo_container)
+        logo_c_layout.setContentsMargins(14, 0, 0, 4)
+        logo_c_layout.setSpacing(8)
+
+        # Hàng 1: Chọn file ảnh & thumbnail preview
+        logo_file_row = QHBoxLayout()
+        logo_file_row.setSpacing(8)
+        lbl_l_file = QLabel("Ảnh Logo:")
+        lbl_l_file.setStyleSheet("color: #d7e3f4; font-size: 11px; font-weight: 600;")
+        lbl_l_file.setMinimumWidth(65)
+        logo_file_row.addWidget(lbl_l_file)
+
+        self.txt_logo_path = QLineEdit()
+        self.txt_logo_path.setPlaceholderText("Chọn ảnh logo (.png, .jpg, .webp)...")
+        self.txt_logo_path.setStyleSheet("background-color: #1a2738; color: #f8fbff; border: 1px solid #344862; border-radius: 6px; padding: 5px 8px; font-size: 11px;")
+        logo_file_row.addWidget(self.txt_logo_path, 1)
+
+        self.btn_browse_logo = QPushButton("📁 Chọn ảnh...")
+        self.btn_browse_logo.setStyleSheet("""
+            QPushButton {
+                background-color: #1e293b; color: #38bdf8;
+                border: 1px solid #334155; border-radius: 6px; padding: 5px 10px; font-size: 11px; font-weight: 600;
+            }
+            QPushButton:hover { background-color: #334155; color: #fff; }
+        """)
+        self.btn_browse_logo.clicked.connect(self._browse_logo_file)
+        logo_file_row.addWidget(self.btn_browse_logo)
+
+        self.lbl_logo_preview = QLabel()
+        self.lbl_logo_preview.setFixedSize(38, 38)
+        self.lbl_logo_preview.setAlignment(Qt.AlignCenter)
+        self.lbl_logo_preview.setStyleSheet("border: 1px dashed #344862; border-radius: 6px; background-color: #16202e; color: #64748b; font-size: 9px;")
+        self.lbl_logo_preview.setText("Logo")
+        logo_file_row.addWidget(self.lbl_logo_preview)
+        logo_c_layout.addLayout(logo_file_row)
+
+        # Hàng 2: Vị trí logo & kích thước & độ mờ
+        logo_opt_row = QHBoxLayout()
+        logo_opt_row.setSpacing(10)
+
+        lbl_l_pos = QLabel("Vị trí:")
+        lbl_l_pos.setStyleSheet("color: #d7e3f4; font-size: 11px;")
+        logo_opt_row.addWidget(lbl_l_pos)
+
+        self.combo_logo_pos = QComboBox()
+        self.combo_logo_pos.addItem("Góc trên trái (Top-Left) ★ Khuyên dùng", "top_left")
+        self.combo_logo_pos.addItem("Góc trên phải (Top-Right)", "top_right")
+        self.combo_logo_pos.addItem("Góc dưới trái (Bottom-Left)", "bottom_left")
+        self.combo_logo_pos.addItem("Góc dưới phải (Bottom-Right)", "bottom_right")
+        self.combo_logo_pos.addItem("Chính giữa (Center)", "center")
+        self.combo_logo_pos.addItem("Góc trên giữa (Top-Center)", "top_center")
+        logo_opt_row.addWidget(self.combo_logo_pos, 1)
+
+        lbl_l_size = QLabel("Kích thước:")
+        lbl_l_size.setStyleSheet("color: #d7e3f4; font-size: 11px;")
+        logo_opt_row.addWidget(lbl_l_size)
+
+        self.slider_logo_size = QSlider(Qt.Horizontal)
+        self.slider_logo_size.setRange(5, 35)
+        self.slider_logo_size.setValue(15)
+        self.lbl_logo_size_val = QLabel("15%")
+        self.lbl_logo_size_val.setMinimumWidth(32)
+        self.lbl_logo_size_val.setStyleSheet("color: #ff9d42; font-weight: bold; font-size: 11px;")
+        self.slider_logo_size.valueChanged.connect(lambda v: self.lbl_logo_size_val.setText(f"{v}%"))
+        logo_opt_row.addWidget(self.slider_logo_size)
+        logo_opt_row.addWidget(self.lbl_logo_size_val)
+
+        lbl_l_op = QLabel("Độ mờ:")
+        lbl_l_op.setStyleSheet("color: #d7e3f4; font-size: 11px;")
+        logo_opt_row.addWidget(lbl_l_op)
+
+        self.slider_logo_opacity = QSlider(Qt.Horizontal)
+        self.slider_logo_opacity.setRange(10, 100)
+        self.slider_logo_opacity.setValue(100)
+        self.lbl_logo_opacity_val = QLabel("100%")
+        self.lbl_logo_opacity_val.setMinimumWidth(36)
+        self.lbl_logo_opacity_val.setStyleSheet("color: #38bdf8; font-weight: bold; font-size: 11px;")
+        self.slider_logo_opacity.valueChanged.connect(lambda v: self.lbl_logo_opacity_val.setText(f"{v}%"))
+        logo_opt_row.addWidget(self.slider_logo_opacity)
+        logo_opt_row.addWidget(self.lbl_logo_opacity_val)
+
+        logo_c_layout.addLayout(logo_opt_row)
+        branding_layout.addWidget(self.logo_container)
+
+        self.chk_enable_logo.toggled.connect(self.logo_container.setEnabled)
+        self.txt_logo_path.textChanged.connect(self._update_logo_preview)
+
+        # Phân cách
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setStyleSheet("background-color: #1e293b; margin: 4px 0;")
+        branding_layout.addWidget(sep)
+
+        # === PHẦN B: HÌNH MỜ CHỮ (WATERMARK) ===
+        self.chk_enable_watermark = QCheckBox("Bật hình mờ chữ (Watermark chống reup) xuyên suốt video")
+        self.chk_enable_watermark.setStyleSheet("color: #38bdf8; font-weight: bold; font-size: 12px;")
+        branding_layout.addWidget(self.chk_enable_watermark)
+
+        self.wm_container = QWidget()
+        wm_c_layout = QVBoxLayout(self.wm_container)
+        wm_c_layout.setContentsMargins(14, 0, 0, 0)
+        wm_c_layout.setSpacing(8)
+
+        wm_row1 = QHBoxLayout()
+        wm_row1.setSpacing(8)
+        lbl_wm_text = QLabel("Chữ Watermark:")
+        lbl_wm_text.setStyleSheet("color: #d7e3f4; font-size: 11px; font-weight: 600;")
+        lbl_wm_text.setMinimumWidth(90)
+        wm_row1.addWidget(lbl_wm_text)
+
+        self.txt_watermark = QLineEdit()
+        self.txt_watermark.setPlaceholderText("Ví dụ: Nhím Review, Tên Kênh...")
+        self.txt_watermark.setStyleSheet("background-color: #1a2738; color: #f8fbff; border: 1px solid #344862; border-radius: 6px; padding: 5px 8px; font-size: 11px;")
+        wm_row1.addWidget(self.txt_watermark, 1)
+
+        lbl_wm_pos = QLabel("Vị trí:")
+        lbl_wm_pos.setStyleSheet("color: #d7e3f4; font-size: 11px;")
+        wm_row1.addWidget(lbl_wm_pos)
+
+        self.combo_watermark_pos = QComboBox()
+        self.combo_watermark_pos.addItem("Chính giữa (Center) ★ Khuyên dùng", "center")
+        self.combo_watermark_pos.addItem("Gần giữa dưới (trên phụ đề)", "center_bottom")
+        self.combo_watermark_pos.addItem("Góc trên trái (Top-Left)", "top_left")
+        self.combo_watermark_pos.addItem("Góc trên phải (Top-Right)", "top_right")
+        self.combo_watermark_pos.addItem("Góc dưới trái (Bottom-Left)", "bottom_left")
+        self.combo_watermark_pos.addItem("Góc dưới phải (Bottom-Right)", "bottom_right")
+        wm_row1.addWidget(self.combo_watermark_pos, 1)
+        wm_c_layout.addLayout(wm_row1)
+
+        wm_row2 = QHBoxLayout()
+        wm_row2.setSpacing(10)
+        lbl_wm_size = QLabel("Độ to:")
+        lbl_wm_size.setStyleSheet("color: #d7e3f4; font-size: 11px;")
+        wm_row2.addWidget(lbl_wm_size)
+
+        self.slider_watermark_size = QSlider(Qt.Horizontal)
+        self.slider_watermark_size.setRange(18, 80)
+        self.slider_watermark_size.setValue(36)
+        self.lbl_watermark_size_val = QLabel("36px")
+        self.lbl_watermark_size_val.setMinimumWidth(36)
+        self.lbl_watermark_size_val.setStyleSheet("color: #ff9d42; font-weight: bold; font-size: 11px;")
+        self.slider_watermark_size.valueChanged.connect(lambda v: self.lbl_watermark_size_val.setText(f"{v}px"))
+        wm_row2.addWidget(self.slider_watermark_size, 1)
+        wm_row2.addWidget(self.lbl_watermark_size_val)
+
+        lbl_wm_op = QLabel("Độ mờ:")
+        lbl_wm_op.setStyleSheet("color: #d7e3f4; font-size: 11px;")
+        wm_row2.addWidget(lbl_wm_op)
+
+        self.slider_watermark_opacity = QSlider(Qt.Horizontal)
+        self.slider_watermark_opacity.setRange(10, 100)
+        self.slider_watermark_opacity.setValue(35)
+        self.lbl_watermark_opacity_val = QLabel("35%")
+        self.lbl_watermark_opacity_val.setMinimumWidth(36)
+        self.lbl_watermark_opacity_val.setStyleSheet("color: #38bdf8; font-weight: bold; font-size: 11px;")
+        self.slider_watermark_opacity.valueChanged.connect(lambda v: self.lbl_watermark_opacity_val.setText(f"{v}%"))
+        wm_row2.addWidget(self.slider_watermark_opacity, 1)
+        wm_row2.addWidget(self.lbl_watermark_opacity_val)
+
+        wm_c_layout.addLayout(wm_row2)
+        branding_layout.addWidget(self.wm_container)
+
+        self.chk_enable_watermark.toggled.connect(self.wm_container.setEnabled)
+        left_layout.addWidget(branding_box)
+
+        # Nạp cài đặt branding đã lưu
+        self._load_branding_settings()
+
+        left_scroll = QScrollArea()
+        left_scroll.setWidgetResizable(True)
+        left_scroll.setFrameShape(QFrame.NoFrame)
+        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        left_scroll.setStyleSheet("background: transparent; border: none;")
+        left_scroll.setWidget(left_widget)
+        splitter.addWidget(left_scroll)
 
         # --- CỘT BÊN PHẢI: Chi tiết & Xem trước bản chọn ---
         right_widget = QWidget()
@@ -391,7 +598,7 @@ class SelectMasterDialog(QDialog):
         right_layout.addWidget(self.preview_table)
 
         splitter.addWidget(right_widget)
-        splitter.setSizes([320, 780])
+        splitter.setSizes([520, 760])
         root_layout.addWidget(splitter)
 
         # --- DÒNG NÚT BẤM DƯỚI CÙNG ---
@@ -419,89 +626,110 @@ class SelectMasterDialog(QDialog):
     def _apply_dark_style(self):
         self.setStyleSheet("""
             QDialog {
-                background-color: #0d1117;
-                color: #c9d1d9;
+                background-color: #141c2a;
+                color: #e8edf5;
+            }
+            QLabel {
+                color: #e0e6ef;
+                font-size: 12px;
             }
             QGroupBox {
-                border: 1px solid #30363d;
-                border-radius: 6px;
-                margin-top: 6px;
-                padding-top: 10px;
-                color: #8b949e;
+                border: 1px solid #3a4a62;
+                border-radius: 8px;
+                margin-top: 8px;
+                padding-top: 12px;
+                color: #ff9840;
                 font-weight: bold;
+                font-size: 12px;
+                background-color: #1a2332;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
                 subcontrol-position: top left;
-                padding: 0 4px;
+                padding: 0 6px;
+                color: #ff9840;
             }
             QListWidget {
-                background-color: #161b22;
-                border: 1px solid #30363d;
+                background-color: #1e2a3a;
+                border: 1px solid #3a4a62;
                 border-radius: 6px;
-                color: #c9d1d9;
+                color: #e8edf5;
                 padding: 4px;
+                font-size: 12px;
             }
             QListWidget::item {
-                border-bottom: 1px solid #21262d;
+                border-bottom: 1px solid #2a3a4f;
                 padding: 8px;
                 border-radius: 4px;
             }
             QListWidget::item:selected {
-                background-color: #1f6feb;
+                background-color: #2563eb;
                 color: #ffffff;
             }
+            QListWidget::item:hover {
+                background-color: #253550;
+            }
             QTableWidget {
-                background-color: #161b22;
-                border: 1px solid #30363d;
+                background-color: #1e2a3a;
+                border: 1px solid #3a4a62;
                 border-radius: 6px;
-                gridline-color: #21262d;
-                color: #e6edf3;
+                gridline-color: #2a3a4f;
+                color: #f0f4fa;
+                font-size: 12px;
             }
             QHeaderView::section {
-                background-color: #21262d;
-                color: #c9d1d9;
-                padding: 4px;
-                border: 1px solid #30363d;
+                background-color: #253550;
+                color: #e0e6ef;
+                padding: 6px;
+                border: 1px solid #3a4a62;
                 font-weight: bold;
+                font-size: 11px;
             }
             QPushButton {
-                background-color: #21262d;
-                border: 1px solid #30363d;
+                background-color: #253550;
+                border: 1px solid #3a4a62;
                 border-radius: 6px;
-                color: #c9d1d9;
+                color: #e8edf5;
                 padding: 6px 14px;
+                font-size: 12px;
             }
             QPushButton:hover {
-                background-color: #30363d;
+                background-color: #2e4268;
+                border-color: #4a6a8f;
             }
             QPushButton:disabled {
-                background-color: #161b22;
-                color: #484f58;
-                border-color: #21262d;
+                background-color: #1a2332;
+                color: #556677;
+                border-color: #2a3a4f;
             }
             QComboBox {
-                background-color: #161b22;
-                border: 1px solid #30363d;
+                background-color: #1e2a3a;
+                border: 1px solid #3a4a62;
                 border-radius: 6px;
-                color: #c9d1d9;
-                padding: 4px 8px;
-                font-size: 11px;
+                color: #f0f4fa;
+                padding: 5px 10px;
+                font-size: 12px;
+                font-weight: 600;
+            }
+            QComboBox:hover {
+                border-color: #ff9840;
             }
             QComboBox::drop-down {
                 border: none;
-                width: 18px;
+                width: 20px;
             }
             QComboBox QAbstractItemView {
-                background-color: #161b22;
-                border: 1px solid #30363d;
+                background-color: #1e2a3a;
+                border: 1px solid #3a4a62;
                 selection-background-color: #ff7b1a;
                 selection-color: #ffffff;
-                color: #c9d1d9;
+                color: #f0f4fa;
+                font-size: 12px;
+                padding: 4px;
             }
             QSlider::groove:horizontal {
-                height: 4px;
-                background: #21262d;
+                height: 5px;
+                background: #253550;
                 border-radius: 2px;
             }
             QSlider::sub-page:horizontal {
@@ -510,11 +738,19 @@ class SelectMasterDialog(QDialog):
             }
             QSlider::handle:horizontal {
                 background: #ffffff;
-                border: 1px solid #ff7b1a;
-                width: 12px;
-                margin-top: -4px;
-                margin-bottom: -4px;
-                border-radius: 6px;
+                border: 2px solid #ff7b1a;
+                width: 14px;
+                margin-top: -5px;
+                margin-bottom: -5px;
+                border-radius: 7px;
+            }
+            QScrollArea {
+                background: transparent;
+                border: none;
+            }
+            QSplitter::handle {
+                background-color: #3a4a62;
+                width: 2px;
             }
         """)
 
@@ -737,6 +973,8 @@ class SelectMasterDialog(QDialog):
                 "Vui lòng quay lại kiểm tra trước khi render video.",
             )
             return
+        # Lưu lại cấu hình Logo Thương hiệu & Watermark
+        self._save_branding_settings()
         # Cập nhật cấu hình giọng đọc vào các segment của Master Data
         if self.selected_dataset:
             self.voice_mapper.map_dataset(self.selected_dataset)
@@ -810,4 +1048,119 @@ class SelectMasterDialog(QDialog):
             "tts_percent": self.slider_tts_vol.value(),
             "preset": self.audio_mix_preset_combo.currentText(),
         }
+
+    def get_subtitle_config(self) -> SubtitleRenderConfig:
+        """Trả về cấu hình kiểu dáng phụ đề do người dùng chọn."""
+        if hasattr(self, "sub_style_group"):
+            return self.sub_style_group.get_subtitle_render_config()
+        return SubtitleRenderConfig()
+
+    def _browse_logo_file(self):
+        """Mở hộp thoại chọn file ảnh logo thương hiệu."""
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Chọn file ảnh Logo Thương hiệu",
+            os.path.dirname(self.txt_logo_path.text().strip()) if self.txt_logo_path.text().strip() else "",
+            "File hình ảnh (*.png *.jpg *.jpeg *.webp *.bmp);;Tất cả file (*.*)",
+        )
+        if path:
+            self.txt_logo_path.setText(os.path.normpath(path))
+            self.chk_enable_logo.setChecked(True)
+            self._update_logo_preview(path)
+
+    def _update_logo_preview(self, path: str = ""):
+        """Cập nhật ảnh thumbnail xem trước của Logo."""
+        img_path = (path or self.txt_logo_path.text()).strip()
+        if img_path and os.path.isfile(img_path):
+            pix = QPixmap(img_path)
+            if not pix.isNull():
+                scaled = pix.scaled(38, 38, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                self.lbl_logo_preview.setPixmap(scaled)
+                self.lbl_logo_preview.setText("")
+                self.lbl_logo_preview.setToolTip(f"Logo: {os.path.basename(img_path)}")
+                return
+        self.lbl_logo_preview.clear()
+        self.lbl_logo_preview.setText("Logo")
+        self.lbl_logo_preview.setToolTip("Chưa chọn file ảnh")
+
+    def _load_branding_settings(self):
+        """Khôi phục các cài đặt Logo & Watermark đã lưu từ trước."""
+        settings = QSettings("TankVideo", "TankVideoStudio")
+        # Brand Logo
+        enable_logo = settings.value("branding/enable_logo", False, type=bool)
+        logo_path = settings.value("branding/logo_path", "", type=str)
+        logo_pos = settings.value("branding/logo_pos", "top_left", type=str)
+        logo_size = settings.value("branding/logo_size", 15, type=int)
+        logo_op = settings.value("branding/logo_opacity", 100, type=int)
+
+        self.chk_enable_logo.setChecked(enable_logo)
+        self.logo_container.setEnabled(enable_logo)
+        if logo_path:
+            self.txt_logo_path.setText(logo_path)
+            self._update_logo_preview(logo_path)
+
+        pos_idx = self.combo_logo_pos.findData(logo_pos)
+        if pos_idx >= 0:
+            self.combo_logo_pos.setCurrentIndex(pos_idx)
+
+        self.slider_logo_size.setValue(max(5, min(35, logo_size)))
+        self.slider_logo_opacity.setValue(max(10, min(100, logo_op)))
+
+        # Watermark
+        enable_wm = settings.value("branding/enable_watermark", False, type=bool)
+        wm_text = settings.value("branding/watermark_text", "", type=str)
+        wm_pos = settings.value("branding/watermark_pos", "center", type=str)
+        wm_size = settings.value("branding/watermark_size", 36, type=int)
+        wm_op = settings.value("branding/watermark_opacity", 35, type=int)
+
+        self.chk_enable_watermark.setChecked(enable_wm)
+        self.wm_container.setEnabled(enable_wm)
+        if wm_text:
+            self.txt_watermark.setText(wm_text)
+
+        wm_pos_idx = self.combo_watermark_pos.findData(wm_pos)
+        if wm_pos_idx >= 0:
+            self.combo_watermark_pos.setCurrentIndex(wm_pos_idx)
+
+        self.slider_watermark_size.setValue(max(18, min(80, wm_size)))
+        self.slider_watermark_opacity.setValue(max(10, min(100, wm_op)))
+
+    def _save_branding_settings(self):
+        """Lưu lại cài đặt Logo & Watermark để tiện dùng cho những lần sau."""
+        settings = QSettings("TankVideo", "TankVideoStudio")
+        # Brand Logo
+        settings.setValue("branding/enable_logo", self.chk_enable_logo.isChecked())
+        settings.setValue("branding/logo_path", self.txt_logo_path.text().strip())
+        settings.setValue("branding/logo_pos", self.combo_logo_pos.currentData() or "top_left")
+        settings.setValue("branding/logo_size", self.slider_logo_size.value())
+        settings.setValue("branding/logo_opacity", self.slider_logo_opacity.value())
+
+        # Watermark
+        settings.setValue("branding/enable_watermark", self.chk_enable_watermark.isChecked())
+        settings.setValue("branding/watermark_text", self.txt_watermark.text().strip())
+        settings.setValue("branding/watermark_pos", self.combo_watermark_pos.currentData() or "center")
+        settings.setValue("branding/watermark_size", self.slider_watermark_size.value())
+        settings.setValue("branding/watermark_opacity", self.slider_watermark_opacity.value())
+
+    def get_brand_logo_settings(self) -> dict[str, Any]:
+        """Trả về cấu hình Logo thương hiệu được thiết lập."""
+        return {
+            "enable": self.chk_enable_logo.isChecked() and bool(self.txt_logo_path.text().strip()),
+            "path": self.txt_logo_path.text().strip(),
+            "position": str(self.combo_logo_pos.currentData() or "top_left"),
+            "size_percent": int(self.slider_logo_size.value()),
+            "opacity": float(self.slider_logo_opacity.value()) / 100.0,
+        }
+
+    def get_watermark_settings(self) -> dict[str, Any]:
+        """Trả về cấu hình Hình mờ chữ (Watermark) được thiết lập."""
+        return {
+            "enable": self.chk_enable_watermark.isChecked() and bool(self.txt_watermark.text().strip()),
+            "text": self.txt_watermark.text().strip(),
+            "position": str(self.combo_watermark_pos.currentData() or "center"),
+            "font_size": int(self.slider_watermark_size.value()),
+            "opacity": float(self.slider_watermark_opacity.value()) / 100.0,
+            "color": "#FFFFFF",
+        }
+
 

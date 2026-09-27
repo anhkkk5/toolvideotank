@@ -231,7 +231,7 @@ def sync_capcut_voice_to_project(
 ) -> dict[str, Any]:
     """Đồng bộ các file giọng đọc từ dự án CapCut vào dự án CapCap hiện tại."""
     if not project_state:
-        raise ValueError("Chưa mở dự án nào trong CapCap.")
+        raise ValueError("Chưa mở dự án nào trong TankVideo.")
 
     if not os.path.isdir(draft_folder):
         raise FileNotFoundError(f"Thư mục CapCut draft không tồn tại: {draft_folder}")
@@ -476,7 +476,7 @@ def export_subtitles_to_capcut_draft(
     if not draft_name:
         video_name = os.path.splitext(os.path.basename(project_state.input_video or "video"))[0]
         timestamp = time.strftime("%m%d_%H%M")
-        draft_name = f"CapCap_{video_name[:15]}_{timestamp}"
+        draft_name = f"TankVideo_{video_name[:15]}_{timestamp}"
 
     draft_folder = os.path.join(drafts_base, draft_name)
     os.makedirs(draft_folder, exist_ok=True)

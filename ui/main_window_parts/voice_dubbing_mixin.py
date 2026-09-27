@@ -1092,7 +1092,7 @@ class VoiceDubbingMixin:
             return
         if not summary:
             hint.setText(
-                "Khi có khóa OpenAI, CapCap sẽ tự phân tích số người nói trước bước chép lời; "
+                "Khi có khóa OpenAI, TankVideo sẽ tự phân tích số người nói trước bước chép lời; "
                 "nếu không, chương trình dùng Sherpa-ONNX cục bộ."
             )
             return

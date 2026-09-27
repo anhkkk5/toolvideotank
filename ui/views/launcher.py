@@ -256,6 +256,11 @@ class ProjectCard(QFrame):
             if not self.isEnabled():
                 event.ignore()
                 return
+            if getattr(LauncherWindow, "_cached_update_info", None) and LauncherWindow._cached_update_info.get("has_update"):
+                from ui.dialogs.update_dialog import UpdateDialog
+                dlg = UpdateDialog(self.window(), workspace_root=workspace_root(), mandatory=True, preloaded_info=LauncherWindow._cached_update_info)
+                dlg.exec()
+                return
             self.window().selected_video = self.video_path
             self.window().accept()
 
@@ -529,7 +534,7 @@ class LauncherWindow(QDialog):
         from runtime_paths import asset_path
         from PySide6.QtGui import QIcon
         tank_logo = asset_path("tankvideo.png")
-        logo = tank_logo if os.path.exists(tank_logo) else asset_path("capcap.png")
+        logo = tank_logo if os.path.exists(tank_logo) else asset_path("tankvideo.ico")
         if os.path.exists(logo):
             self.setWindowIcon(QIcon(logo))
 
@@ -785,6 +790,23 @@ class LauncherWindow(QDialog):
         self.project_folder_btn.clicked.connect(self._on_open_project_folder)
         toolbar_grid.addWidget(self.project_folder_btn, 1, 2)
 
+        self.download_video_btn = QPushButton("📥 Tải video MXH")
+        self.download_video_btn.setMinimumHeight(38)
+        self.download_video_btn.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0e4a6e, stop:1 #1e3a8a);
+                color: #38bdf8; font-weight: 700; font-size: 12px;
+                border-radius: 8px; border: 1px solid #0ea5e9; padding: 6px 14px;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #155e8a, stop:1 #2855a8);
+                color: #7dd3fc; border-color: #38bdf8;
+            }
+        """)
+        self.download_video_btn.setToolTip("Tải video từ YouTube, TikTok, Douyin, Bilibili, Xiaohongshu – Không logo, không watermark, HD/Full HD")
+        self.download_video_btn.clicked.connect(self._on_open_downloader)
+        toolbar_grid.addWidget(self.download_video_btn, 2, 0, 1, 3)
+
         header.addLayout(toolbar_grid)
         root.addLayout(header)
 
@@ -911,6 +933,13 @@ class LauncherWindow(QDialog):
             self.accept()
 
     def accept(self):
+        # Chặn bắt buộc cập nhật nếu có phiên bản mới
+        if getattr(LauncherWindow, "_cached_update_info", None) and LauncherWindow._cached_update_info.get("has_update"):
+            from ui.dialogs.update_dialog import UpdateDialog
+            dlg = UpdateDialog(self, workspace_root=workspace_root(), mandatory=True, preloaded_info=LauncherWindow._cached_update_info)
+            dlg.exec()
+            return
+
         if not self.selected_video or not os.path.exists(self.selected_video):
             super().accept()
             return
@@ -1196,7 +1225,9 @@ class LauncherWindow(QDialog):
 
     def _on_check_update(self):
         from ui.dialogs.update_dialog import UpdateDialog
-        dlg = UpdateDialog(self, workspace_root=workspace_root())
+        info = getattr(LauncherWindow, "_cached_update_info", None)
+        is_mand = bool(info and info.get("has_update"))
+        dlg = UpdateDialog(self, workspace_root=workspace_root(), mandatory=is_mand, preloaded_info=info)
         dlg.exec()
 
     def _check_update_quietly(self):
@@ -1204,13 +1235,21 @@ class LauncherWindow(QDialog):
         def _bg():
             try:
                 from app.services.update_service import UpdateService
-                res = UpdateService(workspace_root()).check_for_updates()
+                res = UpdateService(workspace_root()).check_for_updates(timeout=8.0)
                 if res.get("has_update"):
                     latest = str(res.get("latest_version", "") or "")
-                    QTimer.singleShot(0, lambda: self._notify_update_available(latest))
+                    LauncherWindow._cached_update_info = res
+                    QTimer.singleShot(0, lambda: self._on_mandatory_update_detected(res))
             except Exception:
                 pass
         threading.Thread(target=_bg, daemon=True).start()
+
+    def _on_mandatory_update_detected(self, info: dict):
+        latest = str(info.get("latest_version", "") or "")
+        self._notify_update_available(latest)
+        from ui.dialogs.update_dialog import UpdateDialog
+        dlg = UpdateDialog(self, workspace_root=workspace_root(), mandatory=True, preloaded_info=info)
+        dlg.exec()
 
     def _notify_update_available(self, latest_ver: str):
         if hasattr(self, "btn_update"):
@@ -1225,6 +1264,11 @@ class LauncherWindow(QDialog):
                     background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #ff8c33, stop:1 #f05400);
                 }
             """)
+
+    def _on_open_downloader(self):
+        from ui.dialogs.video_downloader_dialog import VideoDownloaderDialog
+        dlg = VideoDownloaderDialog(self, workspace_root=workspace_root())
+        dlg.exec()
 
     def _on_open_project_folder(self):
         from PySide6.QtWidgets import QMessageBox

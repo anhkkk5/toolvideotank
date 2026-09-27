@@ -35,7 +35,7 @@ class SubtitleAlignmentDialog(QDialog):
         super().__init__(parent)
         self.project_state = project_state
         self.project_service = project_service
-        self.settings = QSettings("CapCap", "Settings")
+        self.settings = QSettings("TankVideo", "Settings")
 
         self.setWindowTitle("Đối chiếu Phụ đề Song ngữ (Gốc & Đã Dịch)")
         self.setMinimumSize(960, 620)

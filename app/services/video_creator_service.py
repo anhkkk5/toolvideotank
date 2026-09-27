@@ -89,6 +89,19 @@ class VideoCreatorConfig:
     cleanup_intermediate_audio: bool = False
     enable_blur_mask: bool = True
     blur_rect: tuple[float, float, float, float] | None = None
+    # Brand logo settings
+    enable_brand_logo: bool = False
+    brand_logo_path: str = ""
+    brand_logo_position: str = "top_left"
+    brand_logo_size_percent: int = 15
+    brand_logo_opacity: float = 1.0
+    # Text watermark settings
+    enable_watermark: bool = False
+    watermark_text: str = ""
+    watermark_position: str = "center"
+    watermark_font_size: int = 36
+    watermark_opacity: float = 0.35
+    watermark_color: str = "#FFFFFF"
 
 
 @dataclass
@@ -789,6 +802,17 @@ class VideoCreatorService:
             subtitle_config=request.config.subtitle_config,
             enable_blur_mask=getattr(request.config, "enable_blur_mask", True),
             blur_rect=getattr(request.config, "blur_rect", None),
+            enable_brand_logo=getattr(request.config, "enable_brand_logo", False),
+            brand_logo_path=getattr(request.config, "brand_logo_path", ""),
+            brand_logo_position=getattr(request.config, "brand_logo_position", "top_left"),
+            brand_logo_size_percent=getattr(request.config, "brand_logo_size_percent", 15),
+            brand_logo_opacity=getattr(request.config, "brand_logo_opacity", 1.0),
+            enable_watermark=getattr(request.config, "enable_watermark", False),
+            watermark_text=getattr(request.config, "watermark_text", ""),
+            watermark_position=getattr(request.config, "watermark_position", "center"),
+            watermark_font_size=getattr(request.config, "watermark_font_size", 36),
+            watermark_opacity=getattr(request.config, "watermark_opacity", 0.35),
+            watermark_color=getattr(request.config, "watermark_color", "#FFFFFF"),
         )
 
         # ---------------------------------------------------------------------
@@ -1279,10 +1303,20 @@ class VideoCreatorService:
             return verify_error_result
 
         # Thành công toàn diện toàn bộ Pipeline E2E
+        # =====================================================================
+        # CLEANUP: Xóa thư mục session tạm (audio/TTS trung gian) để tiết kiệm ổ đĩa
+        # Chỉ giữ lại file video cuối cùng trong output
+        # =====================================================================
+        try:
+            if session_dir and os.path.isdir(session_dir):
+                shutil.rmtree(session_dir, ignore_errors=True)
+        except Exception:
+            pass  # Không để lỗi cleanup ảnh hưởng kết quả
+
         return VideoCreatorResult(
             output_video_path=export_res.output_video_path if export_res else request.output_video_path,
             output_audio_path=final_audio_path,
-            session_dir=session_dir,
+            session_dir="",  # Đã dọn dẹp
             video_duration=export_res.video_duration if export_res else 0.0,
             audio_duration=export_res.audio_duration if export_res else 0.0,
             final_video_duration=actual_final_dur,

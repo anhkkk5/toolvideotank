@@ -71,7 +71,7 @@ class CapCutSyncDialog(QDialog):
         super().__init__(parent)
         self.project_state = project_state
         self.project_service = project_service
-        self.settings = QSettings("CapCap", "Settings")
+        self.settings = QSettings("TankVideo", "Settings")
 
         self.setWindowTitle("Đồng bộ giọng đọc từ CapCut PC")
         self.setMinimumSize(680, 520)
