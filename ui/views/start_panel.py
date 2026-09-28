@@ -1718,7 +1718,10 @@ def build_start_group(gui, left_layout):
     try:
         from views.batch_panel import build_batch_panel
         batch_page = build_batch_panel(gui)
-    except Exception:
+    except Exception as _e:
+        import traceback as _tb
+        print(f"[WARN] Batch panel import failed: {_e}")
+        _tb.print_exc()
         batch_page = QWidget()  # fallback nếu import lỗi
     gui.left_master_stack.addWidget(batch_page)       # 8: batch
 

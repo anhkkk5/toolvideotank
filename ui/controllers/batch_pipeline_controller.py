@@ -38,7 +38,6 @@ from typing import Optional, Callable
 from PySide6.QtCore import QObject, QThread, Signal, Slot, QTimer
 
 from models.pipeline_context import PipelineContext, VideoWorkspace
-from runtime_paths import subprocess_hidden_kwargs
 
 
 class PipelineWorker(QThread):
@@ -180,6 +179,7 @@ class PipelineWorker(QThread):
         env["PYTHONIOENCODING"] = "utf-8"
         env["CAPCAP_DEVICE"] = os.getenv("CAPCAP_DEVICE", "cpu").strip().lower()
 
+        from runtime_paths import subprocess_hidden_kwargs
         process_kwargs = subprocess_hidden_kwargs()
         if os.name == "nt":
             process_kwargs["creationflags"] = int(process_kwargs.get("creationflags", 0)) | getattr(
@@ -319,6 +319,7 @@ class PipelineWorker(QThread):
             return
         try:
             if os.name == "nt":
+                from runtime_paths import subprocess_hidden_kwargs
                 subprocess.run(
                     ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
                     stdout=subprocess.DEVNULL,
