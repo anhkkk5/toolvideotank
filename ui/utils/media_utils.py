@@ -475,7 +475,12 @@ def import_multi_media_files(gui):
         path = os.path.abspath(path)
         existing = next((item for item in gui.project_media_pool if os.path.normpath(item["path"]) == os.path.normpath(path)), None)
         if not existing:
-            dur_s, thumb_p = probe_video_duration_and_thumb(path, thumb_dir)
+            print(f"[MediaPool] Importing: {path}")
+            try:
+                dur_s, thumb_p = probe_video_duration_and_thumb(path, thumb_dir)
+            except Exception as _exc:
+                print(f"[MediaPool] ERROR probing {path}: {_exc}")
+                dur_s, thumb_p = 0.0, ""
             total_s = int(dur_s)
             m = total_s // 60
             s = total_s % 60
@@ -487,9 +492,15 @@ def import_multi_media_files(gui):
                 "duration_str": f"{m:02d}:{s:02d}",
                 "thumb_path": thumb_p,
                 "is_on_timeline": False,
+                "type": "video",
             }
             gui.project_media_pool.append(item)
             newly_added.append(item)
+            print(f"[MediaPool] Added to pool: {item['name']} (pool size: {len(gui.project_media_pool)})")
+        else:
+            print(f"[MediaPool] Already exists: {path}")
+
+    print(f"[MediaPool] newly_added={len(newly_added)}, has_active={has_active_video}, pool_size={len(gui.project_media_pool)}")
 
     # Nếu chưa có video nào đang mở trên timeline: khởi tạo video đầu tiên
     if not has_active_video and newly_added:
@@ -506,6 +517,7 @@ def import_multi_media_files(gui):
             append_video_to_timeline(gui, item["path"])
 
     if hasattr(gui, "_refresh_media_pool_ui"):
+        print(f"[MediaPool] Calling _refresh_media_pool_ui()")
         gui._refresh_media_pool_ui()
 
 

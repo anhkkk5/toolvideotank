@@ -313,6 +313,10 @@ def _build_resource_media_card(gui):
             if w is not None:
                 w.deleteLater()
 
+        # Reset tất cả row stretch cũ
+        for row_i in range(pool_grid.rowCount()):
+            pool_grid.setRowStretch(row_i, 0)
+
         pool = getattr(gui, "project_media_pool", [])
         # Nếu pool rỗng nhưng có video đang mở, tạo item đại diện
         if not pool and hasattr(gui, "_current_video_path") and gui._current_video_path and os.path.exists(gui._current_video_path):
@@ -371,7 +375,21 @@ def _build_resource_media_card(gui):
         c_ai = ai_idx % cols
         ai_card = _build_ai_generate_card()
         pool_grid.addWidget(ai_card, r_ai, c_ai)
-        pool_grid.setRowStretch(r_ai + 1, 1)
+
+        # Tính chiều cao tối thiểu cho pool_content dựa trên số hàng
+        total_items = len(filtered_items) + 1  # +1 cho AI card
+        num_rows = (total_items + cols - 1) // cols
+        card_height = 94
+        spacing = pool_grid.spacing()
+        margins = pool_grid.contentsMargins()
+        min_h = num_rows * card_height + max(0, num_rows - 1) * spacing + margins.top() + margins.bottom()
+        pool_content.setMinimumHeight(min_h)
+
+        # Force Qt layout update
+        pool_grid.invalidate()
+        pool_grid.activate()
+        pool_content.updateGeometry()
+        pool_content.update()
 
     def _build_media_item_card(item_data, timeline_video_paths):
         item_path = item_data.get("path", "")
