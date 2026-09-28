@@ -236,11 +236,15 @@ def get_available_browsers() -> list:
     return browsers
 
 
-def create_headless_driver(preferred_browser_id: Optional[str] = None):
+def create_headless_driver(
+    preferred_browser_id: Optional[str] = None,
+    user_agent: Optional[str] = None,
+    enable_images: bool = False,
+):
     """Create a high-performance headless Selenium WebDriver using an installed browser.
 
     Supports Cốc Cốc, Google Chrome, Microsoft Edge, and Brave.
-    Uses 'eager' page load strategy and disables images for 5-10x faster scraping.
+    Uses 'eager' page load strategy. Disables images by default for faster scraping.
     Returns (driver, browser_name) or raises RuntimeError.
     """
     from selenium import webdriver
@@ -280,7 +284,10 @@ def create_headless_driver(preferred_browser_id: Optional[str] = None):
                 options.add_argument("--disable-gpu")
                 options.add_argument("--window-size=1280,720")
                 options.add_argument("--lang=zh-CN")
-                options.add_argument("--blink-settings=imagesEnabled=false")
+                if user_agent:
+                    options.add_argument(f"--user-agent={user_agent}")
+                if not enable_images:
+                    options.add_argument("--blink-settings=imagesEnabled=false")
                 options.add_argument("--disable-blink-features=AutomationControlled")
                 options.add_experimental_option("excludeSwitches", ["enable-automation"])
                 options.add_experimental_option("useAutomationExtension", False)
@@ -297,7 +304,10 @@ def create_headless_driver(preferred_browser_id: Optional[str] = None):
                 options.add_argument("--disable-gpu")
                 options.add_argument("--window-size=1280,720")
                 options.add_argument("--lang=zh-CN")
-                options.add_argument("--blink-settings=imagesEnabled=false")
+                if user_agent:
+                    options.add_argument(f"--user-agent={user_agent}")
+                if not enable_images:
+                    options.add_argument("--blink-settings=imagesEnabled=false")
                 options.add_argument("--disable-blink-features=AutomationControlled")
                 options.add_experimental_option("excludeSwitches", ["enable-automation"])
                 options.add_experimental_option("useAutomationExtension", False)
@@ -324,6 +334,15 @@ def _get_douyin_cookie_file(cache_dir: str, preferred_browser: Optional[str] = N
       1. Selenium headless (Cốc Cốc, Chrome, Edge)
       2. urllib-based ttwid fetch (fallback)
     """
+    # 0. Check custom saved cookies (from ATP Cookie / user paste)
+    try:
+        from app.services.cookie_storage_service import get_saved_douyin_cookies
+        _, custom_cookie_path, _ = get_saved_douyin_cookies()
+        if custom_cookie_path and os.path.exists(custom_cookie_path):
+            return custom_cookie_path
+    except Exception:
+        pass
+
     cookie_path = os.path.join(cache_dir, "douyin_cookies.txt")
 
     # Reuse existing cookies if fresh (< 2 hours)
@@ -487,10 +506,35 @@ def _scrape_douyin_user_videos(
         p.title = "Đang khởi động trình duyệt để đọc thông tin kênh..."
         progress_callback(p)
 
-    driver, browser_name = create_headless_driver(preferred_browser)
+    custom_cookies = []
+    user_agent = None
+    try:
+        from app.services.cookie_storage_service import get_saved_douyin_cookies
+        custom_cookies, _, user_agent = get_saved_douyin_cookies()
+    except Exception:
+        pass
+
+    driver, browser_name = create_headless_driver(
+        preferred_browser,
+        user_agent=None,
+        enable_images=True,
+    )
     print(f"[VideoDownloader] Scraping Douyin profile with {browser_name}...")
 
     try:
+        # Pre-inject cookies before loading profile
+        if custom_cookies:
+            try:
+                driver.get("https://www.douyin.com/robots.txt")
+                cdp_cookies = [
+                    {"name": c["name"], "value": c["value"], "domain": ".douyin.com", "path": "/"}
+                    for c in custom_cookies
+                ]
+                driver.execute_cdp_cmd("Network.setCookies", {"cookies": cdp_cookies})
+                print(f"[VideoDownloader] Injected {len(cdp_cookies)} cookies for channel scraping")
+            except Exception as e:
+                print(f"[VideoDownloader] Channel cookie inject notice: {e}")
+
         if progress_callback:
             p = DownloadProgress()
             p.status = "downloading"
@@ -617,9 +661,351 @@ def _sanitize_filename(name: str) -> str:
     return name[:200] if name else "video"
 
 
+
 # ---------------------------------------------------------------------------
 # Core downloader
 # ---------------------------------------------------------------------------
+
+# JavaScript hook that captures Douyin API responses (aweme/detail, aweme/related)
+# This hook is injected before any page navigation so it intercepts all fetch/XHR
+# calls made by Douyin's JS SDK (which includes proper Argus signatures).
+_DOUYIN_XHR_HOOK_SCRIPT = """
+window.__captured_responses = [];
+
+// Hook fetch
+const originalFetch = window.fetch;
+window.fetch = async function(...args) {
+    const response = await originalFetch.apply(this, args);
+    const url = typeof args[0] === 'string' ? args[0] : args[0]?.url || '';
+    if (url.includes('aweme/detail') || url.includes('aweme/post') ||
+        url.includes('play_addr') || url.includes('aweme/v1')) {
+        try {
+            const clone = response.clone();
+            const text = await clone.text();
+            window.__captured_responses.push({
+                url: url, status: response.status, body: text, timestamp: Date.now()
+            });
+        } catch(e) {}
+    }
+    return response;
+};
+
+// Hook XMLHttpRequest
+const originalXHROpen = XMLHttpRequest.prototype.open;
+const originalXHRSend = XMLHttpRequest.prototype.send;
+XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+    this._interceptUrl = url;
+    return originalXHROpen.apply(this, [method, url, ...rest]);
+};
+XMLHttpRequest.prototype.send = function(...args) {
+    if (this._interceptUrl && (
+        this._interceptUrl.includes('aweme/detail') ||
+        this._interceptUrl.includes('aweme/post') ||
+        this._interceptUrl.includes('aweme/v1'))) {
+        this.addEventListener('load', function() {
+            try {
+                window.__captured_responses.push({
+                    url: this._interceptUrl, status: this.status,
+                    body: this.responseText, timestamp: Date.now()
+                });
+            } catch(e) {}
+        });
+    }
+    return originalXHRSend.apply(this, args);
+};
+"""
+
+
+def _extract_video_info_from_douyin_response(response_body: str) -> Optional[dict]:
+    """Parse a Douyin aweme API response body and return video download info.
+
+    Returns dict with keys: aweme_id, desc, play_urls, download_urls, duration
+    or None if no usable data is found.
+    """
+    try:
+        data = json.loads(response_body)
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+    # Try to find aweme_detail or aweme_list in the response
+    aweme = data.get("aweme_detail") or (data.get("aweme_list", [{}])[0] if data.get("aweme_list") else None) if isinstance(data, dict) else None
+    if not aweme:
+        # Check nested structures
+        for key in (data if isinstance(data, dict) else {}):
+            val = data[key]
+            if isinstance(val, dict):
+                if "aweme_detail" in val:
+                    aweme = val["aweme_detail"]
+                    break
+                elif "aweme_list" in val and val["aweme_list"]:
+                    aweme = val["aweme_list"][0]
+                    break
+
+    if not aweme:
+        return None
+
+    video = aweme.get("video", {})
+    desc = aweme.get("desc", "")
+    aweme_id = aweme.get("aweme_id", "")
+
+    play_addr = video.get("play_addr", {})
+    play_urls = play_addr.get("url_list", [])
+    download_addr = video.get("download_addr", {})
+    download_urls = download_addr.get("url_list", [])
+
+    if not play_urls and not download_urls:
+        return None
+
+    return {
+        "aweme_id": aweme_id,
+        "desc": desc,
+        "play_urls": play_urls,
+        "download_urls": download_urls,
+        "duration": video.get("duration", 0),
+    }
+
+
+def _download_douyin_via_browser(
+    video_urls: list,
+    output_dir: str,
+    progress_callback: Optional[Callable] = None,
+    preferred_browser: Optional[str] = None,
+    cancel_flag: Optional[threading.Event] = None,
+) -> dict:
+    """Download Douyin videos by intercepting browser API responses.
+
+    This approach works by:
+    1. Injecting XHR/fetch hooks via CDP Page.addScriptToEvaluateOnNewDocument
+    2. Navigating to each video page (triggering Douyin's JS to call the API
+       with proper Argus signatures)
+    3. Capturing the API response containing video CDN URLs
+    4. Downloading the video file directly from the CDN
+
+    Args:
+        video_urls: List of Douyin video URLs (https://www.douyin.com/video/ID)
+        output_dir: Directory to save downloaded videos
+        progress_callback: Optional callback for progress updates
+        preferred_browser: Browser preference (coccoc, chrome, edge, auto)
+        cancel_flag: Optional threading.Event to signal cancellation
+
+    Returns:
+        dict with keys: success, files, downloaded, total, error
+    """
+    import urllib.request
+
+    os.makedirs(output_dir, exist_ok=True)
+    result = {
+        "success": False,
+        "files": [],
+        "downloaded": 0,
+        "total": len(video_urls),
+        "error": "",
+    }
+
+    if not video_urls:
+        result["error"] = "Không có video URL nào để tải."
+        return result
+
+    # Load custom cookies if available
+    custom_cookies = []
+    user_agent = None
+    try:
+        from app.services.cookie_storage_service import get_saved_douyin_cookies
+        custom_cookies, _, user_agent = get_saved_douyin_cookies()
+    except Exception:
+        pass
+
+    # Create browser with XHR hooks
+    driver, browser_name = create_headless_driver(
+        preferred_browser,
+        user_agent=None,
+        enable_images=True,
+    )
+    print(f"[VideoDownloader] Douyin browser download using {browser_name}")
+
+    try:
+        # Install XHR/fetch hooks BEFORE any page loads
+        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+            "source": _DOUYIN_XHR_HOOK_SCRIPT
+        })
+
+        # Warm up & inject cookies
+        try:
+            driver.get("https://www.douyin.com/robots.txt")
+            if custom_cookies:
+                cdp_cookies = [
+                    {"name": c["name"], "value": c["value"], "domain": ".douyin.com", "path": "/"}
+                    for c in custom_cookies
+                ]
+                driver.execute_cdp_cmd("Network.setCookies", {"cookies": cdp_cookies})
+                print(f"[VideoDownloader] Injected {len(cdp_cookies)} cookies for video download")
+            time.sleep(1)
+        except Exception:
+            pass
+
+        for idx, video_url in enumerate(video_urls, 1):
+            if cancel_flag and cancel_flag.is_set():
+                result["error"] = "Đã hủy tải"
+                break
+
+            # Extract video ID from URL for filename
+            vid_match = re.search(r'/video/(\d+)', video_url)
+            vid_id = vid_match.group(1) if vid_match else f"video_{idx}"
+
+            if progress_callback:
+                p = DownloadProgress()
+                p.status = "downloading"
+                p.title = f"Đang tải video {idx}/{len(video_urls)}: {vid_id}"
+                p.video_index = idx
+                p.video_total = len(video_urls)
+                p.percent = 0
+                progress_callback(p)
+
+            print(f"[VideoDownloader] [{idx}/{len(video_urls)}] Loading {video_url}")
+
+            try:
+                driver.get(video_url)
+                time.sleep(6)
+            except Exception as e:
+                print(f"[VideoDownloader] Page load notice: {e}")
+
+            # Retrieve captured API responses
+            try:
+                captured = driver.execute_script(
+                    "return window.__captured_responses || [];"
+                )
+            except Exception:
+                captured = []
+
+            # Find the video info from captured responses
+            video_info = None
+            for resp in captured:
+                if resp.get("status") != 200:
+                    continue
+                resp_url = resp.get("url", "")
+                body = resp.get("body", "")
+                # Prefer aweme/detail over aweme/related
+                if "aweme/detail" in resp_url and len(body) > 100:
+                    info = _extract_video_info_from_douyin_response(body)
+                    if info and info.get("play_urls"):
+                        video_info = info
+                        break
+
+            # Fallback: try aweme/related responses
+            if not video_info:
+                for resp in captured:
+                    if resp.get("status") != 200:
+                        continue
+                    body = resp.get("body", "")
+                    if len(body) > 100:
+                        info = _extract_video_info_from_douyin_response(body)
+                        if info and info.get("play_urls"):
+                            video_info = info
+                            break
+
+            if not video_info:
+                print(f"[VideoDownloader] Could not extract video info for {vid_id}")
+                continue
+
+            # Determine filename
+            desc = _sanitize_filename(video_info.get("desc", ""))
+            if desc and len(desc) > 5:
+                filename = f"{desc}.mp4"
+            else:
+                filename = f"{vid_id}.mp4"
+            output_path = os.path.join(output_dir, filename)
+
+            # Choose best download URL (play_urls first, then download_urls)
+            download_url = (
+                video_info["play_urls"][0] if video_info.get("play_urls")
+                else video_info["download_urls"][0] if video_info.get("download_urls")
+                else None
+            )
+
+            if not download_url:
+                print(f"[VideoDownloader] No download URL for {vid_id}")
+                continue
+
+            if progress_callback:
+                p = DownloadProgress()
+                p.status = "downloading"
+                p.title = desc or vid_id
+                p.video_index = idx
+                p.video_total = len(video_urls)
+                p.percent = 50
+                progress_callback(p)
+
+            # Download the video file
+            try:
+                req = urllib.request.Request(download_url)
+                req.add_header("User-Agent",
+                               "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                               "AppleWebKit/537.36 (KHTML, like Gecko) "
+                               "Chrome/120.0.0.0 Safari/537.36")
+                req.add_header("Referer", "https://www.douyin.com/")
+
+                with urllib.request.urlopen(req, timeout=120) as resp:
+                    total_size = int(resp.headers.get("Content-Length", 0))
+                    downloaded = 0
+                    chunk_size = 1024 * 256  # 256 KB chunks
+                    start_time = time.time()
+
+                    with open(output_path, "wb") as f:
+                        while True:
+                            if cancel_flag and cancel_flag.is_set():
+                                raise Exception("Đã hủy tải")
+                            chunk = resp.read(chunk_size)
+                            if not chunk:
+                                break
+                            f.write(chunk)
+                            downloaded += len(chunk)
+
+                            if progress_callback and total_size > 0:
+                                p = DownloadProgress()
+                                p.status = "downloading"
+                                p.title = desc or vid_id
+                                p.video_index = idx
+                                p.video_total = len(video_urls)
+                                p.downloaded_bytes = downloaded
+                                p.total_bytes = total_size
+                                p.percent = (downloaded / total_size) * 100
+                                elapsed = time.time() - start_time
+                                p.speed = downloaded / elapsed if elapsed > 0 else 0
+                                if p.speed > 0:
+                                    p.eta = int((total_size - downloaded) / p.speed)
+                                progress_callback(p)
+
+                file_size = os.path.getsize(output_path)
+                if file_size > 1024:  # At least 1KB (not an error page)
+                    result["files"].append(output_path)
+                    result["downloaded"] += 1
+                    print(f"[VideoDownloader] ✓ Downloaded {filename} "
+                          f"({file_size / 1024 / 1024:.1f} MB)")
+                else:
+                    os.remove(output_path)
+                    print(f"[VideoDownloader] ✗ File too small, removed: {filename}")
+
+            except Exception as dl_exc:
+                err = str(dl_exc)
+                if "Đã hủy tải" in err:
+                    result["error"] = "Đã hủy tải"
+                    break
+                print(f"[VideoDownloader] ✗ Download failed for {vid_id}: {dl_exc}")
+                if os.path.exists(output_path):
+                    try:
+                        os.remove(output_path)
+                    except OSError:
+                        pass
+
+    finally:
+        try:
+            driver.quit()
+        except Exception:
+            pass
+
+    result["success"] = result["downloaded"] > 0
+    return result
+
 
 class DownloadProgress:
     """Container for download progress info."""
@@ -763,9 +1149,44 @@ class VideoDownloaderService:
 
         except Exception as exc:
             err_msg = str(exc)
-            result["error"] = err_msg
+            # -----------------------------------------------------------
+            # Douyin fallback: yt-dlp often fails due to Argus signature.
+            # Retry with browser-based XHR intercept approach.
+            # -----------------------------------------------------------
+            if platform == "douyin":
+                print(f"[VideoDownloader] yt-dlp failed for Douyin: {err_msg}")
+                print(f"[VideoDownloader] Falling back to browser intercept...")
+                if progress_callback:
+                    p = DownloadProgress()
+                    p.status = "downloading"
+                    p.title = "yt-dlp thất bại – Đang thử tải qua trình duyệt..."
+                    p.video_index = 1
+                    p.video_total = 1
+                    progress_callback(p)
+
+                browser_result = _download_douyin_via_browser(
+                    [url],
+                    output_dir,
+                    progress_callback=progress_callback,
+                    preferred_browser=self.preferred_browser,
+                    cancel_flag=self._cancel_flag,
+                )
+                if browser_result["success"]:
+                    result["success"] = True
+                    result["files"] = browser_result["files"]
+                    result["error"] = ""
+                    return result
+                else:
+                    # Both methods failed
+                    result["error"] = (
+                        f"yt-dlp: {err_msg}\n"
+                        f"Browser: {browser_result.get('error', 'Không tải được')}"
+                    )
+            else:
+                result["error"] = err_msg
+
             progress.status = "error"
-            progress.error = err_msg
+            progress.error = result["error"]
             if progress_callback:
                 progress_callback(progress)
 
@@ -912,6 +1333,43 @@ class VideoDownloaderService:
         progress.video_total = total
 
         # --- Step 2: Download each video ---
+        # For Douyin: use browser-based XHR intercept (yt-dlp always fails
+        # due to Argus signature requirements)
+        if platform == "douyin":
+            video_urls = [
+                entry.get("url") or entry.get("webpage_url") or ""
+                for entry in entries
+            ]
+            video_urls = [v for v in video_urls if v]  # filter empties
+
+            if progress_callback:
+                p = DownloadProgress()
+                p.status = "downloading"
+                p.title = f"Đang tải {len(video_urls)} video Douyin qua trình duyệt..."
+                p.video_total = len(video_urls)
+                progress_callback(p)
+
+            browser_result = _download_douyin_via_browser(
+                video_urls,
+                channel_dir,
+                progress_callback=progress_callback,
+                preferred_browser=self.preferred_browser,
+                cancel_flag=self._cancel_flag,
+            )
+
+            result["files"] = browser_result.get("files", [])
+            result["downloaded"] = browser_result.get("downloaded", 0)
+            result["success"] = browser_result.get("success", False)
+            result["error"] = browser_result.get("error", "")
+
+            progress.status = "finished" if result["success"] else "error"
+            progress.percent = 100
+            if progress_callback:
+                progress_callback(progress)
+
+            return result
+
+        # Non-Douyin platforms: use yt-dlp as usual
         def _hook(d):
             if self._cancel_flag.is_set():
                 raise Exception("Đã hủy tải")
@@ -936,17 +1394,6 @@ class VideoDownloaderService:
             "noprogress": True,
             "extractor_args": {"tiktok": ["app_version=0"]},
         }
-        if platform == "douyin":
-            dl_opts["format"] = "best[vcodec^=avc]/best[vcodec!=?hevc]/best"
-            dl_opts["format_sort"] = ["vcodec:h264"]
-            dl_opts["http_headers"] = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                              "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            }
-            cookie_dir = os.path.join(output_base_dir, ".cache")
-            cookie_file = _get_douyin_cookie_file(cookie_dir, preferred_browser=self.preferred_browser)
-            if cookie_file:
-                dl_opts["cookiefile"] = cookie_file
 
         downloaded_count = 0
         for idx, entry in enumerate(entries, 1):
