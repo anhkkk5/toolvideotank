@@ -2010,40 +2010,50 @@ class OcrSubtitleMixin:
         overlay = getattr(self, "ocr_region_overlay", None)
         if overlay is None:
             return
-        is_ocr = os.getenv("TRANSCRIPTION_ENGINE", _default_asr_engine()).strip().lower() == "ocr"
-        alternate_ocr_active = bool(getattr(self, "_alternate_ocr_range_pending", None))
-        btn = getattr(self, "ocr_region_btn", None)
-        if btn:
-            btn.setVisible(is_ocr)
-            btn.blockSignals(True)
-            btn.setChecked(bool(getattr(self, "_ocr_overlay_visible", True)))
-            btn.blockSignals(False)
-        if not is_ocr and not alternate_ocr_active:
-            overlay._requested_visible = False
-            overlay.hide()
-            overlay.set_editable(False)
-        else:
-            overlay._requested_visible = bool(alternate_ocr_active or getattr(self, "_ocr_overlay_visible", True))
-            if bool(alternate_ocr_active or getattr(self, "_ocr_overlay_visible", True)):
-                overlay.set_editable(True)
-                overlay.sync_to_view()
-            else:
-                overlay.set_editable(False)
+        try:
+            is_ocr = os.getenv("TRANSCRIPTION_ENGINE", _default_asr_engine()).strip().lower() == "ocr"
+            alternate_ocr_active = bool(getattr(self, "_alternate_ocr_range_pending", None))
+            btn = getattr(self, "ocr_region_btn", None)
+            if btn:
+                btn.setVisible(is_ocr)
+                btn.blockSignals(True)
+                btn.setChecked(bool(getattr(self, "_ocr_overlay_visible", True)))
+                btn.blockSignals(False)
+            if not is_ocr and not alternate_ocr_active:
+                overlay._requested_visible = False
                 overlay.hide()
+                overlay.set_editable(False)
+            else:
+                overlay._requested_visible = bool(alternate_ocr_active or getattr(self, "_ocr_overlay_visible", True))
+                if bool(alternate_ocr_active or getattr(self, "_ocr_overlay_visible", True)):
+                    overlay.set_editable(True)
+                    overlay.sync_to_view()
+                else:
+                    overlay.set_editable(False)
+                    overlay.hide()
+        except RuntimeError:
+            self.ocr_region_overlay = None
+        except Exception:
+            pass
 
 
     def toggle_ocr_overlay_visibility(self, checked: bool):
         self._ocr_overlay_visible = bool(checked)
         overlay = getattr(self, "ocr_region_overlay", None)
         if overlay is not None:
-            overlay._requested_visible = bool(checked)
-            overlay.set_editable(bool(checked))
-            if checked:
-                overlay.sync_to_view()
-                overlay.raise_()
-                QTimer.singleShot(0, overlay.sync_to_view)
-            else:
-                overlay.hide()
+            try:
+                overlay._requested_visible = bool(checked)
+                overlay.set_editable(bool(checked))
+                if checked:
+                    overlay.sync_to_view()
+                    overlay.raise_()
+                    QTimer.singleShot(0, overlay.sync_to_view)
+                else:
+                    overlay.hide()
+            except RuntimeError:
+                self.ocr_region_overlay = None
+            except Exception:
+                pass
         self._update_ocr_overlay()
 
 

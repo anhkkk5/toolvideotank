@@ -192,7 +192,7 @@ def _update_device_label(gui):
 
 def _build_resource_media_card(gui):
     from PySide6.QtWidgets import QScrollArea
-    from views.editor.timeline_models import LayerType
+    from app.layers.base import LayerType
     from utils.media_utils import import_multi_media_files, append_video_to_timeline
 
     card = QFrame()
