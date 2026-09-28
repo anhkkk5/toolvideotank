@@ -1169,16 +1169,17 @@ def build_preview_panel(gui, left_panel=None):
     gui.timeline_zoom_out_btn.setFixedSize(22, 22)
     gui.timeline_zoom_out_btn.setStyleSheet(tb_btn_style)
     gui.timeline_zoom_slider = QSlider(Qt.Horizontal)
-    gui.timeline_zoom_slider.setRange(30, 500)
-    gui.timeline_zoom_slider.setValue(100)
+    gui.timeline_zoom_slider.setRange(1, 350)
+    gui.timeline_zoom_slider.setValue(int(getattr(gui.timeline, "pixels_per_second", 80)))
     gui.timeline_zoom_slider.setFixedWidth(75)
     gui.timeline_zoom_slider.setToolTip("Thu phóng trục thời gian (Ctrl + Con lăn chuột)")
-    gui.timeline_zoom_slider.valueChanged.connect(gui.timeline.set_pixels_per_second)
+    gui.timeline_zoom_slider.valueChanged.connect(lambda val: gui.timeline.set_pixels_per_second(float(val)))
     gui.timeline.zoomChanged.connect(
-        lambda _val: (
+        lambda val: (
             gui.timeline_zoom_slider.blockSignals(True),
-            gui.timeline_zoom_slider.setValue(getattr(gui.timeline, "pixels_per_second", 100)),
+            gui.timeline_zoom_slider.setValue(int(round(getattr(gui.timeline, "pixels_per_second", 80)))),
             gui.timeline_zoom_slider.blockSignals(False),
+            gui.timeline_zoom_label.setText(f"{val}%"),
         )
     )
     gui.timeline_zoom_label = QLabel(f"{gui.timeline.zoom_percent()}%")
@@ -1186,16 +1187,18 @@ def build_preview_panel(gui, left_panel=None):
     gui.timeline_zoom_label.setAlignment(Qt.AlignCenter)
     gui.timeline_zoom_label.setFixedWidth(38)
     gui.timeline_zoom_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+    gui.timeline_zoom_label.setToolTip("Nhấp đúp để đặt lại 100%")
+    gui.timeline_zoom_label.mouseDoubleClickEvent = lambda _e: gui.timeline.reset_zoom()
     gui.timeline_zoom_in_btn = QPushButton("+")
     gui.timeline_zoom_in_btn.setFixedSize(22, 22)
     gui.timeline_zoom_in_btn.setStyleSheet(tb_btn_style)
     gui.timeline_zoom_reset_btn = QPushButton("Vừa")
     gui.timeline_zoom_reset_btn.setFixedSize(38, 24)
     gui.timeline_zoom_reset_btn.setStyleSheet(tb_btn_style)
-    gui.timeline_zoom_reset_btn.setToolTip("Căn vừa timeline với độ rộng khung nhìn")
+    gui.timeline_zoom_reset_btn.setToolTip("Căn vừa toàn bộ video với độ rộng màn hình (Fit to Window)")
     gui.timeline_zoom_out_btn.clicked.connect(gui.timeline.zoom_out)
     gui.timeline_zoom_in_btn.clicked.connect(gui.timeline.zoom_in)
-    gui.timeline_zoom_reset_btn.clicked.connect(gui.timeline.reset_zoom)
+    gui.timeline_zoom_reset_btn.clicked.connect(gui.timeline.fit_timeline)
 
     # Dãy nút bên trái (Tools)
     timeline_header_layout.addWidget(gui.timeline_undo_btn)
@@ -2035,7 +2038,149 @@ def build_preview_panel(gui, left_panel=None):
     gui.subtitle_inspector_shell = inspector_shell
     inspector_shell.hide()
 
-    # --- TOP STAGE SPLITTER: [Left Panel (Voice/Media)] + [Center (Video Preview)] ---
+    # --- RIGHT STUDIO PANEL (Phụ đề, Thuộc tính, Hòa trộn, Hiệu ứng - Chuẩn Ảnh 4) ---
+    right_studio_panel = QFrame()
+    right_studio_panel.setObjectName("rightStudioPanel")
+    right_studio_panel.setMinimumWidth(300)
+    right_studio_panel.setMaximumWidth(520)
+    right_studio_panel.setStyleSheet(
+        "QFrame#rightStudioPanel { background: #141519; border: 1px solid #27282d; border-radius: 4px; }"
+    )
+    studio_vbox = QVBoxLayout(right_studio_panel)
+    studio_vbox.setContentsMargins(6, 6, 6, 6)
+    studio_vbox.setSpacing(6)
+
+    # 1. Header Tabs
+    tab_bar_layout = QHBoxLayout()
+    tab_bar_layout.setContentsMargins(2, 2, 2, 2)
+    tab_bar_layout.setSpacing(12)
+
+    tab_btn_style_active = (
+        "QPushButton { background: transparent; color: #ffffff; font-weight: 700; font-size: 12px; "
+        "border: none; border-bottom: 2px solid #ff7b1a; padding: 4px 6px; }"
+    )
+    tab_btn_style_inactive = (
+        "QPushButton { background: transparent; color: #71717a; font-weight: 500; font-size: 12px; "
+        "border: none; border-bottom: 2px solid transparent; padding: 4px 6px; } "
+        "QPushButton:hover { color: #d4d4d8; }"
+    )
+
+    btn_tab_sub = QPushButton("Phụ đề")
+    btn_tab_blend = QPushButton("Hòa trộn")
+    btn_tab_effect = QPushButton("Hiệu ứng")
+    btn_tab_sub.setStyleSheet(tab_btn_style_active)
+    btn_tab_blend.setStyleSheet(tab_btn_style_inactive)
+    btn_tab_effect.setStyleSheet(tab_btn_style_inactive)
+
+    tab_bar_layout.addWidget(btn_tab_sub)
+    tab_bar_layout.addWidget(btn_tab_blend)
+    tab_bar_layout.addWidget(btn_tab_effect)
+    tab_bar_layout.addStretch(1)
+    studio_vbox.addLayout(tab_bar_layout)
+
+    # Stacked Widget cho 3 tab
+    studio_stack = QStackedWidget()
+    studio_vbox.addWidget(studio_stack, 1)
+
+    # --- TAB 0: Phụ đề & Thuộc tính (Ảnh 4) ---
+    tab_sub_widget = QWidget()
+    tab_sub_layout = QVBoxLayout(tab_sub_widget)
+    tab_sub_layout.setContentsMargins(0, 0, 0, 0)
+    tab_sub_layout.setSpacing(6)
+
+    gui.subtitle_list_view = SubtitleListView(gui)
+    tab_sub_layout.addWidget(gui.subtitle_list_view, 1)
+
+    # Card Thuộc tính (Tỉ lệ 9:16, 16:9, 1:1)
+    prop_card = QFrame()
+    prop_card.setStyleSheet("background: #18191d; border: 1px solid #27282d; border-radius: 4px;")
+    prop_layout = QVBoxLayout(prop_card)
+    prop_layout.setContentsMargins(8, 6, 8, 6)
+    prop_layout.setSpacing(6)
+
+    prop_header = QHBoxLayout()
+    prop_header.setSpacing(6)
+    prop_title = QLabel("Thuộc tính")
+    prop_title.setStyleSheet("font-weight: 700; font-size: 11px; color: #ffffff;")
+    prop_header.addWidget(prop_title)
+    prop_header.addStretch(1)
+    prop_layout.addLayout(prop_header)
+
+    ratio_title_lbl = QLabel("Tỉ: Tok ra")
+    ratio_title_lbl.setStyleSheet("color: #a1a1aa; font-size: 10px; font-weight: 600;")
+    prop_layout.addWidget(ratio_title_lbl)
+
+    ratio_btn_row = QHBoxLayout()
+    ratio_btn_row.setSpacing(6)
+
+    ratio_btns = {}
+    def _apply_ratio(r_key):
+        if hasattr(gui, "output_ratio_combo"):
+            idx = gui.output_ratio_combo.findData(r_key)
+            if idx >= 0:
+                gui.output_ratio_combo.setCurrentIndex(idx)
+        if hasattr(gui, "video_view") and hasattr(gui.video_view, "set_preview_aspect_ratio"):
+            gui.video_view.set_preview_aspect_ratio(r_key)
+        for k, b in ratio_btns.items():
+            if k == r_key:
+                b.setStyleSheet("QPushButton { background: #2a170a; color: #ff7b1a; border: 1px solid #ff7b1a; border-radius: 3px; font-weight: 700; font-size: 11px; padding: 4px; }")
+            else:
+                b.setStyleSheet("QPushButton { background: #141519; color: #a1a1aa; border: 1px solid #27282d; border-radius: 3px; font-weight: 600; font-size: 11px; padding: 4px; } QPushButton:hover { color: #fff; border-color: #ff7b1a; }")
+
+    for r_key, r_label in [("9:16", "9:16"), ("16:9", "16:9"), ("1:1", "1:1")]:
+        r_btn = QPushButton(r_label)
+        r_btn.setMinimumHeight(24)
+        r_btn.clicked.connect(lambda _c=False, rk=r_key: _apply_ratio(rk))
+        ratio_btns[r_key] = r_btn
+        ratio_btn_row.addWidget(r_btn)
+
+    _apply_ratio("16:9")
+    prop_layout.addLayout(ratio_btn_row)
+
+    fit_ratio_btn = QPushButton("Khớp tỉ lệ đó")
+    fit_ratio_btn.setFixedHeight(26)
+    fit_ratio_btn.setStyleSheet(
+        "QPushButton { background: #1e1f24; color: #ff7b1a; border: 1px solid #ff7b1a; border-radius: 3px; font-weight: 600; font-size: 11px; } "
+        "QPushButton:hover { background: #28292f; }"
+    )
+    fit_ratio_btn.clicked.connect(lambda: getattr(gui.timeline, "fit_timeline", lambda: None)())
+    prop_layout.addWidget(fit_ratio_btn)
+
+    tab_sub_layout.addWidget(prop_card)
+    studio_stack.addWidget(tab_sub_widget)
+
+    # --- TAB 1: Hòa trộn ---
+    tab_blend_widget = QWidget()
+    tab_blend_layout = QVBoxLayout(tab_blend_widget)
+    tab_blend_layout.setContentsMargins(6, 6, 6, 6)
+    blend_desc = QLabel("Cài đặt hòa trộn và độ mờ cho các lớp đang chọn.")
+    blend_desc.setStyleSheet("color: #a1a1aa; font-size: 11px;")
+    blend_desc.setWordWrap(True)
+    tab_blend_layout.addWidget(blend_desc)
+    tab_blend_layout.addWidget(_wrap_in_scroll(mask_inspector_card))
+    tab_blend_layout.addStretch(1)
+    studio_stack.addWidget(tab_blend_widget)
+
+    # --- TAB 2: Hiệu ứng (Video filters) ---
+    tab_effect_widget = QWidget()
+    tab_effect_layout = QVBoxLayout(tab_effect_widget)
+    tab_effect_layout.setContentsMargins(0, 0, 0, 0)
+    tab_effect_layout.addWidget(_wrap_in_scroll(video_inspector_card))
+    studio_stack.addWidget(tab_effect_widget)
+
+    def _switch_tab(idx):
+        studio_stack.setCurrentIndex(idx)
+        btn_tab_sub.setStyleSheet(tab_btn_style_active if idx == 0 else tab_btn_style_inactive)
+        btn_tab_blend.setStyleSheet(tab_btn_style_active if idx == 1 else tab_btn_style_inactive)
+        btn_tab_effect.setStyleSheet(tab_btn_style_active if idx == 2 else tab_btn_style_inactive)
+
+    btn_tab_sub.clicked.connect(lambda: _switch_tab(0))
+    btn_tab_blend.clicked.connect(lambda: _switch_tab(1))
+    btn_tab_effect.clicked.connect(lambda: _switch_tab(2))
+
+    gui.right_studio_panel = right_studio_panel
+
+    # --- TOP STAGE SPLITTER: [Center (Video Preview)] + [Right Studio Panel] ---
     gui.workspace_splitter = QSplitter(Qt.Horizontal)
     gui.workspace_splitter.setObjectName("workspaceSplitter")
     gui.workspace_splitter.setChildrenCollapsible(False)
@@ -2048,11 +2193,17 @@ def build_preview_panel(gui, left_panel=None):
     if left_panel is not None:
         gui.workspace_splitter.addWidget(left_panel)
     gui.workspace_splitter.addWidget(preview_card)
+    gui.workspace_splitter.addWidget(right_studio_panel)
 
     if left_panel is not None:
         gui.workspace_splitter.setStretchFactor(0, 0)
-        gui.workspace_splitter.setStretchFactor(1, 1)
-        gui.workspace_splitter.setSizes([340, 760])
+        gui.workspace_splitter.setStretchFactor(1, 62)
+        gui.workspace_splitter.setStretchFactor(2, 38)
+        gui.workspace_splitter.setSizes([340, 680, 420])
+    else:
+        gui.workspace_splitter.setStretchFactor(0, 62)
+        gui.workspace_splitter.setStretchFactor(1, 38)
+        gui.workspace_splitter.setSizes([680, 420])
 
     gui.preview_workspace_widget = gui.workspace_splitter
     gui.preview_workspace_layout = None
@@ -2065,7 +2216,6 @@ def build_preview_panel(gui, left_panel=None):
     gui.timeline_card = timeline_card
 
     # --- LEFT VERTICAL SPLITTER: [Top Stage (Video/Voice)] / [Bottom (Timeline)] ---
-    # Timeline chỉ nằm dưới Video và Left Panel (chuẩn 100% như Hình 1)
     gui.preview_timeline_splitter = QSplitter(Qt.Vertical)
     gui.preview_timeline_splitter.setObjectName("previewTimelineSplitter")
     gui.preview_timeline_splitter.setChildrenCollapsible(False)
@@ -2082,11 +2232,7 @@ def build_preview_panel(gui, left_panel=None):
     gui.preview_timeline_splitter.setStretchFactor(0, 52)
     gui.preview_timeline_splitter.setStretchFactor(1, 48)
 
-    # --- Subtitle list view kept hidden in background for API compatibility ---
-    gui.subtitle_list_view = SubtitleListView(gui)
-    gui.subtitle_list_view.hide()
-
-    # Hiển thị trực tiếp preview & timeline toàn màn hình không còn cột phải
+    # Hiển thị trực tiếp preview & timeline toàn màn hình
     right_layout.addWidget(gui.preview_timeline_splitter, 1)
 
     def _set_default_preview_timeline_sizes():

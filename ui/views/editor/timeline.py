@@ -33,24 +33,24 @@ class EditorTimeline(QGraphicsView):
     selectionRangeCleared = Signal()
     selectionModeChanged = Signal(bool)
 
-    RULER_HEIGHT = 30
+    RULER_HEIGHT = 26
     TRACK_HEADER_W = 0
     # Keep a small grab area before time-zero bars. Track labels live in a
     # separate fixed widget, so this is content padding rather than header
     # width.
     CONTENT_LEFT_PAD = 8
-    TRACK_LABEL_H = 24
-    TRACK_MIN_H = 32
-    TRACK_DEFAULT_H = 56
-    REGION_TRACK_ROW_H = 60
-    CHILD_TRACK_H = 48
-    CHROME_H = 24
-    HANDLE_W = 8
+    TRACK_LABEL_H = 22
+    TRACK_MIN_H = 20
+    TRACK_DEFAULT_H = 30
+    REGION_TRACK_ROW_H = 24
+    CHILD_TRACK_H = 26
+    CHROME_H = 20
+    HANDLE_W = 6
     MIN_DUR = 0.1
     SNAP_THRESHOLD = 0.08
-    DEFAULT_PPS = 100
-    MIN_PPS = 30
-    MAX_PPS = 500
+    DEFAULT_PPS = 80
+    MIN_PPS = 0.5
+    MAX_PPS = 400
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -141,8 +141,11 @@ class EditorTimeline(QGraphicsView):
     def _init_default_tracks(self) -> None:
         self._timeline = Timeline(duration=self._duration)
         self._timeline.tracks = [
-            Track(name="V1 Video", type=LayerType.VIDEO, height=80),
-            Track(name="A1 Audio", type=LayerType.AUDIO, height=80),
+            Track(name="TS1", type=LayerType.DUB_SUBTITLE, height=26),
+            Track(name="M1 Mask", type=LayerType.MASK, height=24),
+            Track(name="V1 Video", type=LayerType.VIDEO, height=36),
+            Track(name="A1 Audio", type=LayerType.AUDIO, height=30),
+            Track(name="A2 Dub", type=LayerType.AUDIO, height=28),
         ]
         for t in self._timeline.tracks:
             self._track_heights[t.id] = t.height
@@ -256,12 +259,12 @@ class EditorTimeline(QGraphicsView):
         from app.layers.base import LayerType
 
         if v1 is None:
-            v1 = Track(name="V1 Video", type=LayerType.VIDEO, height=80)
+            v1 = Track(name="V1 Video", type=LayerType.VIDEO, height=36)
             self._timeline.tracks.insert(0, v1)
             self._track_heights[v1.id] = v1.height
 
         if a1 is None:
-            a1 = Track(name="A1 Audio", type=LayerType.AUDIO, height=80)
+            a1 = Track(name="A1 Audio", type=LayerType.AUDIO, height=30)
             v1_idx = self._timeline.tracks.index(v1) if v1 in self._timeline.tracks else -1
             self._timeline.tracks.insert(v1_idx + 1, a1)
             self._track_heights[a1.id] = a1.height
@@ -400,6 +403,7 @@ class EditorTimeline(QGraphicsView):
             # Keep the Timeline model's duration in sync so layers that
             # span the whole video (Mask track) use the real length.
             self._timeline.duration = self._duration
+            QTimer.singleShot(50, self.fit_timeline)
         self._redraw()
 
     @staticmethod
@@ -585,32 +589,32 @@ class EditorTimeline(QGraphicsView):
         self._redraw()
 
     def zoom_in(self) -> None:
-        self.pixels_per_second = min(self.MAX_PPS, int(self.pixels_per_second * 1.25))
-        self._redraw()
+        new_val = min(float(self.MAX_PPS), max(self.pixels_per_second + 2.0, self.pixels_per_second * 1.3))
+        self.set_pixels_per_second(new_val)
 
     def zoom_out(self) -> None:
-        self.pixels_per_second = max(self.MIN_PPS, int(self.pixels_per_second * 0.8))
-        self._redraw()
+        new_val = max(float(self.MIN_PPS), self.pixels_per_second * 0.75)
+        self.set_pixels_per_second(new_val)
 
     def fit_timeline(self) -> None:
         if self._duration > 0:
-            w = self.viewport().width() - self.CONTENT_LEFT_PAD - 20 if self.viewport() else 800
-            self.pixels_per_second = int(max(self.MIN_PPS, w / self._duration))
-        self._redraw()
-        self.zoomChanged.emit(int(self.pixels_per_second / self.DEFAULT_PPS * 100))
+            vp = self.viewport()
+            w = (vp.width() - self.CONTENT_LEFT_PAD - 24) if vp else 800
+            if w > 50:
+                ideal_pps = max(float(self.MIN_PPS), min(float(self.MAX_PPS), float(w) / float(self._duration)))
+                self.set_pixels_per_second(ideal_pps)
 
     def reset_zoom(self) -> None:
-        self.pixels_per_second = self.DEFAULT_PPS
-        self._redraw()
-        self.zoomChanged.emit(100)
+        self.set_pixels_per_second(self.DEFAULT_PPS)
 
-    def set_pixels_per_second(self, pps: int) -> None:
-        val = max(self.MIN_PPS, min(self.MAX_PPS, int(pps)))
-        if val == self.pixels_per_second:
+    def set_pixels_per_second(self, pps: float | int) -> None:
+        val = max(float(self.MIN_PPS), min(float(self.MAX_PPS), float(pps)))
+        if abs(val - self.pixels_per_second) < 0.001:
             return
         self.pixels_per_second = val
         self._redraw()
-        self.zoomChanged.emit(int(self.pixels_per_second / self.DEFAULT_PPS * 100))
+        percent = max(1, int(round(self.pixels_per_second / self.DEFAULT_PPS * 100)))
+        self.zoomChanged.emit(percent)
 
     def set_snap_enabled(self, enabled: bool) -> None:
         self._snap_enabled = bool(enabled)
@@ -705,25 +709,27 @@ class EditorTimeline(QGraphicsView):
             self._track_heights[track.id] = self._compute_track_height(track)
 
     def _compute_track_height(self, track) -> int:
-        """Compute a track's height. Region tracks (Blur, Logo, Mask)
-        allocate one full base slot per visible layer. Subtitle and dub tracks (overlap-stacked)
-        use the same CHILD_TRACK_H slot for every row — primary and
-        overlap-child rows are equally small — so the whole track stays
-        compact.
-        """
-        base = int(getattr(track, "height", None) or self.TRACK_DEFAULT_H)
+        track_type = getattr(track, "type", None)
+        track_name = (getattr(track, "name", "") or "").lower()
+        if track_type == LayerType.VIDEO or "v1" in track_name:
+            return 36
+        if track_type == LayerType.AUDIO or "a1" in track_name or "a2" in track_name:
+            if "a2" in track_name or "dub" in track_name or "giọng" in track_name:
+                return 28
+            return 30
+        if track_type in (LayerType.DUB_SUBTITLE, LayerType.SUBTITLE) or "ts1" in track_name or "phụ" in track_name:
+            return 26
+        if track_type in (LayerType.MASK, LayerType.BLUR) or "m1" in track_name or "b1" in track_name or "che" in track_name:
+            return 24
         if self._uses_layer_rows(track):
             num_layers = max(1, len([l for l in track.layers if l.visible]))
-            # B1, L1, and M1 intentionally share the same compact row
-            # size. Older B1 projects may carry a 100px track height.
             return self.REGION_TRACK_ROW_H * num_layers
         if self._should_overlap_stack(track):
             visible = [l for l in track.layers if l.visible]
-            # Sort by start time for proper overlap detection
             visible_sorted = sorted(visible, key=lambda l: float(getattr(l, "start", 0.0)))
             _, num_rows = self._compute_overlap_rows(visible_sorted, track_id=track.id)
             return self.CHILD_TRACK_H * max(1, num_rows)
-        return base
+        return min(36, int(getattr(track, "height", None) or self.TRACK_DEFAULT_H))
 
     @staticmethod
     def _is_blur_track(track) -> bool:
@@ -1019,8 +1025,6 @@ class EditorTimeline(QGraphicsView):
         painter.end()
 
     def _draw_ruler_sticky(self, painter: QPainter, scroll_x: int, view_w: int, scroll_y: int = 0) -> None:
-        # The ruler is sticky at the top of the viewport (scroll_y
-        # is accepted for API compatibility but not applied here).
         ruler_y = 0
         painter.fillRect(0, ruler_y, view_w, self.RULER_HEIGHT, QColor("#111114"))
         painter.setPen(QColor("#3f3f46"))
@@ -1028,24 +1032,40 @@ class EditorTimeline(QGraphicsView):
 
         font = QFont("Segoe UI", 9)
         painter.setFont(font)
-        major_interval = self._tick_interval()
+        major_interval = float(self._tick_interval())
+        pps = max(0.1, float(self.pixels_per_second))
 
-        t = 0.0
-        while t <= self._duration + 5:
-            x = self.CONTENT_LEFT_PAD + int(t * self.pixels_per_second) - scroll_x
+        if major_interval <= 2:
+            minor_interval = max(0.25, major_interval / 4.0)
+        elif major_interval <= 10:
+            minor_interval = max(1.0, major_interval / 5.0)
+        elif major_interval <= 30:
+            minor_interval = max(5.0, major_interval / 6.0)
+        else:
+            minor_interval = max(10.0, major_interval / 5.0)
+
+        start_t = max(0.0, ((scroll_x - self.CONTENT_LEFT_PAD) / pps))
+        t = max(0.0, float(int(start_t / minor_interval)) * minor_interval)
+
+        while t <= self._duration + major_interval:
+            x = self.CONTENT_LEFT_PAD + int(t * pps) - scroll_x
             if x > view_w:
                 break
-            if x > -10:
-                if int(t) % int(max(major_interval, 1)) < 0.5:
-                    painter.setPen(QColor("#3f3f46"))
+            if x >= -20:
+                remainder = abs(t % major_interval)
+                is_major = (remainder < 1e-4) or (abs(remainder - major_interval) < 1e-4)
+                if is_major:
+                    painter.setPen(QColor("#52525b"))
                     painter.drawLine(x, ruler_y + self.RULER_HEIGHT - 10, x, ruler_y + self.RULER_HEIGHT)
-                    ts = f"{int(t // 60)}:{int(t % 60):02d}"
+                    m = int(t // 60)
+                    s = int(t % 60)
+                    ts = f"{m:02d}:{s:02d}"
                     painter.setPen(QColor("#a1a1aa"))
                     painter.drawText(int(x) + 2, ruler_y + 16, ts)
                 else:
                     painter.setPen(QColor("#27282d"))
                     painter.drawLine(x, ruler_y + self.RULER_HEIGHT - 5, x, ruler_y + self.RULER_HEIGHT)
-            t += 1.0
+            t += minor_interval
 
     def _draw_track_header(self, painter: QPainter, track: Track,
                            y: int, h: int) -> None:
@@ -1117,13 +1137,12 @@ class EditorTimeline(QGraphicsView):
         return sorted_layers[first:last]
 
     def _tick_interval(self) -> int:
-        if self.pixels_per_second < 40:
-            return 10
-        if self.pixels_per_second < 80:
-            return 5
-        if self.pixels_per_second < 150:
-            return 2
-        return 1
+        pps = max(0.1, float(self.pixels_per_second))
+        candidates = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1200]
+        for c in candidates:
+            if c * pps >= 65:
+                return c
+        return 1800
 
     def _draw_track_layers(self, painter: QPainter, track: Track,
                            scroll_x: int, y: int, h: int) -> None:
@@ -1269,18 +1288,15 @@ class EditorTimeline(QGraphicsView):
         painter.setClipRect(QRectF(left, y, right - left, h))
         # Teal-on-teal styling keeps A1 cohesive with the application while
         # the darker waveform remains legible on its green track.
-        painter.setPen(QPen(QColor("#2a9d3f"), 1))
+        painter.setPen(QPen(QColor("#f59e0b"), 1))
         painter.drawLine(left, int(center_y), right, int(center_y))
-        # This is a single vertical gradient brush reused for every peak,
-        # giving A1 a subtle modern highlight without changing sample count
-        # or doing any additional media processing.
         waveform_gradient = QLinearGradient(0, y, 0, y + h)
-        waveform_gradient.setColorAt(0.0, QColor(42, 157, 63, 135))
-        waveform_gradient.setColorAt(0.5, QColor(60, 180, 85, 185))
-        waveform_gradient.setColorAt(1.0, QColor(20, 100, 40, 155))
-        soft_pen = QPen(QBrush(waveform_gradient), 3)
+        waveform_gradient.setColorAt(0.0, QColor(245, 158, 11, 200))
+        waveform_gradient.setColorAt(0.5, QColor(251, 191, 36, 255))
+        waveform_gradient.setColorAt(1.0, QColor(217, 119, 6, 180))
+        soft_pen = QPen(QBrush(waveform_gradient), 2)
         soft_pen.setCapStyle(Qt.RoundCap)
-        detail_pen = QPen(QColor("#1a4a28"), 1)
+        detail_pen = QPen(QColor("#fef08a"), 1)
         detail_pen.setCapStyle(Qt.RoundCap)
         # One inexpensive vertical stroke per two display pixels. Sample
         # lookup is proportional to the viewport width, never video length.
@@ -1563,9 +1579,9 @@ class EditorTimeline(QGraphicsView):
         x = self.CONTENT_LEFT_PAD + int(self._playhead * self.pixels_per_second) - scroll_x
         if x < 0 or x > self.viewport().width():
             return
-        painter.setPen(QPen(QColor("#e04040"), 2))
+        painter.setPen(QPen(QColor("#ff7b1a"), 2))
         painter.drawLine(int(x), 0, int(x), int(self._scene.height()))
-        painter.setBrush(QColor("#e04040"))
+        painter.setBrush(QColor("#ff7b1a"))
         painter.setPen(Qt.NoPen)
         painter.drawPolygon([QPointF(x - 6, 0), QPointF(x + 6, 0), QPointF(x, 8)])
 

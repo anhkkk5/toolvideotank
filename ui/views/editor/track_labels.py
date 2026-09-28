@@ -26,13 +26,13 @@ def _asset_icon(filename: str):
 
 
 TRACK_ICONS: dict[str, str] = {
-    "V1": "\u25b6",
-    "B1": "\u25a3",
-    "A1": "\u266b",
-    "A2": "\u266b",
-    "TS1": "T",
-    "S1": "T",
-    "M1": "\u25a0",
+    "V1": "▾",
+    "B1": "▸",
+    "A1": "♫",
+    "A2": "🎙",
+    "TS1": "▸",
+    "S1": "▸",
+    "M1": "▸",
 }
 
 AUDIO_PREFIXES = {"A1", "A2"}
@@ -56,8 +56,8 @@ class TrackLabelBar(QFrame):
     trackSelected = Signal(str)  # track_name
     lockToggled = Signal(str, bool)  # track_name, is_locked
 
-    TRACK_HEADER_W = 156
-    RULER_HEIGHT = 30
+    TRACK_HEADER_W = 140
+    RULER_HEIGHT = 26
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -504,24 +504,24 @@ class TrackLabelBar(QFrame):
 
         def _color(name: str) -> QColor:
             prefix = name.split(" ")[0] if name else ""
-            palette = {"V1": QColor("#3a7bd5"), "B1": QColor("#6b5b7b"),
-                       "A1": QColor("#2a9d3f"), "A2": QColor("#2a9d3f"),
-                       "TS1": QColor("#d4870e"),
-                       "S1": QColor("#d4870e"),
-                       "M1": QColor("#8c5a2a")}
+            palette = {"V1": QColor("#3a7bd5"), "B1": QColor("#a855f7"),
+                       "A1": QColor("#f59e0b"), "A2": QColor("#ff7b1a"),
+                       "TS1": QColor("#ff7b1a"),
+                       "S1": QColor("#ff7b1a"),
+                       "M1": QColor("#a855f7")}
             return palette.get(prefix, QColor("#a1a1aa"))
 
-        font = QFont("Segoe UI", 9, QFont.Bold)
+        font = QFont("Segoe UI", 8, QFont.Bold)
         painter.setFont(font)
         fm = QFontMetrics(font)
         # Reserve compact cells on every track. Audio uses mute + lock;
         # subtitles use mute + visibility + lock; overlays use visibility + lock.
-        icon_col_w = 72
+        icon_col_w = 60
         text_x = 8
-        text_w = self.TRACK_HEADER_W - text_x - icon_col_w - 4
+        text_w = self.TRACK_HEADER_W - text_x - icon_col_w - 2
 
         for i, name in enumerate(self._track_names):
-            h = track_heights[i] if i < len(track_heights) else 60
+            h = track_heights[i] if i < len(track_heights) else 28
             icon = _icon(name)
             c = _color(name)
             muted = self._track_muted[i] if i < len(self._track_muted) else False
@@ -555,29 +555,30 @@ class TrackLabelBar(QFrame):
 
             dim_text = (muted or logo_hidden or mask_hidden or text_hidden or subtitle_hidden
                         or (prefix in BLUR_PREFIXES and not blur_on))
+            painter.setPen(QPen(QColor("#71717a") if dim_text else QColor("#d4d4d8"), 1))
+
             TRACK_DISPLAY_MAP = {
                 "V1 Video": "V1 Video",
+                "V1": "V1 Video",
                 "A1 Audio": "A1 Âm thanh",
+                "A1": "A1 Âm thanh",
+                "A2 Dub": "A2 Giọng đọc",
+                "A2": "A2 Giọng đọc",
                 "A2 Music": "A2 Nhạc nền",
-                "TS1": "TS1 Phụ đề",
-                "S1 Subtitle": "S1 Phụ đề",
-                "B1 Blur": "B1 Làm mờ",
+                "TS1": "Phụ đề",
+                "S1 Subtitle": "Phụ đề",
+                "S1": "Phụ đề",
+                "B1 Blur": "Lớp che",
+                "B1": "Lớp che",
+                "M1 Mask": "Lớp che",
+                "M1": "Lớp che",
                 "L1 Logo": "L1 Logo",
-                "M1 Mask": "M1 Mặt nạ",
                 "T1 Text": "T1 Chữ",
             }
             display_name = TRACK_DISPLAY_MAP.get(name, name)
-            lines = self._label_lines(display_name, text_w, fm)
-            if not lines:
-                lines = [display_name or ""]
-            line_h = fm.height()
-            total_h = line_h * len(lines)
-            start_y = y + max(2, (h - total_h) // 2)
-            for li, line in enumerate(lines):
-                display = f"{icon} {line}" if li == 0 else line
-                painter.drawText(text_x, start_y + li * line_h,
-                                 text_w, line_h,
-                                 Qt.AlignLeft | Qt.AlignVCenter, display)
+            display = f"{icon} {display_name}"
+            elided = fm.elidedText(display, Qt.ElideRight, text_w)
+            painter.drawText(text_x, y, text_w, h, Qt.AlignLeft | Qt.AlignVCenter, elided)
 
             # (ON/OFF label removed - blur state is shown by track dimming)
 

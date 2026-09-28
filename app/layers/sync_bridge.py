@@ -21,7 +21,7 @@ def find_or_create_track(
     timeline: Timeline,
     name: str,
     layer_type: LayerType,
-    height: int = 80,
+    height: int = 30,
 ) -> Track:
     """Find track by name, or create it."""
     for t in timeline.tracks:
@@ -60,7 +60,7 @@ def sync_segments_to_dub_subtitle_layers(
     indexed.sort(key=lambda kv: float(kv[1].get("start", 0)))
 
     target = find_or_create_track(
-        timeline, DUB_SUBTITLE_TRACK_NAME, LayerType.DUB_SUBTITLE, 100
+        timeline, DUB_SUBTITLE_TRACK_NAME, LayerType.DUB_SUBTITLE, 26
     )
 
     existing_by_idx: dict[int, DubSubtitleLayer] = {}
@@ -274,8 +274,8 @@ def sync_blur_regions_to_layers(
         return
 
     # Keep B1 rows the same compact height as M1/L1 in the editor.
-    blur_track = find_or_create_track(timeline, "B1", LayerType.BLUR, 60)
-    blur_track.height = 60
+    blur_track = find_or_create_track(timeline, "B1", LayerType.BLUR, 24)
+    blur_track.height = 24
     blur_track.layers.clear()
 
     for i, br in enumerate(blur_regions):
@@ -303,7 +303,7 @@ def ensure_v1_a1_tracks(timeline: Timeline, video_path: str, duration: float) ->
     from app.layers.video import VideoLayer
     from app.layers.transform import Transform
 
-    v1 = find_or_create_track(timeline, "V1 Video", LayerType.VIDEO, 80)
+    v1 = find_or_create_track(timeline, "V1 Video", LayerType.VIDEO, 36)
     v1.visible = True
     v1.layers.clear()
     v1.layers.append(VideoLayer(
@@ -314,7 +314,7 @@ def ensure_v1_a1_tracks(timeline: Timeline, video_path: str, duration: float) ->
         transform=Transform(x=0, y=0, scale_x=1.0, scale_y=1.0),
     ))
 
-    a1 = find_or_create_track(timeline, "A1 Audio", LayerType.AUDIO, 80)
+    a1 = find_or_create_track(timeline, "A1 Audio", LayerType.AUDIO, 30)
     a1.visible = True
     a1.layers.clear()
     a1.layers.append(AudioLayer(

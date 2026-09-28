@@ -614,9 +614,9 @@ class SubtitleListView(QWidget):
         }
 
         self.setObjectName("subtitleListView")
-        self.setStyleSheet("QWidget#subtitleListView { background-color: #0c131d; border: 1px solid #1a2636; border-radius: 8px; }")
-        self.setMinimumWidth(380)
-        self.setMaximumWidth(580)
+        self.setStyleSheet("QWidget#subtitleListView { background-color: #141519; border: none; border-radius: 4px; }")
+        self.setMinimumWidth(260)
+        self.setMaximumWidth(600)
 
         self._build_ui()
 
