@@ -235,12 +235,182 @@ def _tint_pixmap(pixmap: QPixmap, color: QColor) -> QPixmap:
     return QPixmap.fromImage(tinted)
 
 
+class _SidebarNavItem(QFrame):
+    def __init__(self, key: str, icon: str, title: str, tooltip: str, on_click=None, parent=None):
+        super().__init__(parent)
+        self.key = key
+        self.on_click = on_click
+        self._is_active = False
+        self.setFixedSize(54, 48)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setToolTip(tooltip)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(2, 5, 2, 4)
+        layout.setSpacing(2)
+        layout.setAlignment(Qt.AlignCenter)
+
+        self.icon_label = QLabel(icon)
+        self.icon_label.setAlignment(Qt.AlignCenter)
+        self.icon_label.setStyleSheet("font-size: 15px; background: transparent;")
+
+        self.title_label = QLabel(title)
+        self.title_label.setAlignment(Qt.AlignCenter)
+        self.title_label.setStyleSheet("font-size: 9px; font-weight: 600; background: transparent;")
+
+        layout.addWidget(self.icon_label)
+        layout.addWidget(self.title_label)
+        self._update_style()
+
+    def set_active(self, active: bool):
+        self._is_active = active
+        self._update_style()
+
+    def _update_style(self, hovering: bool = False):
+        if self._is_active:
+            self.setStyleSheet(
+                "QFrame { background-color: rgba(255, 138, 0, 0.12); "
+                "border-left: 3px solid #FF8A00; border-top: none; border-right: none; border-bottom: none; }"
+            )
+            self.icon_label.setStyleSheet("font-size: 15px; color: #FF8A00; background: transparent;")
+            self.title_label.setStyleSheet("font-size: 9px; font-weight: 700; color: #FF8A00; background: transparent;")
+        elif hovering:
+            self.setStyleSheet(
+                "QFrame { background-color: #141822; "
+                "border-left: 3px solid transparent; border-top: none; border-right: none; border-bottom: none; }"
+            )
+            self.icon_label.setStyleSheet("font-size: 15px; color: #E5E7EB; background: transparent;")
+            self.title_label.setStyleSheet("font-size: 9px; font-weight: 600; color: #E5E7EB; background: transparent;")
+        else:
+            self.setStyleSheet(
+                "QFrame { background-color: transparent; "
+                "border-left: 3px solid transparent; border-top: none; border-right: none; border-bottom: none; }"
+            )
+            self.icon_label.setStyleSheet("font-size: 15px; color: #8C93A0; background: transparent;")
+            self.title_label.setStyleSheet("font-size: 9px; font-weight: 500; color: #8C93A0; background: transparent;")
+
+    def enterEvent(self, event):
+        if not self._is_active:
+            self._update_style(hovering=True)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        if not self._is_active:
+            self._update_style(hovering=False)
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            if callable(self.on_click):
+                self.on_click(self.key)
+        super().mousePressEvent(event)
+
+
+def _build_nav_sidebar(gui):
+    sidebar = QFrame()
+    sidebar.setObjectName("navSidebar")
+    sidebar.setFixedWidth(56)
+    sidebar.setStyleSheet(
+        "QFrame#navSidebar { background-color: #0B0F14; border-right: 1px solid #1E232E; }"
+    )
+    sidebar_layout = QVBoxLayout(sidebar)
+    sidebar_layout.setContentsMargins(0, 8, 0, 8)
+    sidebar_layout.setSpacing(2)
+    sidebar_layout.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
+
+    gui.sidebar_nav_items = {}
+
+    def _select_sidebar_key(key):
+        for k, item in gui.sidebar_nav_items.items():
+            item.set_active(k == key)
+
+    def _on_nav_clicked(key):
+        _select_sidebar_key(key)
+        scroll_area = getattr(gui, "left_panel_scroll_area", None)
+        if key == "media":
+            if scroll_area:
+                scroll_area.verticalScrollBar().setValue(0)
+            if hasattr(gui, "workflow_tab_buttons") and "media" in gui.workflow_tab_buttons:
+                gui.workflow_tab_buttons["media"].setChecked(True)
+        elif key == "workflow":
+            if hasattr(gui, "workflow_shell") and scroll_area:
+                scroll_area.ensureWidgetVisible(gui.workflow_shell)
+        elif key == "audio":
+            if hasattr(gui, "audio_tab_btn"):
+                gui.audio_tab_btn.setEnabled(True)
+                gui.audio_tab_btn.setChecked(True)
+            if hasattr(gui, "workflow_shell") and scroll_area:
+                scroll_area.ensureWidgetVisible(gui.workflow_shell)
+        elif key == "subtitle":
+            if hasattr(gui, "workflow_tab_buttons") and "style" in gui.workflow_tab_buttons:
+                gui.workflow_tab_buttons["style"].setChecked(True)
+            if hasattr(gui, "workflow_shell") and scroll_area:
+                scroll_area.ensureWidgetVisible(gui.workflow_shell)
+        elif key == "translate":
+            if hasattr(gui, "workflow_tab_buttons") and "language" in gui.workflow_tab_buttons:
+                gui.workflow_tab_buttons["language"].setChecked(True)
+            if hasattr(gui, "workflow_shell") and scroll_area:
+                scroll_area.ensureWidgetVisible(gui.workflow_shell)
+        elif key == "voice":
+            if hasattr(gui, "workflow_tab_buttons") and "voice" in gui.workflow_tab_buttons:
+                gui.workflow_tab_buttons["voice"].setChecked(True)
+            if hasattr(gui, "workflow_shell") and scroll_area:
+                scroll_area.ensureWidgetVisible(gui.workflow_shell)
+        elif key == "framing":
+            if hasattr(gui, "workflow_tab_buttons") and "media" in gui.workflow_tab_buttons:
+                gui.workflow_tab_buttons["media"].setChecked(True)
+            if hasattr(gui, "workflow_shell") and scroll_area:
+                scroll_area.ensureWidgetVisible(gui.workflow_shell)
+        elif key == "advanced":
+            if hasattr(gui, "workflow_tab_buttons") and "advanced" in gui.workflow_tab_buttons:
+                gui.workflow_tab_buttons["advanced"].setChecked(True)
+            if hasattr(gui, "workflow_shell") and scroll_area:
+                scroll_area.ensureWidgetVisible(gui.workflow_shell)
+
+    gui._select_sidebar_key = _select_sidebar_key
+
+    nav_configs = [
+        ("media", "📁", "Media", "Quản lý tệp video, ảnh, âm thanh"),
+        ("workflow", "⚡", "Quy trình", "Quy trình TankVideo 5 bước"),
+        ("audio", "🎵", "Âm thanh", "Hòa trộn âm thanh, kênh A1, TS1, A2"),
+        ("subtitle", "💬", "Phụ đề", "Kiểu dáng chữ, font, màu, hiệu ứng"),
+        ("translate", "🌐", "Dịch thuật", "Dịch ngôn ngữ phụ đề"),
+        ("voice", "🎙️", "Công cụ AI", "Giọng đọc AI & Voice clone"),
+        ("framing", "📐", "Khung hình", "Tỷ lệ khung hình & định dạng video"),
+        ("advanced", "⚙️", "Nâng cao", "Cài đặt hệ thống, CPU/GPU, tiến trình"),
+    ]
+
+    for key, icon, title, tooltip in nav_configs:
+        item = _SidebarNavItem(key, icon, title, tooltip, on_click=_on_nav_clicked, parent=sidebar)
+        sidebar_layout.addWidget(item)
+        gui.sidebar_nav_items[key] = item
+
+    sidebar_layout.addStretch(1)
+
+    # Mặc định kích hoạt tab Media
+    _select_sidebar_key("media")
+    return sidebar
+
+
 def _build_left_panel(gui):
+    # Khung bao bọc tích hợp thanh icon điều hướng dọc + vùng cuộn nội dung
+    left_panel_wrapper = QWidget()
+    left_panel_wrapper.setObjectName("leftPanelWrapper")
+    left_panel_wrapper.setStyleSheet("QWidget#leftPanelWrapper { background-color: #0B0F14; }")
+    wrapper_layout = QHBoxLayout(left_panel_wrapper)
+    wrapper_layout.setContentsMargins(0, 0, 0, 0)
+    wrapper_layout.setSpacing(0)
+
+    # 1. Sidebar điều hướng dọc (56px) chuẩn giao diện CapCut / Studio chuyên nghiệp
+    sidebar = _build_nav_sidebar(gui)
+    wrapper_layout.addWidget(sidebar)
+
+    # 2. Vùng cuộn nội dung bên phải sidebar
     scroll_area = QScrollArea()
     gui.left_panel_scroll_area = scroll_area
     scroll_area.setObjectName("leftPanelArea")
     scroll_area.setWidgetResizable(True)
-    scroll_area.setMinimumWidth(280)
+    scroll_area.setMinimumWidth(300)
     scroll_area.setMaximumWidth(520)
     scroll_area.setAlignment(Qt.AlignTop | Qt.AlignLeft)
     scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -250,7 +420,7 @@ def _build_left_panel(gui):
     left_panel_container.setObjectName("leftPanelContainer")
     gui.left_panel_container = left_panel_container
     left_layout = QVBoxLayout(left_panel_container)
-    left_layout.setContentsMargins(6, 0, 6, 0)
+    left_layout.setContentsMargins(6, 4, 6, 4)
     left_layout.setSpacing(8)
     scroll_area.setWidget(left_panel_container)
     scroll_area.installEventFilter(gui)
@@ -259,7 +429,27 @@ def _build_left_panel(gui):
 
     build_start_group(gui, left_layout)
     build_advanced_group(gui, left_layout)
-    return scroll_area
+
+    # Đồng bộ highlight trên thanh sidebar khi chuyển tab trong workflow
+    def _sync_sidebar_from_tab_idx(idx):
+        idx_to_key = {
+            0: "media",
+            1: "audio",
+            2: "translate",
+            3: "voice",
+            4: "subtitle",
+            5: "advanced",
+        }
+        target_k = idx_to_key.get(idx)
+        if target_k and hasattr(gui, "_select_sidebar_key"):
+            gui._select_sidebar_key(target_k)
+
+    if hasattr(gui, "left_panel_stack"):
+        gui.left_panel_stack.currentChanged.connect(_sync_sidebar_from_tab_idx)
+
+    wrapper_layout.addWidget(scroll_area, 1)
+    gui.left_panel_wrapper = left_panel_wrapper
+    return left_panel_wrapper
 
 
 def _connect_ui_signals(gui):

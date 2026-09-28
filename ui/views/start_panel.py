@@ -1,7 +1,7 @@
 import os
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QPixmap
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -190,6 +190,229 @@ def _update_device_label(gui):
         gui.device_mode_label.setStyleSheet("font-size: 11px; color: #4ecdc4;")
 
 
+def _build_resource_media_card(gui):
+    card = QFrame()
+    card.setObjectName("resourceMediaCard")
+    card.setStyleSheet(
+        "QFrame#resourceMediaCard { background-color: #141820; border: 1px solid #2E323A; border-radius: 8px; }"
+    )
+    layout = QVBoxLayout(card)
+    layout.setContentsMargins(10, 10, 10, 10)
+    layout.setSpacing(8)
+
+    # 1. Header Tab: Tài nguyên | Thư viện
+    top_tab_row = QHBoxLayout()
+    top_tab_row.setContentsMargins(2, 0, 2, 0)
+    top_tab_row.setSpacing(14)
+
+    tab_res_btn = QPushButton("Tài nguyên")
+    tab_res_btn.setCursor(Qt.PointingHandCursor)
+    tab_res_btn.setStyleSheet(
+        "QPushButton { background: transparent; color: #FFFFFF; font-weight: 700; font-size: 12px; "
+        "border: none; border-bottom: 2px solid #FF8A00; padding: 2px 4px 4px 4px; }"
+    )
+    tab_lib_btn = QPushButton("Thư viện")
+    tab_lib_btn.setCursor(Qt.PointingHandCursor)
+    tab_lib_btn.setStyleSheet(
+        "QPushButton { background: transparent; color: #8C93A0; font-weight: 500; font-size: 12px; "
+        "border: none; border-bottom: 2px solid transparent; padding: 2px 4px 4px 4px; } "
+        "QPushButton:hover { color: #E5E7EB; }"
+    )
+    top_tab_row.addWidget(tab_res_btn)
+    top_tab_row.addWidget(tab_lib_btn)
+    top_tab_row.addStretch(1)
+    layout.addLayout(top_tab_row)
+
+    def _switch_res_tab(is_lib: bool):
+        if is_lib:
+            tab_lib_btn.setStyleSheet(
+                "QPushButton { background: transparent; color: #FFFFFF; font-weight: 700; font-size: 12px; "
+                "border: none; border-bottom: 2px solid #FF8A00; padding: 2px 4px 4px 4px; }"
+            )
+            tab_res_btn.setStyleSheet(
+                "QPushButton { background: transparent; color: #8C93A0; font-weight: 500; font-size: 12px; "
+                "border: none; border-bottom: 2px solid transparent; padding: 2px 4px 4px 4px; } "
+                "QPushButton:hover { color: #E5E7EB; }"
+            )
+        else:
+            tab_res_btn.setStyleSheet(
+                "QPushButton { background: transparent; color: #FFFFFF; font-weight: 700; font-size: 12px; "
+                "border: none; border-bottom: 2px solid #FF8A00; padding: 2px 4px 4px 4px; }"
+            )
+            tab_lib_btn.setStyleSheet(
+                "QPushButton { background: transparent; color: #8C93A0; font-weight: 500; font-size: 12px; "
+                "border: none; border-bottom: 2px solid transparent; padding: 2px 4px 4px 4px; } "
+                "QPushButton:hover { color: #E5E7EB; }"
+            )
+    tab_res_btn.clicked.connect(lambda: _switch_res_tab(False))
+    tab_lib_btn.clicked.connect(lambda: _switch_res_tab(True))
+
+    # 2. Nút to màu cam: + Nhập tệp
+    import_btn = QPushButton("+ Nhập tệp")
+    import_btn.setMinimumHeight(34)
+    import_btn.setCursor(Qt.PointingHandCursor)
+    import_btn.setStyleSheet(
+        "QPushButton { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #FF8A00, stop:1 #FF6A00); "
+        "color: #ffffff; font-weight: 700; font-size: 12px; border-radius: 6px; border: none; padding: 6px; } "
+        "QPushButton:hover { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #FFA033, stop:1 #FF7D1A); } "
+        "QPushButton:pressed { background: #E67600; }"
+    )
+    from utils.media_utils import browse_video
+    import_btn.clicked.connect(lambda: browse_video(gui))
+    layout.addWidget(import_btn)
+
+    # 3. Dải nút filter: Tất cả | Video | Ảnh | Âm thanh
+    filter_row = QHBoxLayout()
+    filter_row.setSpacing(6)
+    
+    filter_btns = {}
+    f_active_style = "QPushButton { background: #2A1E14; color: #FF8A00; border: 1px solid #FF8A00; border-radius: 4px; font-size: 10px; font-weight: 700; padding: 3px 8px; }"
+    f_inactive_style = "QPushButton { background: #161A22; color: #8C93A0; border: 1px solid #2E323A; border-radius: 4px; font-size: 10px; font-weight: 500; padding: 3px 8px; } QPushButton:hover { color: #E5E7EB; border-color: #3F444E; }"
+
+    def _set_active_filter(active_key):
+        for k, b in filter_btns.items():
+            b.setStyleSheet(f_active_style if k == active_key else f_inactive_style)
+
+    for f_key, f_text in [("all", "Tất cả"), ("video", "Video"), ("image", "Ảnh"), ("audio", "Âm thanh")]:
+        f_btn = QPushButton(f_text)
+        f_btn.setFixedHeight(24)
+        f_btn.setCursor(Qt.PointingHandCursor)
+        f_btn.setStyleSheet(f_active_style if f_key == "all" else f_inactive_style)
+        f_btn.clicked.connect(lambda _c=False, fk=f_key: _set_active_filter(fk))
+        filter_btns[f_key] = f_btn
+        filter_row.addWidget(f_btn)
+    filter_row.addStretch(1)
+    layout.addLayout(filter_row)
+
+    # 4. Media List / Grid Card (Ảnh 1)
+    media_display_frame = QFrame()
+    media_display_frame.setObjectName("mediaDisplayFrame")
+    media_display_frame.setStyleSheet(
+        "QFrame#mediaDisplayFrame { background: #10141B; border: 1px solid #232938; border-radius: 6px; padding: 6px; }"
+    )
+    media_display_layout = QVBoxLayout(media_display_frame)
+    media_display_layout.setContentsMargins(6, 6, 6, 6)
+    media_display_layout.setSpacing(6)
+
+    # Item card thumbnail
+    thumb_box = QFrame()
+    thumb_box.setFixedHeight(88)
+    thumb_box.setCursor(Qt.PointingHandCursor)
+    thumb_box.setStyleSheet(
+        "QFrame { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #1E2530, stop:1 #12161E); "
+        "border: 1.5px solid #FF8A00; border-radius: 5px; }"
+    )
+    thumb_layout = QGridLayout(thumb_box)
+    thumb_layout.setContentsMargins(6, 6, 6, 6)
+
+    # Image background label (nếu có thumbnail trích xuất từ video)
+    thumb_img_label = QLabel()
+    thumb_img_label.setAlignment(Qt.AlignCenter)
+    thumb_img_label.setScaledContents(True)
+    thumb_img_label.setStyleSheet("border-radius: 4px; background: transparent;")
+    thumb_layout.addWidget(thumb_img_label, 0, 0, 2, 2)
+
+    # Duration badge (góc dưới trái)
+    duration_badge = QLabel("00:00")
+    duration_badge.setStyleSheet(
+        "background: rgba(0, 0, 0, 0.75); color: #E5E7EB; border-radius: 3px; font-size: 9px; font-weight: 700; padding: 1px 5px;"
+    )
+    thumb_layout.addWidget(duration_badge, 1, 0, Qt.AlignLeft | Qt.AlignBottom)
+
+    # Tick checkbox cam (góc trên phải)
+    tick_badge = QLabel("✓")
+    tick_badge.setAlignment(Qt.AlignCenter)
+    tick_badge.setFixedSize(16, 16)
+    tick_badge.setStyleSheet(
+        "background: #FF8A00; color: #ffffff; border-radius: 3px; font-size: 10px; font-weight: 900;"
+    )
+    thumb_layout.addWidget(tick_badge, 0, 1, Qt.AlignRight | Qt.AlignTop)
+
+    # Center play / media icon
+    center_icon = QLabel("🎬")
+    center_icon.setAlignment(Qt.AlignCenter)
+    center_icon.setStyleSheet("font-size: 24px; color: #FFA033; background: transparent;")
+    thumb_layout.addWidget(center_icon, 0, 0, 2, 2, Qt.AlignCenter)
+
+    media_name_label = QLabel("Chưa có video được chọn")
+    media_name_label.setStyleSheet("color: #E5E7EB; font-size: 11px; font-weight: 600;")
+    media_name_label.setWordWrap(True)
+
+    media_display_layout.addWidget(thumb_box)
+    media_display_layout.addWidget(media_name_label)
+    layout.addWidget(media_display_frame)
+
+    def _on_thumb_clicked(event):
+        vid_path = str(getattr(gui, "_current_video_path", "") or gui.video_path_edit.text() or "").strip()
+        if vid_path and os.path.exists(vid_path):
+            if hasattr(gui, "toggle_play"):
+                gui.toggle_play()
+            elif hasattr(gui, "preview_btn"):
+                gui.preview_btn.click()
+        else:
+            browse_video(gui)
+
+    thumb_box.mousePressEvent = _on_thumb_clicked
+
+    def _sync_media_item():
+        vid_path = str(getattr(gui, "_current_video_path", "") or gui.video_path_edit.text() or "").strip()
+        if vid_path and os.path.exists(vid_path):
+            base = os.path.basename(vid_path)
+            media_name_label.setText(base)
+            dur_ms = getattr(gui.timeline, "duration", 0) if hasattr(gui, "timeline") else 0
+            if dur_ms <= 0 and hasattr(gui, "media_player"):
+                dur_ms = gui.media_player.duration()
+            total_s = int(dur_ms / 1000) if dur_ms > 0 else 0
+            m = total_s // 60
+            s = total_s % 60
+            duration_badge.setText(f"{m:02d}:{s:02d}")
+            thumb_box.setStyleSheet(
+                "QFrame { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #1E2530, stop:1 #12161E); "
+                "border: 1.5px solid #FF8A00; border-radius: 5px; }"
+            )
+            tick_badge.show()
+            center_icon.setText("▶")
+            thumb_box.setToolTip(f"Nhấp để phát/tạm dừng: {base}")
+
+            # Thử nạp thumbnail từ thư mục launcher_thumbs nếu đã có
+            try:
+                import hashlib
+                from runtime_paths import workspace_root
+                h = hashlib.md5(os.path.normpath(vid_path).encode()).hexdigest()
+                cached_thumb = os.path.join(workspace_root(), "temp", "launcher_thumbs", f"{h}.jpg")
+                if os.path.exists(cached_thumb):
+                    pm = QPixmap(cached_thumb)
+                    if not pm.isNull():
+                        thumb_img_label.setPixmap(pm.scaled(thumb_box.size(), Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation))
+                        center_icon.hide()
+                    else:
+                        thumb_img_label.clear()
+                        center_icon.show()
+                else:
+                    thumb_img_label.clear()
+                    center_icon.show()
+            except Exception:
+                thumb_img_label.clear()
+                center_icon.show()
+        else:
+            media_name_label.setText("Nhấp '+ Nhập tệp' để thêm video")
+            duration_badge.setText("00:00")
+            thumb_box.setStyleSheet(
+                "QFrame { background: #12161E; border: 1px dashed #2E323A; border-radius: 5px; }"
+            )
+            tick_badge.hide()
+            center_icon.setText("📁")
+            center_icon.show()
+            thumb_img_label.clear()
+            thumb_box.setToolTip("Nhấp để chọn video")
+
+    gui._sync_resource_media_item = _sync_media_item
+    gui.video_path_edit.textChanged.connect(lambda _t: _sync_media_item())
+    _sync_media_item()
+
+    return card
+
+
 def build_start_group(gui, left_layout):
     _build_hidden_status_widgets(gui)
 
@@ -224,7 +447,11 @@ def build_start_group(gui, left_layout):
     gui.stabilize_button(gui.export_btn, min_width=180)
 
     workflow_shell, workflow_shell_layout = _section_card()
+    workflow_shell.setStyleSheet(
+        "QFrame#statusCard { background-color: #141820; border: 1px solid #2E323A; border-radius: 8px; }"
+    )
     workflow_shell_layout.setSpacing(10)
+    gui.workflow_shell = workflow_shell
 
     workflow_header_layout = QHBoxLayout()
     workflow_icon = QLabel("⚡")
@@ -1289,6 +1516,8 @@ def build_start_group(gui, left_layout):
         gui.left_panel_stack.addWidget(page)
 
     workflow_shell_layout.addWidget(gui.left_panel_stack, 1)
+    gui.resource_media_card = _build_resource_media_card(gui)
+    left_layout.addWidget(gui.resource_media_card)
     left_layout.addWidget(workflow_shell)
 
 
