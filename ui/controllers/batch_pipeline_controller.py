@@ -6,9 +6,9 @@ Kiến trúc:
         │
         ├── Queue (deque[VideoWorkspace])
         │
-        ├── Active Workers (dict[ws_id → QThread])
-        │   ├── PipelineWorker #1 → PipelineContext → PrepareWorkflow
-        │   ├── PipelineWorker #2 → PipelineContext → PrepareWorkflow
+        ├── Active Workers (dict[ws_id → PipelineWorker])
+        │   ├── PipelineWorker #1 → Local Worker Server → PrepareWorkflow
+        │   ├── PipelineWorker #2 → Local Worker Server → PrepareWorkflow
         │   └── ...
         │
         └── Completed / Failed results
@@ -18,26 +18,39 @@ Nguyên tắc:
 - GUI chỉ nhận signals (status, progress) để hiển thị.
 - max_concurrent cấu hình được, mặc định = 1 (an toàn CPU).
 - Retry tự động cho video lỗi (tùy cấu hình).
+- PipelineWorker tái sử dụng PrepareWorkflowWorker (local worker server).
 """
 
 from __future__ import annotations
 
+import json
 import os
+import secrets
+import socket
+import subprocess
+import sys
 import time
 import traceback
+import urllib.request
 from collections import deque
 from typing import Optional, Callable
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot, QTimer
 
 from models.pipeline_context import PipelineContext, VideoWorkspace
+from runtime_paths import subprocess_hidden_kwargs
 
 
 class PipelineWorker(QThread):
     """Worker thread chạy 1 pipeline cho 1 VideoWorkspace.
 
+    Sử dụng cùng kiến trúc local worker server như PipelineController:
+    1. Spawn local worker server (subprocess)
+    2. Gửi request POST /v1/prepare qua HTTP
+    3. Poll /v1/status để cập nhật progress
+    4. Nhận kết quả project_state_path
+
     Hoàn toàn headless — không đọc GUI, không tạo widget.
-    Giao tiếp qua signals.
     """
 
     # Signals
@@ -52,9 +65,11 @@ class PipelineWorker(QThread):
         self.ctx = ctx
         self._log_fn = log_fn or (lambda msg: None)
         self._cancelled = False
+        self._worker_process = None
 
     def cancel(self):
         self._cancelled = True
+        self._kill_worker_process()
 
     def run(self):
         ws = self.workspace
@@ -65,81 +80,220 @@ class PipelineWorker(QThread):
         try:
             self._log_fn(f"[Batch] [{ws.video_name}] Bắt đầu pipeline...")
 
-            # Import workflow
-            from workflows.prepare_workflow import PrepareWorkflow
-            from services import ProjectService
-
-            project_service = ProjectService(self.ctx.workspace_root)
-
-            # Step 1: Prepare project
-            self.step_changed.emit(ws_id, "extract_audio")
-            self.progress_changed.emit(ws_id, 0.1)
-
             if self._cancelled:
                 ws.mark_cancelled()
                 self.finished.emit(ws_id, "", "Đã hủy")
                 return
 
-            workflow = PrepareWorkflow(self.ctx.workspace_root)
+            # ── Step 1: Spawn local worker server ──
+            api_url, api_token = self._start_worker_server()
+            self._log_fn(f"[Batch] [{ws.video_name}] Worker server: {api_url}")
 
-            # Build prepare params matching what PrepareWorkflowWorker does
+            if self._cancelled:
+                self._kill_worker_process()
+                ws.mark_cancelled()
+                self.finished.emit(ws_id, "", "Đã hủy")
+                return
+
+            # ── Step 2: Send /v1/prepare request ──
+            self.step_changed.emit(ws_id, "extract_audio")
+            self.progress_changed.emit(ws_id, 0.05)
+
             skip_translation = self.ctx.skip_translation or self.ctx.target_stage == "transcript"
             prefetch_tts = (
                 self.ctx.target_stage == "full"
                 and self.ctx.output_mode in ("voice", "both")
             )
 
-            project_state = workflow.run(
-                video_path=self.ctx.video_path,
-                source_language=self.ctx.source_language,
-                target_language=self.ctx.target_language,
-                mode=self.ctx.output_mode,
-                audio_handling_mode=self.ctx.audio_handling_mode,
-                whisper_model_name=self.ctx.whisper_model_name,
-                translator_ai=self.ctx.ai_polish_enabled,
-                optimize_subtitles=False,
-                translator_style=self.ctx.ai_style_instruction,
-                transcription_engine=self.ctx.transcription_engine,
-                speaker_diarization=self.ctx.speaker_diarization,
-                speaker_diarization_num_speakers=self.ctx.speaker_diarization_num_speakers,
-                skip_translation=skip_translation,
-                prefetch_voice_name=self.ctx.voice_name if prefetch_tts else "",
-                prefetch_voice_speed=self.ctx.voice_speed if prefetch_tts else 1.0,
-                step_callback=lambda step: self._on_step(ws_id, step),
-            )
+            payload = {
+                "workspace_root": self.ctx.workspace_root,
+                "video_path": self.ctx.video_path,
+                "source_language": self.ctx.source_language,
+                "target_language": self.ctx.target_language,
+                "mode": self.ctx.output_mode,
+                "audio_handling_mode": self.ctx.audio_handling_mode,
+                "translator_ai": self.ctx.ai_polish_enabled,
+                "optimize_subtitles": False,
+                "translator_style": self.ctx.ai_style_instruction,
+                "whisper_model_name": self.ctx.whisper_model_name,
+                "transcription_engine": self.ctx.transcription_engine,
+                "speaker_diarization": self.ctx.speaker_diarization,
+                "speaker_diarization_num_speakers": self.ctx.speaker_diarization_num_speakers,
+                "skip_translation": skip_translation,
+                "prefetch_voice_name": self.ctx.voice_name if prefetch_tts else "",
+                "prefetch_voice_speed": self.ctx.voice_speed if prefetch_tts else 1.0,
+            }
+
+            # Send async request (long timeout — pipeline có thể chạy rất lâu)
+            result = self._post_api(api_url, api_token, "/v1/prepare", payload, timeout=7200)
 
             if self._cancelled:
+                self._kill_worker_process()
                 ws.mark_cancelled()
                 self.finished.emit(ws_id, "", "Đã hủy")
                 return
 
-            self.step_changed.emit(ws_id, "done")
-            self.progress_changed.emit(ws_id, 1.0)
+            # ── Step 3: Extract result ──
+            state_path = str(result.get("project_state_path", "")) if result else ""
 
-            # Save project state path
-            state_path = ""
-            if hasattr(project_state, "project_file"):
-                state_path = str(project_state.project_file or "")
-            elif isinstance(project_state, str):
-                state_path = project_state
+            if not state_path:
+                error_msg = str(result.get("error", "Không nhận được project_state_path")) if result else "Empty response"
+                ws.mark_error(error_msg)
+                self._log_fn(f"[Batch] [{ws.video_name}] LỖI: {error_msg}")
+                self.finished.emit(ws_id, "", error_msg)
+                return
 
             ws.project_state_path = state_path
             ws.mark_done(output_path=state_path)
+
+            self.step_changed.emit(ws_id, "done")
+            self.progress_changed.emit(ws_id, 1.0)
             self._log_fn(f"[Batch] [{ws.video_name}] Hoàn thành!")
             self.finished.emit(ws_id, state_path, "")
 
         except Exception as exc:
-            error_msg = f"{exc}\n{traceback.format_exc()}"
-            ws.mark_error(str(exc))
+            error_msg = f"{exc}"
+            ws.mark_error(error_msg)
             self._log_fn(f"[Batch] [{ws.video_name}] LỖI: {exc}")
             self.finished.emit(ws_id, "", error_msg)
+        finally:
+            self._kill_worker_process()
+
+    # ── Local Worker Server Management ──────────────────────────────
+
+    def _start_worker_server(self) -> tuple[str, str]:
+        """Spawn local worker server subprocess, trả về (api_url, api_token)."""
+        app_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        server_script = os.path.join(app_root, "app", "remote_api_server.py")
+
+        port = self._find_free_port()
+        token = secrets.token_urlsafe(24)
+
+        env = os.environ.copy()
+        env["CAPCAP_RUNTIME_PROFILE"] = "local"
+        env["CAPCAP_REMOTE_API_HOST"] = "127.0.0.1"
+        env["CAPCAP_REMOTE_API_PORT"] = str(port)
+        env["CAPCAP_REMOTE_API_TOKEN"] = token
+        env["CAPCAP_REMOTE_PRELOAD_MODELS"] = "0"
+        env["CAPCAP_RUN_REMOTE_API_SERVER"] = "1" if getattr(sys, "frozen", False) else "0"
+        env["PYTHONUTF8"] = "1"
+        env["PYTHONIOENCODING"] = "utf-8"
+        env["CAPCAP_DEVICE"] = os.getenv("CAPCAP_DEVICE", "cpu").strip().lower()
+
+        process_kwargs = subprocess_hidden_kwargs()
+        if os.name == "nt":
+            process_kwargs["creationflags"] = int(process_kwargs.get("creationflags", 0)) | getattr(
+                subprocess, "CREATE_NEW_PROCESS_GROUP", 0
+            )
+
+        worker_command = (
+            [sys.executable, "--worker-server"]
+            if getattr(sys, "frozen", False)
+            else [sys.executable, server_script]
+        )
+
+        self._worker_process = subprocess.Popen(
+            worker_command,
+            cwd=app_root,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=None,
+            stderr=None,
+            close_fds=False,
+            **process_kwargs,
+        )
+
+        api_url = f"http://127.0.0.1:{port}"
+
+        # Wait for server to be ready
+        self._wait_for_server(api_url, timeout_s=60.0)
+
+        return api_url, token
+
+    def _wait_for_server(self, api_url: str, timeout_s: float = 60.0):
+        deadline = time.monotonic() + timeout_s
+        health_url = f"{api_url.rstrip('/')}/health"
+        while time.monotonic() < deadline:
+            if self._cancelled:
+                raise RuntimeError("Đã hủy trong lúc chờ worker server")
+            proc = self._worker_process
+            if proc is not None and proc.poll() is not None:
+                raise RuntimeError(f"Worker server thoát sớm (code {proc.returncode})")
+            try:
+                with urllib.request.urlopen(health_url, timeout=1.0) as response:
+                    if response.status == 200:
+                        return
+            except Exception:
+                time.sleep(0.3)
+        raise RuntimeError("Worker server không sẵn sàng sau 60 giây")
+
+    def _post_api(self, api_url: str, token: str, endpoint: str,
+                  payload: dict, timeout: int = 7200) -> dict:
+        """Gửi POST request và poll status trong khi chờ."""
+        url = f"{api_url.rstrip('/')}{endpoint}"
+        data = json.dumps(payload).encode("utf-8")
+        request = urllib.request.Request(url, data=data, method="POST")
+        request.add_header("Content-Type", "application/json")
+        if token:
+            request.add_header("X-CapCap-Token", token)
+
+        # Start polling status in background
+        self._start_status_polling(api_url, token)
+
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                return json.loads(response.read().decode("utf-8", errors="replace"))
+        except urllib.error.HTTPError as e:
+            body = ""
+            try:
+                body = e.read().decode("utf-8", errors="replace")
+            except Exception:
+                pass
+            raise RuntimeError(f"API error {e.code}: {body}")
+        except urllib.error.URLError as e:
+            raise RuntimeError(f"Connection error: {e.reason}")
+        finally:
+            self._stop_status_polling()
+
+    def _start_status_polling(self, api_url: str, token: str):
+        """Poll /v1/status mỗi 5 giây để cập nhật progress."""
+        self._poll_url = f"{api_url.rstrip('/')}/v1/status"
+        self._poll_token = token
+        self._poll_active = True
+        self._last_poll_phase = ""
+
+        import threading
+        self._poll_thread = threading.Thread(target=self._poll_loop, daemon=True)
+        self._poll_thread.start()
+
+    def _stop_status_polling(self):
+        self._poll_active = False
+
+    def _poll_loop(self):
+        """Background thread polling status endpoint."""
+        ws_id = self.workspace.id
+        while self._poll_active and not self._cancelled:
+            time.sleep(5.0)
+            if not self._poll_active:
+                break
+            try:
+                request = urllib.request.Request(self._poll_url)
+                if self._poll_token:
+                    request.add_header("X-CapCap-Token", self._poll_token)
+                with urllib.request.urlopen(request, timeout=2.0) as response:
+                    data = json.loads(response.read().decode("utf-8", errors="replace"))
+                phase = str(data.get("phase", "") or "").strip()
+                if phase and phase != self._last_poll_phase:
+                    self._last_poll_phase = phase
+                    self._on_step(ws_id, phase)
+            except Exception:
+                pass
 
     def _on_step(self, ws_id: str, step_name: str):
-        """Callback from PrepareWorkflow khi chuyển bước."""
+        """Callback khi detect phase change qua polling."""
         self.workspace.current_step = step_name
         self.step_changed.emit(ws_id, step_name)
 
-        # Ước lượng progress dựa trên step
         step_progress = {
             "prepare": 0.05,
             "extract_audio": 0.10,
@@ -155,6 +309,40 @@ class PipelineWorker(QThread):
         progress = step_progress.get(step_name, 0.5)
         self.workspace.progress = progress
         self.progress_changed.emit(ws_id, progress)
+
+    def _kill_worker_process(self):
+        proc = self._worker_process
+        self._worker_process = None
+        if proc is None:
+            return
+        if proc.poll() is not None:
+            return
+        try:
+            if os.name == "nt":
+                subprocess.run(
+                    ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                    **subprocess_hidden_kwargs(),
+                )
+            else:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+    @staticmethod
+    def _find_free_port() -> int:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            return int(sock.getsockname()[1])
 
 
 class BatchPipelineController(QObject):
@@ -194,6 +382,7 @@ class BatchPipelineController(QObject):
         # Stats
         self._success_count = 0
         self._fail_count = 0
+        self._batch_start_time = 0.0
 
     # ─── Workspace Management ─────────────────────────────────────────
 
@@ -239,10 +428,7 @@ class BatchPipelineController(QObject):
     # ─── Configuration ────────────────────────────────────────────────
 
     def set_defaults(self, ctx: PipelineContext):
-        """Đặt cấu hình mặc định chung cho batch.
-
-        Các workspace không có override riêng sẽ dùng settings này.
-        """
+        """Đặt cấu hình mặc định chung cho batch."""
         self._defaults = ctx
 
     def set_defaults_from_gui(self, gui):
@@ -254,7 +440,6 @@ class BatchPipelineController(QObject):
     def set_max_concurrent(self, n: int):
         """Thay đổi số pipeline chạy đồng thời."""
         self.max_concurrent = max(1, n)
-        # Nếu đang chạy và có slot trống, bắt thêm worker
         if self._is_running:
             self._dispatch_next()
 
@@ -274,6 +459,7 @@ class BatchPipelineController(QObject):
         self._is_running = True
         self._success_count = 0
         self._fail_count = 0
+        self._batch_start_time = time.time()
 
         for ws in pending:
             ws.mark_queued()
@@ -314,6 +500,7 @@ class BatchPipelineController(QObject):
             self._is_running = True
             self._success_count = 0
             self._fail_count = 0
+            self._batch_start_time = time.time()
 
         for ws in retried:
             ws.mark_queued()
@@ -321,6 +508,7 @@ class BatchPipelineController(QObject):
             self.workspace_status_changed.emit(ws.id, "queued")
 
         self._log(f"[Batch] Retry {len(retried)} video lỗi")
+        self.batch_started.emit()
         self._dispatch_next()
 
     def retry_single(self, ws_id: str):
@@ -336,6 +524,8 @@ class BatchPipelineController(QObject):
 
         if not self._is_running:
             self._is_running = True
+            self._batch_start_time = time.time()
+            self.batch_started.emit()
         self._dispatch_next()
 
     # ─── Internal ─────────────────────────────────────────────────────
@@ -388,7 +578,7 @@ class BatchPipelineController(QObject):
 
         ws = self._find_workspace(ws_id)
         if ws:
-            if error:
+            if error and ws.status != "cancelled":
                 self._fail_count += 1
                 self.workspace_status_changed.emit(ws_id, "error")
 
@@ -400,7 +590,7 @@ class BatchPipelineController(QObject):
                     self._queue.append(ws_id)
                     self.workspace_status_changed.emit(ws_id, "queued")
                     self._fail_count -= 1  # Chưa tính thất bại thật sự
-            else:
+            elif not error:
                 self._success_count += 1
                 self.workspace_status_changed.emit(ws_id, "done")
 
@@ -409,10 +599,12 @@ class BatchPipelineController(QObject):
             self._dispatch_next()
         elif not self._active_workers:
             # Batch hoàn tất
+            elapsed = time.time() - self._batch_start_time if self._batch_start_time else 0
+            elapsed_str = self._format_elapsed(elapsed)
             self._is_running = False
             self._log(
-                f"[Batch] Hoàn tất! Thành công: {self._success_count}, "
-                f"Thất bại: {self._fail_count}"
+                f"[Batch] ✅ Hoàn tất! Thành công: {self._success_count}, "
+                f"Thất bại: {self._fail_count}, Thời gian: {elapsed_str}"
             )
             self.batch_completed.emit(self._success_count, self._fail_count)
 
@@ -425,6 +617,17 @@ class BatchPipelineController(QObject):
     def _log(self, msg: str):
         self._log_fn(msg)
         self.log_message.emit(msg)
+
+    @staticmethod
+    def _format_elapsed(seconds: float) -> str:
+        s = int(seconds)
+        if s < 60:
+            return f"{s}s"
+        m, s = divmod(s, 60)
+        if m < 60:
+            return f"{m}m {s}s"
+        h, m = divmod(m, 60)
+        return f"{h}h {m}m"
 
     # ─── Status Queries ───────────────────────────────────────────────
 
@@ -452,6 +655,12 @@ class BatchPipelineController(QObject):
     def error_count(self) -> int:
         return sum(1 for ws in self.workspaces if ws.status == "error")
 
+    @property
+    def elapsed_str(self) -> str:
+        if not self._batch_start_time:
+            return ""
+        return self._format_elapsed(time.time() - self._batch_start_time)
+
     def get_summary(self) -> dict:
         """Trả về tóm tắt batch."""
         return {
@@ -462,4 +671,5 @@ class BatchPipelineController(QObject):
             "error": self.error_count,
             "is_running": self.is_running,
             "max_concurrent": self.max_concurrent,
+            "elapsed": self.elapsed_str,
         }

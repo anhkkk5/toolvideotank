@@ -376,14 +376,50 @@ def _on_batch_started(gui):
     gui._batch_stop_btn.setEnabled(True)
     gui._batch_retry_btn.setEnabled(False)
 
+    # Timer cập nhật elapsed time mỗi giây
+    if not hasattr(gui, "_batch_elapsed_timer"):
+        gui._batch_elapsed_timer = QTimer()
+        gui._batch_elapsed_timer.timeout.connect(lambda: _update_summary(gui))
+    gui._batch_elapsed_timer.start(1000)
+
 
 def _on_batch_completed(gui, success_count, fail_count):
+    # Dừng timer elapsed
+    if hasattr(gui, "_batch_elapsed_timer"):
+        gui._batch_elapsed_timer.stop()
+
     gui._batch_start_btn.setEnabled(True)
     gui._batch_start_btn.setText("▶  Xử lý tất cả")
     gui._batch_stop_btn.setEnabled(False)
     gui._batch_retry_btn.setEnabled(fail_count > 0)
     _refresh_batch_ui(gui)
-    _append_batch_log(gui, f"✅ Hoàn tất! Thành công: {success_count}, Lỗi: {fail_count}")
+
+    # Elapsed time
+    ctrl = getattr(gui, "_batch_controller", None)
+    elapsed = ctrl.elapsed_str if ctrl else ""
+    elapsed_msg = f" — Thời gian: {elapsed}" if elapsed else ""
+
+    _append_batch_log(gui, f"✅ Hoàn tất! Thành công: {success_count}, Lỗi: {fail_count}{elapsed_msg}")
+
+    # Notification
+    from PySide6.QtWidgets import QMessageBox
+    msg_box = QMessageBox(gui)
+    msg_box.setWindowTitle("Batch Hoàn Tất")
+    msg_box.setIcon(QMessageBox.Information if fail_count == 0 else QMessageBox.Warning)
+    msg_box.setText(
+        f"Đã xử lý xong batch!\n\n"
+        f"✅ Thành công: {success_count}\n"
+        f"❌ Thất bại: {fail_count}\n"
+        f"⏱ Thời gian: {elapsed or 'N/A'}"
+    )
+    if fail_count > 0:
+        msg_box.setInformativeText("Bấm 'Retry lỗi' để thử lại các video thất bại.")
+    btn_open = msg_box.addButton("Mở thư mục output", QMessageBox.ActionRole)
+    msg_box.addButton(QMessageBox.Ok)
+    msg_box.exec()
+
+    if msg_box.clickedButton() == btn_open:
+        _open_output_folder(gui)
 
 
 def _on_ws_status_changed(gui, ws_id, status):
@@ -718,9 +754,26 @@ def _update_summary(gui):
 
     text = " │ ".join(parts) if parts else ""
     if summary["is_running"]:
-        text = f"Đang chạy (đồng thời: {summary['max_concurrent']})  •  {text}"
+        elapsed = summary.get("elapsed", "")
+        elapsed_part = f"  ⏱{elapsed}" if elapsed else ""
+        text = f"Đang chạy (×{summary['max_concurrent']}){elapsed_part}  •  {text}"
 
     gui._batch_summary_label.setText(text)
+
+
+def _open_output_folder(gui):
+    """Mở thư mục output trong file explorer."""
+    import subprocess as sp
+    output_folder = os.path.join(str(getattr(gui, "workspace_root", os.getcwd())), "output")
+    if not os.path.isdir(output_folder):
+        os.makedirs(output_folder, exist_ok=True)
+    try:
+        if os.name == "nt":
+            os.startfile(output_folder)
+        else:
+            sp.Popen(["xdg-open", output_folder])
+    except Exception:
+        pass
 
 
 def _append_batch_log(gui, msg):
@@ -737,3 +790,4 @@ def _append_batch_log(gui, msg):
         gui._batch_log_lines = gui._batch_log_lines[-20:]
 
     gui._batch_log_label.setText("\n".join(gui._batch_log_lines[-5:]))
+
