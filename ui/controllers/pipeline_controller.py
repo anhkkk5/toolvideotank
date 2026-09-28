@@ -304,40 +304,61 @@ class PipelineController:
         self.progress_dialog.show()
 
     def run_all_pipeline(self, video_path=None, requires_separation=None, target_stage="full"):
-        """Entry point for the full generation process."""
-        if video_path is None:
-            # Fallback to the UI field if not provided
-            video_path = getattr(self.gui, "video_path_edit", None)
-            if video_path:
-                video_path = video_path.text().strip()
-            else:
-                video_path = getattr(self.gui, "last_video_path", "")
+        """Entry point for the full generation process (backward-compatible).
 
-        if not video_path or not os.path.exists(video_path):
+        This method reads settings from the GUI and delegates to
+        run_pipeline_from_context which is fully headless.
+        """
+        from models.pipeline_context import PipelineContext
+
+        ctx = PipelineContext.from_gui(self.gui)
+        if video_path:
+            ctx.video_path = video_path
+        if target_stage:
+            ctx.target_stage = str(target_stage or "full").strip().lower()
+
+        if not ctx.video_path or not os.path.exists(ctx.video_path):
             QMessageBox.warning(self.gui, "Lỗi", "Vui lòng chọn một tệp video trước.")
             return
 
-        # Determine if we need vocal separation based on UI settings
+        if requires_separation is not None:
+            pass  # caller explicitly controls separation
+        else:
+            requires_separation = (ctx.audio_handling_mode == "clean")
+
+        self.run_pipeline_from_context(ctx, requires_separation=requires_separation)
+
+    def run_pipeline_from_context(self, ctx, requires_separation=None):
+        """Run the pipeline from a PipelineContext — fully headless, no GUI reads.
+
+        All settings come from ``ctx``. The GUI is only used for:
+        - UI feedback (progress dialog, button states, log)
+        - Receiving results (project state reload)
+
+        This is the entry point that BatchPipelineController will use.
+        """
         if requires_separation is None:
-            requires_separation = (self.gui.get_audio_handling_mode() == "clean")
+            requires_separation = (ctx.audio_handling_mode == "clean")
 
         # Initialize state
         self.prepare_run_id += 1
         prepare_run_id = self.prepare_run_id
         self.gui._pipeline_active = True
         self.gui._pipeline_step = "prepare"
-        self.target_stage = str(target_stage or "full").strip().lower()
-        
+        self.target_stage = ctx.target_stage
+        # Store context for later phases (voiceover, preview) to read from
+        self._active_context = ctx
+
         # UI Feedback
         if hasattr(self.gui, "run_all_btn"):
             self.gui.run_all_btn.setEnabled(False)
             self.gui.run_all_btn.setText("Đang xử lý...")
-            
+
         self._setup_progress_dialog(includes_separation=requires_separation)
         self.progress_dialog.start_step("ai_process")
 
         # Start the background worker
-        self.gui.log(f"[Pipeline] Starting prepare workflow for: {video_path}")
+        self.gui.log(f"[Pipeline] Starting prepare workflow for: {ctx.video_path}")
         try:
             self.active_processing_device = (
                 "cuda" if os.getenv("CAPCAP_DEVICE", "cpu").strip().lower() == "cuda" else "cpu"
@@ -351,37 +372,33 @@ class PipelineController:
             self.pipeline_fail(f"Could not start local worker process: {exc}")
             return
         self._start_prepare_status_polling()
-        transcription_engine = self.gui.get_transcription_engine()
-        # Transcript-only is a true stop point: PrepareWorkflow still
-        # extracts audio and transcribes, but does not call translation.
-        skip_translation = self.gui.is_skip_translation() or self.target_stage == "transcript"
-        output_mode = self.gui.get_output_mode_key()
-        # Prefetch voice audio only when Full Pipeline will immediately
-        # continue into TTS. A Run to Translate stop point must not spend
-        # resources creating cache entries the user may never need.
-        prefetch_tts = self.target_stage == "full" and output_mode in ("voice", "both")
+
+        # All settings come from ctx, NOT from self.gui.get_xxx()
+        skip_translation = ctx.skip_translation or ctx.target_stage == "transcript"
+        prefetch_tts = ctx.target_stage == "full" and ctx.output_mode in ("voice", "both")
+
         self.gui.prepare_workflow_thread = PrepareWorkflowWorker(
-            self.gui.workspace_root,
-            video_path,
-            output_mode,
-            self.gui.get_audio_handling_mode(),
-            self.gui.get_source_language_code(),
-            self.gui.get_target_language_code(),
-            self.gui.is_ai_polish_enabled(),
+            ctx.workspace_root,
+            ctx.video_path,
+            ctx.output_mode,
+            ctx.audio_handling_mode,
+            ctx.source_language,
+            ctx.target_language,
+            ctx.ai_polish_enabled,
             False,
-            self.gui.get_ai_style_instruction(),
-            self.gui.get_whisper_model_name(),
-            transcription_engine=transcription_engine,
-            speaker_diarization=self.gui.is_speaker_diarization_enabled(),
-            speaker_diarization_num_speakers=self.gui.get_speaker_diarization_num_speakers(),
+            ctx.ai_style_instruction,
+            ctx.whisper_model_name,
+            transcription_engine=ctx.transcription_engine,
+            speaker_diarization=ctx.speaker_diarization,
+            speaker_diarization_num_speakers=ctx.speaker_diarization_num_speakers,
             skip_translation=skip_translation,
-            prefetch_voice_name=self.gui.get_active_voice_name() if prefetch_tts else "",
-            prefetch_voice_speed=self.gui._parse_voice_speed_value() if prefetch_tts else 1.0,
+            prefetch_voice_name=ctx.voice_name if prefetch_tts else "",
+            prefetch_voice_speed=ctx.voice_speed if prefetch_tts else 1.0,
             remote_api_url=self.local_worker_api_url,
             remote_api_token=self.local_worker_api_token,
             force_remote_api=True,
         )
-        
+
         # Connect signals
         self.gui.prepare_workflow_thread.step_started.connect(self._on_prepare_step_started)
         self.gui.prepare_workflow_thread.finished.connect(
@@ -452,14 +469,16 @@ class PipelineController:
             # return the preview to its normal unobstructed state. The crop
             # geometry remains available through the OCR button for later
             # adjustment, and this does not affect OCR Translator overlays.
-            if self.gui.get_transcription_engine() == "ocr":
+            _ctx_engine = getattr(self, "_active_context", None)
+            if (_ctx_engine and _ctx_engine.transcription_engine == "ocr") or (not _ctx_engine and self.gui.get_transcription_engine() == "ocr"):
                 self.gui.toggle_ocr_overlay_visibility(False)
                 self.gui.log("[OCR Region] Hidden after OCR transcription completed.")
             self._notify_translation_fallback_if_used()
         except Exception as e:
             self.gui.log(f"[Pipeline] Error reloading state: {e}")
 
-        mode = self.gui.get_output_mode_key()
+        _ctx = getattr(self, "_active_context", None)
+        mode = _ctx.output_mode if _ctx else self.gui.get_output_mode_key()
         if self.target_stage in {"transcript", "translate"} or mode == "subtitle":
             self.pipeline_done()
             if self.progress_dialog:
@@ -554,7 +573,8 @@ class PipelineController:
         if self.progress_dialog:
             self.progress_dialog.finish_step(completed_step)
 
-        mode = self.gui.get_output_mode_key()
+        _ctx = getattr(self, "_active_context", None)
+        mode = _ctx.output_mode if _ctx else self.gui.get_output_mode_key()
         
         # State transitions
         if completed_step == "translation":
