@@ -1714,6 +1714,14 @@ def build_start_group(gui, left_layout):
     gui.left_master_stack.addWidget(media_page)      # 6: framing (Khung hình & Tỷ lệ nền tảng)
     gui.left_master_stack.addWidget(advanced_page)   # 7: advanced
 
+    # Trang 8: Batch (Xử lý hàng loạt)
+    try:
+        from views.batch_panel import build_batch_panel
+        batch_page = build_batch_panel(gui)
+    except Exception:
+        batch_page = QWidget()  # fallback nếu import lỗi
+    gui.left_master_stack.addWidget(batch_page)       # 8: batch
+
     # Thêm duy nhất gui.left_master_stack vào left_layout, giao diện không còn bị nhồi nhét
     left_layout.addWidget(gui.left_master_stack)
 
