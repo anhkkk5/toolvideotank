@@ -56,7 +56,7 @@ class EditorTimeline(QGraphicsView):
         super().__init__(parent)
         self._snap_enabled = True
         self.setFrameShape(QFrame.NoFrame)
-        self.setStyleSheet("background-color: #121316; border: none;")
+        self.setStyleSheet("background-color: #0d0e10; border: none;")
         self.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
@@ -113,9 +113,9 @@ class EditorTimeline(QGraphicsView):
         self._return_to_playhead_button = QPushButton("Return to Playhead", self.viewport())
         self._return_to_playhead_button.setCursor(Qt.PointingHandCursor)
         self._return_to_playhead_button.setStyleSheet(
-            "QPushButton { background:#1b3852; color:#d9f3ff; border:1px solid #4a8cff; "
-            "border-radius:9px; padding:4px 9px; font:600 10px 'Segoe UI'; }"
-            "QPushButton:hover { background:#244b6d; }"
+            "QPushButton { background:#1e1f24; color:#d4d4d8; border:1px solid #ff7b1a; "
+            "border-radius:4px; padding:4px 9px; font:600 10px 'Segoe UI'; }"
+            "QPushButton:hover { background:#28292f; }"
         )
         self._return_to_playhead_button.clicked.connect(self._return_to_playhead)
         self._return_to_playhead_button.hide()
@@ -126,15 +126,15 @@ class EditorTimeline(QGraphicsView):
         self._init_default_tracks()
 
         self.horizontalScrollBar().setStyleSheet(
-            "QScrollBar:horizontal{border:none;background:#142030;height:12px;margin:0}"
-            "QScrollBar::handle:horizontal{background:#35506f;min-width:30px;border-radius:6px}"
-            "QScrollBar::handle:horizontal:hover{background:#416287}"
+            "QScrollBar:horizontal{border:none;background:#111114;height:10px;margin:0}"
+            "QScrollBar::handle:horizontal{background:#333;min-width:30px;border-radius:5px}"
+            "QScrollBar::handle:horizontal:hover{background:#ff7b1a}"
             "QScrollBar::add-line:horizontal,QScrollBar::sub-line:horizontal{width:0}"
         )
         self.verticalScrollBar().setStyleSheet(
-            "QScrollBar:vertical{border:none;background:#142030;width:12px;margin:0}"
-            "QScrollBar::handle:vertical{background:#35506f;min-height:30px;border-radius:6px}"
-            "QScrollBar::handle:vertical:hover{background:#416287}"
+            "QScrollBar:vertical{border:none;background:#111114;width:10px;margin:0}"
+            "QScrollBar::handle:vertical{background:#333;min-height:30px;border-radius:5px}"
+            "QScrollBar::handle:vertical:hover{background:#ff7b1a}"
             "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0}"
         )
 
@@ -1022,8 +1022,8 @@ class EditorTimeline(QGraphicsView):
         # The ruler is sticky at the top of the viewport (scroll_y
         # is accepted for API compatibility but not applied here).
         ruler_y = 0
-        painter.fillRect(0, ruler_y, view_w, self.RULER_HEIGHT, QColor("#0a0f1a"))
-        painter.setPen(QColor("#35506f"))
+        painter.fillRect(0, ruler_y, view_w, self.RULER_HEIGHT, QColor("#111114"))
+        painter.setPen(QColor("#3f3f46"))
         painter.drawLine(0, ruler_y + self.RULER_HEIGHT - 1, view_w, ruler_y + self.RULER_HEIGHT - 1)
 
         font = QFont("Segoe UI", 9)
@@ -1037,26 +1037,26 @@ class EditorTimeline(QGraphicsView):
                 break
             if x > -10:
                 if int(t) % int(max(major_interval, 1)) < 0.5:
-                    painter.setPen(QColor("#35506f"))
+                    painter.setPen(QColor("#3f3f46"))
                     painter.drawLine(x, ruler_y + self.RULER_HEIGHT - 10, x, ruler_y + self.RULER_HEIGHT)
                     ts = f"{int(t // 60)}:{int(t % 60):02d}"
-                    painter.setPen(QColor("#6b8cb8"))
+                    painter.setPen(QColor("#a1a1aa"))
                     painter.drawText(int(x) + 2, ruler_y + 16, ts)
                 else:
-                    painter.setPen(QColor("#1e2d42"))
+                    painter.setPen(QColor("#27282d"))
                     painter.drawLine(x, ruler_y + self.RULER_HEIGHT - 5, x, ruler_y + self.RULER_HEIGHT)
             t += 1.0
 
     def _draw_track_header(self, painter: QPainter, track: Track,
                            y: int, h: int) -> None:
         header_rect = QRectF(0, y, self.TRACK_HEADER_W, h)
-        painter.fillRect(header_rect, QColor("#142030"))
-        painter.setPen(QColor("#1e2d42"))
+        painter.fillRect(header_rect, QColor("#141519"))
+        painter.setPen(QColor("#27282d"))
         painter.drawRect(header_rect)
 
         font = QFont("Segoe UI", 9, QFont.Bold)
         painter.setFont(font)
-        painter.setPen(QColor("#6b8cb8"))
+        painter.setPen(QColor("#a1a1aa"))
         icon = {"video": "\u25b6", "audio": "\u266b", "subtitle": "T",
                 "text": "Aa", "image": "\u25a3", "sticker": "\u2605",
                 "blur": "\u25a3"}
@@ -1073,11 +1073,11 @@ class EditorTimeline(QGraphicsView):
                          scroll_x: int, y: int, h: int) -> None:
         view_w = self.viewport().width()
         body_rect = QRectF(0, y, view_w, h)
-        painter.fillRect(body_rect, QColor("#0a0f1a"))
-        painter.setPen(QColor("#1e2d42"))
+        painter.fillRect(body_rect, QColor("#0d0e10"))
+        painter.setPen(QColor("#1e1f24"))
         painter.drawRect(body_rect)
 
-        painter.setPen(QColor("#1e2d42"))
+        painter.setPen(QColor("#1e1f24"))
         # Draw only second markers that can reach the current viewport. On a
         # long project, iterating from 0 on every playback repaint becomes
         # needlessly expensive after the playhead has moved far right.
@@ -1269,18 +1269,18 @@ class EditorTimeline(QGraphicsView):
         painter.setClipRect(QRectF(left, y, right - left, h))
         # Teal-on-teal styling keeps A1 cohesive with the application while
         # the darker waveform remains legible on its green track.
-        painter.setPen(QPen(QColor("#248d82"), 1))
+        painter.setPen(QPen(QColor("#2a9d3f"), 1))
         painter.drawLine(left, int(center_y), right, int(center_y))
         # This is a single vertical gradient brush reused for every peak,
         # giving A1 a subtle modern highlight without changing sample count
         # or doing any additional media processing.
         waveform_gradient = QLinearGradient(0, y, 0, y + h)
-        waveform_gradient.setColorAt(0.0, QColor(18, 108, 102, 135))
-        waveform_gradient.setColorAt(0.5, QColor(41, 151, 136, 185))
-        waveform_gradient.setColorAt(1.0, QColor(8, 67, 76, 155))
+        waveform_gradient.setColorAt(0.0, QColor(42, 157, 63, 135))
+        waveform_gradient.setColorAt(0.5, QColor(60, 180, 85, 185))
+        waveform_gradient.setColorAt(1.0, QColor(20, 100, 40, 155))
         soft_pen = QPen(QBrush(waveform_gradient), 3)
         soft_pen.setCapStyle(Qt.RoundCap)
-        detail_pen = QPen(QColor("#083946"), 1)
+        detail_pen = QPen(QColor("#1a4a28"), 1)
         detail_pen.setCapStyle(Qt.RoundCap)
         # One inexpensive vertical stroke per two display pixels. Sample
         # lookup is proportional to the viewport width, never video length.
@@ -1354,11 +1354,11 @@ class EditorTimeline(QGraphicsView):
             if left < block_right < right:
                 fade_w = 14
                 edge_fade = QLinearGradient(block_right - fade_w, 0, block_right + fade_w, 0)
-                edge_fade.setColorAt(0.0, QColor(10, 18, 30, 0))
-                edge_fade.setColorAt(0.5, QColor(10, 18, 30, 44))
-                edge_fade.setColorAt(1.0, QColor(10, 18, 30, 0))
+                edge_fade.setColorAt(0.0, QColor(13, 14, 16, 0))
+                edge_fade.setColorAt(0.5, QColor(13, 14, 16, 44))
+                edge_fade.setColorAt(1.0, QColor(13, 14, 16, 0))
                 painter.fillRect(QRectF(block_right - fade_w, y + 4, fade_w * 2, target_h), QBrush(edge_fade))
-                painter.setPen(QPen(QColor(207, 232, 239, 42), 1))
+                painter.setPen(QPen(QColor(161, 161, 170, 42), 1))
                 painter.drawLine(block_right, int(y + 4), block_right, int(y + 4 + target_h))
         painter.restore()
 
@@ -1461,7 +1461,7 @@ class EditorTimeline(QGraphicsView):
                 painter.setBrush(Qt.NoBrush)
 
         if is_selected:
-            painter.setPen(QPen(QColor("#00f0ff"), 2))
+            painter.setPen(QPen(QColor("#ff7b1a"), 2))
             painter.setBrush(Qt.NoBrush)
             painter.drawPath(path)
             # CapCut-style trim handles on left and right edges
@@ -1541,22 +1541,22 @@ class EditorTimeline(QGraphicsView):
                          Qt.AlignVCenter | Qt.AlignLeft, label)
 
         if is_selected:
-            painter.setPen(QPen(QColor("#4a8cff"), 2, Qt.DashLine))
+            painter.setPen(QPen(QColor("#ff7b1a"), 2, Qt.DashLine))
             painter.drawRect(rect)
 
     @staticmethod
     def _layer_color(layer_type: LayerType) -> QColor:
         colors = {
-            LayerType.VIDEO: QColor("#2a6bcf"),
+            LayerType.VIDEO: QColor("#3a7bd5"),
             LayerType.AUDIO: QColor("#2a9d3f"),
-            LayerType.SUBTITLE: QColor("#c96b2a"),
-            LayerType.DUB_SUBTITLE: QColor("#c96b2a"),
+            LayerType.SUBTITLE: QColor("#d4870e"),
+            LayerType.DUB_SUBTITLE: QColor("#d4870e"),
             LayerType.TEXT: QColor("#9b4dca"),
             LayerType.IMAGE: QColor("#2a9baa"),
             LayerType.STICKER: QColor("#d4a028"),
             LayerType.BLUR: QColor("#6b5b7b"),
         }
-        return colors.get(layer_type, QColor("#4a5568"))
+        return colors.get(layer_type, QColor("#3f3f46"))
 
 
     def _draw_playhead(self, painter: QPainter, scroll_x: int) -> None:
@@ -1578,11 +1578,11 @@ class EditorTimeline(QGraphicsView):
         if x2 < 0 or x1 > self.viewport().width():
             return
         height = max(self.RULER_HEIGHT, int(self._scene.height()))
-        painter.fillRect(max(0, x1), 0, max(1, x2 - x1), height, QColor(74, 140, 255, 45))
-        painter.setPen(QPen(QColor("#71adff"), 2))
+        painter.fillRect(max(0, x1), 0, max(1, x2 - x1), height, QColor(255, 123, 26, 40))
+        painter.setPen(QPen(QColor("#ff7b1a"), 2))
         painter.drawLine(x1, 0, x1, height)
         painter.drawLine(x2, 0, x2, height)
-        painter.setBrush(QColor("#71adff")); painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor("#ff7b1a")); painter.setPen(Qt.NoPen)
         painter.drawPolygon([QPointF(x1 - 5, 2), QPointF(x1 + 5, 2), QPointF(x1, 10)])
         painter.drawPolygon([QPointF(x2 - 5, 2), QPointF(x2 + 5, 2), QPointF(x2, 10)])
 

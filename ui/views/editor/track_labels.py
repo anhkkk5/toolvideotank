@@ -63,7 +63,7 @@ class TrackLabelBar(QFrame):
         super().__init__(parent)
         self.setFixedWidth(self.TRACK_HEADER_W)
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
-        self.setStyleSheet("background-color: #181a20; border-right: 1px solid #282c35;")
+        self.setStyleSheet("background-color: #141519; border-right: 1px solid #232529;")
         self._track_names: list[str] = []
         self._track_heights: list[int] = []
         self._track_locked: list[bool] = []
@@ -504,12 +504,12 @@ class TrackLabelBar(QFrame):
 
         def _color(name: str) -> QColor:
             prefix = name.split(" ")[0] if name else ""
-            palette = {"V1": QColor("#2a6bcf"), "B1": QColor("#6b5b7b"),
+            palette = {"V1": QColor("#3a7bd5"), "B1": QColor("#6b5b7b"),
                        "A1": QColor("#2a9d3f"), "A2": QColor("#2a9d3f"),
-                       "TS1": QColor("#c96b2a"),
-                       "S1": QColor("#c96b2a"),
+                       "TS1": QColor("#d4870e"),
+                       "S1": QColor("#d4870e"),
                        "M1": QColor("#8c5a2a")}
-            return palette.get(prefix, QColor("#6b8cb8"))
+            return palette.get(prefix, QColor("#a1a1aa"))
 
         font = QFont("Segoe UI", 9, QFont.Bold)
         painter.setFont(font)
@@ -541,13 +541,13 @@ class TrackLabelBar(QFrame):
                                and i < len(self._track_subtitle_shown)
                                and not self._track_subtitle_shown[i])
             if muted or logo_hidden or mask_hidden or text_hidden or subtitle_hidden:
-                bg = QColor("#1a1a2e")
+                bg = QColor("#111114")
             elif prefix in BLUR_PREFIXES and not blur_on:
-                bg = QColor("#1a1a2e")  # dimmed when blur is off
+                bg = QColor("#111114")  # dimmed when blur is off
             else:
-                bg = QColor("#142030")
+                bg = QColor("#141519")
             painter.fillRect(0, y, self.TRACK_HEADER_W, h, bg)
-            painter.setPen(QPen(QColor("#1e2d42"), 1))
+            painter.setPen(QPen(QColor("#27282d"), 1))
             painter.drawRect(0, y, self.TRACK_HEADER_W - 1, h - 1)
 
             painter.setPen(QPen(c, 0))
@@ -584,15 +584,15 @@ class TrackLabelBar(QFrame):
             # Dedicated visibility control for subtitles and overlays.
             if prefix in SUBTITLE_PREFIXES or prefix in BLUR_PREFIXES or prefix in LOGO_PREFIXES or prefix in MASK_PREFIXES or prefix in TEXT_PREFIXES:
                 hidden = subtitle_hidden or logo_hidden or mask_hidden or text_hidden or (prefix in BLUR_PREFIXES and not blur_on)
-                icon_color = QColor("#5a2525") if hidden else QColor("#4f5c6e")
+                icon_color = QColor("#5a2525") if hidden else QColor("#52525b")
                 if not self._controls_enabled:
-                    icon_color = QColor("#36404d")
+                    icon_color = QColor("#3f3f46")
                 self._draw_visibility_icon(painter, self.TRACK_HEADER_W - 48, y + 4, h - 8, hidden, icon_color)
             # Audio/subtitle mute control occupies the left control cell.
             if prefix in MUTE_PREFIXES:
-                icon_color = QColor("#5a2525") if muted else QColor("#4f5c6e")
+                icon_color = QColor("#5a2525") if muted else QColor("#52525b")
                 if not self._controls_enabled:
-                    icon_color = QColor("#36404d")
+                    icon_color = QColor("#3f3f46")
                 # Keep A1's two controls visually grouped. TS1 retains the
                 # left column for mute so its three controls stay ordered.
                 mute_x = self.TRACK_HEADER_W - 60 if prefix in AUDIO_PREFIXES else self.TRACK_HEADER_W - 72
@@ -602,9 +602,9 @@ class TrackLabelBar(QFrame):
             # never preview visibility or export.
             if prefix:
                 locked = bool(self._track_locked[i] if i < len(self._track_locked) else False)
-                icon_color = QColor("#8e3030") if locked else QColor("#8394aa")
+                icon_color = QColor("#8e3030") if locked else QColor("#71717a")
                 if not self._controls_enabled:
-                    icon_color = QColor("#4a5563")
+                    icon_color = QColor("#52525b")
                 self._draw_lock_icon(painter, self.TRACK_HEADER_W - 24, y + 4, h - 8, locked, icon_color)
 
             y += h

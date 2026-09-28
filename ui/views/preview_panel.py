@@ -822,14 +822,14 @@ def build_preview_panel(gui, left_panel=None):
     gui.timeline.layerSelected.connect(gui.on_timeline_layer_selected)
     gui.timeline.layoutChanged.connect(lambda: getattr(gui, '_sync_track_labels', lambda: None)())
     gui.time_label = QLabel("00:00 / 00:00")
-    gui.time_label.setStyleSheet("font-weight: bold; min-width: 100px; color: #6ee7d6;")
+    gui.time_label.setStyleSheet("font-weight: 600; min-width: 90px; color: #6ee7d6; font-size: 11px;")
 
     preview_card = QFrame()
     preview_card.setObjectName("statusCard")
     preview_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
     preview_card_layout = QVBoxLayout(preview_card)
-    preview_card_layout.setContentsMargins(12, 12, 12, 10)
-    preview_card_layout.setSpacing(8)
+    preview_card_layout.setContentsMargins(6, 6, 6, 4)
+    preview_card_layout.setSpacing(4)
     preview_card_layout.addWidget(gui.preview_context_label)
     preview_card_layout.addWidget(gui.frame_preview_status_label)
     preview_card_layout.addWidget(gui.frame_preview_image_label, 1)
@@ -867,18 +867,18 @@ def build_preview_panel(gui, left_panel=None):
     gui.blur_add_btn.setFixedSize(60, 38)
     gui.blur_add_btn.setEnabled(False)
     gui.blur_add_btn.setStyleSheet(
-        "QPushButton { color: #ffc15e; font-weight: bold; font-size: 13px; padding: 0; }"
+        "QPushButton { color: #ff7b1a; font-weight: 700; font-size: 11px; padding: 0; border: none; }"
     )
     gui.ocr_region_btn.setText("OCR")
     gui.ocr_region_btn.setToolTip("Chỉnh sửa vùng phụ đề OCR")
     gui.ocr_region_btn.setFixedSize(38, 38)
-    gui.ocr_region_btn.setStyleSheet("QPushButton { color: #6ee7d6; font-weight: bold; font-size: 10px; padding: 0; }")
+    gui.ocr_region_btn.setStyleSheet("QPushButton { color: #4ecdc4; font-weight: 700; font-size: 10px; padding: 0; border: none; }")
     gui.ocr_region_btn.hide()
     gui.ocr_translator_btn.setFixedSize(92, 38)
     gui.ocr_translator_btn.setToolTip("Chụp và dịch văn bản trực tiếp từ khung hình video hiện tại")
     gui.ocr_translator_btn.setStyleSheet(
-        "QPushButton { color: #d8b4fe; font-weight: bold; font-size: 11px; padding: 0 6px; }"
-        "QPushButton:checked { background: #3b2557; border-color: #a855f7; color: #ffffff; }"
+        "QPushButton { color: #c084fc; font-weight: 700; font-size: 11px; padding: 0 6px; border: none; }"
+        "QPushButton:checked { background: #2a1530; border-color: #a855f7; color: #fff; }"
     )
 
     gui.preview_speed_combo = QComboBox()
@@ -905,7 +905,7 @@ def build_preview_panel(gui, left_panel=None):
     gui.add_logo_btn.setFixedSize(50, 38)
     gui.add_logo_btn.setEnabled(False)
     gui.add_logo_btn.setStyleSheet(
-        "QPushButton { color: #6ee7d6; font-weight: bold; font-size: 13px; padding: 0; }"
+        "QPushButton { color: #4ecdc4; font-weight: 700; font-size: 11px; padding: 0; border: none; }"
     )
     gui.add_logo_btn.setToolTip("Thêm logo hoặc hình mờ vào video")
     gui.add_logo_btn.clicked.connect(
@@ -917,7 +917,7 @@ def build_preview_panel(gui, left_panel=None):
     gui.add_mask_btn.setFixedSize(60, 38)
     gui.add_mask_btn.setEnabled(False)
     gui.add_mask_btn.setStyleSheet(
-        "QPushButton { color: #c98c5a; font-weight: bold; font-size: 13px; padding: 0; }"
+        "QPushButton { color: #c98c5a; font-weight: 700; font-size: 11px; padding: 0; border: none; }"
     )
     gui.add_mask_btn.setToolTip("Thêm vùng mặt nạ hình chữ nhật vào video")
     gui.add_mask_btn.clicked.connect(
@@ -927,7 +927,7 @@ def build_preview_panel(gui, left_panel=None):
     gui.add_text_btn.setFixedSize(50, 38)
     gui.add_text_btn.setEnabled(False)
     gui.add_text_btn.setStyleSheet(
-        "QPushButton { color: #c084fc; font-weight: bold; font-size: 13px; padding: 0; }"
+        "QPushButton { color: #c084fc; font-weight: 700; font-size: 11px; padding: 0; border: none; }"
     )
     gui.add_text_btn.setToolTip("Thêm văn bản tùy chỉnh vào video")
     gui.add_text_btn.clicked.connect(
@@ -1030,25 +1030,25 @@ def build_preview_panel(gui, left_panel=None):
     timeline_card = QFrame()
     timeline_card.setObjectName("statusCard")
     timeline_layout = QVBoxLayout(timeline_card)
-    timeline_layout.setContentsMargins(8, 6, 8, 6)
-    timeline_layout.setSpacing(4)
+    timeline_layout.setContentsMargins(4, 4, 4, 4)
+    timeline_layout.setSpacing(2)
 
     timeline_header_layout = QHBoxLayout()
     timeline_header_layout.setContentsMargins(0, 0, 0, 2)
     timeline_header_layout.setSpacing(6)
 
     timeline_title = QLabel("Timeline")
-    timeline_title.setStyleSheet("font-weight: bold; font-size: 13px; color: #8ad7ff; padding-right: 4px;")
+    timeline_title.setStyleSheet("font-weight: 700; font-size: 11px; color: #ff7b1a; padding-right: 4px;")
     timeline_header_layout.addWidget(timeline_title)
 
     # Style chung cho nút toolbar timeline chuẩn CapCut
     tb_btn_style = (
-        "QPushButton { background: #141f2e; color: #c5d6ea; border: 1px solid #25384e; "
-        "border-radius: 4px; font-size: 11px; padding: 0px; } "
-        "QPushButton:hover { background: #22344a; color: #ffffff; border-color: #3b587d; } "
-        "QPushButton:pressed { background: #0e1722; } "
-        "QPushButton:checked { background: #1b3d63; color: #71adff; border-color: #4a8cff; } "
-        "QPushButton:disabled { background: #0f1620; color: #48596c; border-color: #1a2533; }"
+        "QPushButton { background: #1e1f24; color: #a1a1aa; border: 1px solid #333; "
+        "border-radius: 3px; font-size: 11px; padding: 0px; } "
+        "QPushButton:hover { background: #28292f; color: #fff; border-color: #ff7b1a; } "
+        "QPushButton:pressed { background: #151618; } "
+        "QPushButton:checked { background: #2a1a0e; color: #ff9d42; border-color: #ff7b1a; } "
+        "QPushButton:disabled { background: #141519; color: #52525b; border-color: #222; }"
     )
 
     gui.timeline_undo_btn = QPushButton("↶")
@@ -1066,10 +1066,10 @@ def build_preview_panel(gui, left_panel=None):
     gui.timeline_split_btn = QPushButton("✂ Tách")
     gui.timeline_split_btn.setFixedSize(58, 26)
     gui.timeline_split_btn.setStyleSheet(
-        "QPushButton { background: #18283c; color: #71adff; border: 1px solid #2f4b6e; "
-        "border-radius: 4px; font-weight: bold; font-size: 11px; } "
-        "QPushButton:hover { background: #254064; color: #ffffff; border-color: #4a8cff; } "
-        "QPushButton:disabled { background: #0f1620; color: #48596c; border-color: #1a2533; }"
+        "QPushButton { background: #1e1f24; color: #ff7b1a; border: 1px solid #333; "
+        "border-radius: 3px; font-weight: 700; font-size: 11px; } "
+        "QPushButton:hover { background: #28292f; color: #fff; border-color: #ff7b1a; } "
+        "QPushButton:disabled { background: #141519; color: #52525b; border-color: #222; }"
     )
     gui.timeline_split_btn.setEnabled(False)
     gui.timeline_split_btn.setToolTip("Tách đoạn tại vị trí kim thời gian (Ctrl+B)")
@@ -1152,13 +1152,13 @@ def build_preview_panel(gui, left_panel=None):
     gui.timeline_layers_btn.setToolTip("Hiện hoặc ẩn các lớp trên timeline")
     gui.timeline_layers_menu = QMenu(gui.timeline_layers_btn)
     gui.timeline_layers_menu.setStyleSheet(
-        "QMenu { background: #142030; color: #dbe5f3; border: 1px solid #2f4868; padding: 5px; }"
-        "QMenu::item { padding: 7px 24px 7px 10px; border-radius: 4px; }"
-        "QMenu::item:selected { background: #203a56; color: #ffffff; }"
-        "QMenu::item:disabled { color: #71839a; }"
+        "QMenu { background: #18191d; color: #d4d4d8; border: 1px solid #333; padding: 4px; border-radius: 4px; }"
+        "QMenu::item { padding: 6px 20px 6px 8px; border-radius: 3px; }"
+        "QMenu::item:selected { background: #ff6a00; color: #fff; }"
+        "QMenu::item:disabled { color: #52525b; }"
         "QMenu::indicator { width: 14px; height: 14px; }"
-        "QMenu::indicator:unchecked { border: 1px solid #61758e; background: #0d1220; }"
-        "QMenu::indicator:checked { border: 1px solid #6ee7d6; background: #1f8d83; }"
+        "QMenu::indicator:unchecked { border: 1px solid #3f3f46; background: #141519; }"
+        "QMenu::indicator:checked { border: 1px solid #ff7b1a; background: #ff7b1a; }"
     )
     gui.timeline_layers_menu.aboutToShow.connect(
         lambda: gui.populate_timeline_layers_menu() if hasattr(gui, "populate_timeline_layers_menu") else None
@@ -1224,9 +1224,9 @@ def build_preview_panel(gui, left_panel=None):
     gui.timeline_view_bilingual_btn = QPushButton("📋 Bảng dịch")
     gui.timeline_view_bilingual_btn.setFixedHeight(26)
     gui.timeline_view_bilingual_btn.setStyleSheet(
-        "QPushButton { background: #162a42; color: #4ecdc4; border: 1px solid #23486e; "
-        "border-radius: 4px; padding: 2px 8px; font-weight: bold; font-size: 11px; }"
-        "QPushButton:hover { background: #1e395a; color: #ffffff; border-color: #3b74af; }"
+        "QPushButton { background: #1e1f24; color: #4ecdc4; border: 1px solid #333; "
+        "border-radius: 3px; padding: 2px 8px; font-weight: 700; font-size: 11px; }"
+        "QPushButton:hover { background: #28292f; color: #fff; border-color: #4ecdc4; }"
     )
     gui.timeline_view_bilingual_btn.setToolTip("Mở bảng đối chiếu phụ đề gốc và phụ đề đã dịch song song")
     gui.timeline_view_bilingual_btn.clicked.connect(gui.open_subtitle_alignment_dialog)
@@ -1236,19 +1236,19 @@ def build_preview_panel(gui, left_panel=None):
     gui.add_layer_btn.setFixedHeight(26)
     gui.add_layer_btn.setToolTip("Thêm một lớp mới vào timeline")
     gui.add_layer_btn.setStyleSheet(
-        "QPushButton { background: #1e324a; color: #ffffff; border: 1px solid #2f4e73; "
-        "border-radius: 4px; padding: 2px 10px; font-weight: bold; font-size: 11px; }"
-        "QPushButton:hover { background: #2a476a; border-color: #4575a8; }"
-        "QPushButton:pressed { background: #182a3d; border-color: #6ee7d6; }"
-        "QPushButton:disabled { background: #121d2b; color: #5a6e84; border-color: #1e2e42; }"
+        "QPushButton { background: #1e1f24; color: #fff; border: 1px solid #333; "
+        "border-radius: 3px; padding: 2px 10px; font-weight: 700; font-size: 11px; }"
+        "QPushButton:hover { background: #28292f; border-color: #ff7b1a; }"
+        "QPushButton:pressed { background: #151618; border-color: #ff7b1a; }"
+        "QPushButton:disabled { background: #141519; color: #52525b; border-color: #222; }"
     )
     gui.add_layer_btn.setEnabled(False)
     gui._layer_menu = QMenu(gui.add_layer_btn)
     gui._layer_menu.setStyleSheet(
-        "QMenu { background: #142030; color: #dbe5f3; border: 1px solid #2f4868; padding: 5px; }"
-        "QMenu::item { padding: 7px 24px 7px 10px; border-radius: 4px; }"
-        "QMenu::item:selected { background: #203a56; color: #ffffff; }"
-        "QMenu::item:disabled { color: #71839a; }"
+        "QMenu { background: #18191d; color: #d4d4d8; border: 1px solid #333; padding: 4px; border-radius: 4px; }"
+        "QMenu::item { padding: 6px 20px 6px 8px; border-radius: 3px; }"
+        "QMenu::item:selected { background: #ff6a00; color: #fff; }"
+        "QMenu::item:disabled { color: #52525b; }"
     )
     gui.add_subtitle_segment_action = gui._layer_menu.addAction(
         "Đoạn phụ đề", lambda: gui.on_add_timeline_layer("subtitle")
@@ -1365,9 +1365,9 @@ def build_preview_panel(gui, left_panel=None):
     # --- 3-Tab Subtitle Inspector: [Phong cách] | [Hoạt ảnh] | [Giọng nói] ---
     gui.subtitle_inspector_tabs = QTabWidget()
     gui.subtitle_inspector_tabs.setStyleSheet(
-        "QTabWidget::pane { border: 1px solid #1f3550; border-radius: 8px; background: #0c1524; padding: 4px; }"
-        "QTabBar::tab { background: #142236; color: #a0b4cc; font-weight: bold; padding: 6px 14px; margin-right: 3px; border-top-left-radius: 6px; border-top-right-radius: 6px; }"
-        "QTabBar::tab:selected { background: #1f3b5c; color: #ffffff; }"
+        "QTabWidget::pane { border: 1px solid #27282d; border-radius: 4px; background: #141519; padding: 2px; }"
+        "QTabBar::tab { background: #18191d; color: #71717a; font-weight: 600; padding: 5px 12px; margin-right: 2px; border-top-left-radius: 4px; border-top-right-radius: 4px; font-size: 11px; }"
+        "QTabBar::tab:selected { background: #1e1f24; color: #ff7b1a; border-top: 2px solid #ff7b1a; }"
     )
 
     # --- Tab 1: Phong cách ---
@@ -1396,11 +1396,11 @@ def build_preview_panel(gui, left_panel=None):
     sync_row.setSpacing(6)
     gui.sync_style_role_btn = QPushButton("Đồng bộ phân vai")
     gui.sync_style_role_btn.setToolTip("Áp dụng định dạng này cho toàn bộ câu thoại của nhân vật đang chọn")
-    gui.sync_style_role_btn.setStyleSheet("QPushButton { background: #1f3b5c; color: #8ad7ff; font-weight: bold; border-radius: 4px; padding: 6px; } QPushButton:hover { background: #2a4e7a; }")
+    gui.sync_style_role_btn.setStyleSheet("QPushButton { background: #1e1f24; color: #ff7b1a; font-weight: 700; border-radius: 4px; padding: 5px; border: 1px solid #333; font-size: 11px; } QPushButton:hover { background: #28292f; color: #fff; }")
     gui.sync_style_role_btn.clicked.connect(gui.update_subtitle_preview_style)
     gui.sync_style_all_btn = QPushButton("Đồng bộ TẤT CẢ")
     gui.sync_style_all_btn.setToolTip("Áp dụng định dạng này cho tất cả phụ đề trong dự án")
-    gui.sync_style_all_btn.setStyleSheet("QPushButton { background: #1a4268; color: #6ee7d6; font-weight: bold; border-radius: 4px; padding: 6px; } QPushButton:hover { background: #23598c; }")
+    gui.sync_style_all_btn.setStyleSheet("QPushButton { background: #1e1f24; color: #4ecdc4; font-weight: 700; border-radius: 4px; padding: 5px; border: 1px solid #333; font-size: 11px; } QPushButton:hover { background: #28292f; color: #fff; }")
     gui.sync_style_all_btn.clicked.connect(gui.update_subtitle_preview_style)
     sync_row.addWidget(gui.sync_style_role_btn)
     sync_row.addWidget(gui.sync_style_all_btn)
@@ -2021,9 +2021,9 @@ def build_preview_panel(gui, left_panel=None):
     # Style the scroll bar so it matches the dark theme
     gui.inspector_stack.setStyleSheet(
         "QScrollArea#inspectorCardScroll { background: transparent; border: none; }"
-        "QScrollBar:vertical { border: none; background: #142030; width: 10px; margin: 0; }"
-        "QScrollBar::handle:vertical { background: #35506f; min-height: 30px; border-radius: 5px; }"
-        "QScrollBar::handle:vertical:hover { background: #416287; }"
+        "QScrollBar:vertical { border: none; background: #111114; width: 8px; margin: 0; }"
+        "QScrollBar::handle:vertical { background: #333; min-height: 30px; border-radius: 4px; }"
+        "QScrollBar::handle:vertical:hover { background: #ff7b1a; }"
         "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
     )
 
@@ -2042,8 +2042,8 @@ def build_preview_panel(gui, left_panel=None):
     gui.workspace_splitter.setOpaqueResize(True)
     gui.workspace_splitter.setHandleWidth(6)
     gui.workspace_splitter.setStyleSheet(
-        "QSplitter::handle { background: #162436; margin: 0 2px; } "
-        "QSplitter::handle:hover { background: #38bdf8; }"
+        "QSplitter::handle { background: #1e1f24; margin: 0 1px; } "
+        "QSplitter::handle:hover { background: #ff7b1a; }"
     )
     if left_panel is not None:
         gui.workspace_splitter.addWidget(left_panel)
@@ -2072,8 +2072,8 @@ def build_preview_panel(gui, left_panel=None):
     gui.preview_timeline_splitter.setOpaqueResize(True)
     gui.preview_timeline_splitter.setHandleWidth(6)
     gui.preview_timeline_splitter.setStyleSheet(
-        "QSplitter::handle { background: #1b2a3d; margin: 2px 0; }"
-        "QSplitter::handle:hover { background: #3a6289; }"
+        "QSplitter::handle { background: #1e1f24; margin: 1px 0; }"
+        "QSplitter::handle:hover { background: #ff7b1a; }"
     )
     gui.preview_timeline_splitter.addWidget(gui.workspace_splitter)
     gui.preview_timeline_splitter.addWidget(timeline_card)

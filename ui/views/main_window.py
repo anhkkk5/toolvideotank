@@ -29,15 +29,15 @@ def build_main_window_ui(gui):
     central_widget.setObjectName("centralWidget")
     gui.setCentralWidget(central_widget)
     root_layout = QVBoxLayout(central_widget)
-    root_layout.setContentsMargins(15, 15, 15, 15)
-    root_layout.setSpacing(15)
+    root_layout.setContentsMargins(4, 4, 4, 4)
+    root_layout.setSpacing(4)
     gui.root_layout = root_layout
 
     scroll_area = _build_left_panel(gui)
     root_layout.addWidget(_build_header_bar(gui))
 
     content_layout = QHBoxLayout()
-    content_layout.setSpacing(15)
+    content_layout.setSpacing(4)
     gui.content_layout = content_layout
     right_panel = build_preview_panel(gui)
 
@@ -62,13 +62,13 @@ def _build_header_bar(gui):
     header = _TitleBar()
     header.setObjectName("statusCard")
     layout = QHBoxLayout(header)
-    layout.setContentsMargins(16, 10, 16, 10)
-    layout.setSpacing(10)
+    layout.setContentsMargins(10, 4, 10, 4)
+    layout.setSpacing(6)
     gui.header_bar = header
     gui.header_layout = layout
 
     logo_label = QLabel()
-    logo_label.setFixedSize(32, 32)
+    logo_label.setFixedSize(24, 24)
     logo_label.setAlignment(Qt.AlignCenter)
     
     # Ưu tiên logo TankVideo mới
@@ -78,13 +78,13 @@ def _build_header_bar(gui):
     if os.path.exists(actual_logo):
         logo_pixmap = QPixmap(actual_logo)
         if not logo_pixmap.isNull():
-            logo_label.setPixmap(logo_pixmap.scaled(28, 28, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            logo_label.setPixmap(logo_pixmap.scaled(22, 22, Qt.KeepAspectRatio, Qt.SmoothTransformation))
     layout.addWidget(logo_label)
     gui.header_logo_label = logo_label
 
     brand_label = QLabel()
     brand_label.setObjectName("heroTitle")
-    brand_label.setText("<span style='color:#f1f5f9; font-size:18px; font-weight:900; letter-spacing:0.5px;'>TANK</span><span style='color:#ff7b1a; font-size:18px; font-weight:900; letter-spacing:0.5px;'>VIDEO</span>")
+    brand_label.setText("<span style='color:#fafafa; font-size:14px; font-weight:900; letter-spacing:0.5px;'>TANK</span><span style='color:#ff7b1a; font-size:14px; font-weight:900; letter-spacing:0.5px;'>VIDEO</span>")
     brand_label.setTextFormat(Qt.RichText)
     layout.addWidget(brand_label)
     gui.header_brand_label = brand_label
@@ -92,87 +92,91 @@ def _build_header_bar(gui):
     gui.project_title_label = QLabel("📁 Chưa chọn video")
     gui.project_title_label.setObjectName("statusHeadline")
     gui.project_title_label.setStyleSheet(
-        "background-color: #1a1d24; border: 1px solid #2e333d; border-radius: 8px; "
-        "padding: 6px 14px; color: #cbd5e1; font-size: 13px; font-weight: 600;"
+        "background-color: #141519; border: 1px solid #27282d; border-radius: 4px; "
+        "padding: 4px 10px; color: #a1a1aa; font-size: 11px; font-weight: 600;"
     )
     layout.addWidget(gui.project_title_label, 1)
 
     gui.voice_gender_check_btn = QPushButton("🎙️ Phân vai AI")
     gui.voice_gender_check_btn.setObjectName("secondaryActionBtn")
-    gui.voice_gender_check_btn.setMinimumHeight(38)
-    gui.voice_gender_check_btn.setMinimumWidth(125)
+    gui.voice_gender_check_btn.setMinimumHeight(30)
+    gui.voice_gender_check_btn.setMinimumWidth(100)
     gui.voice_gender_check_btn.setToolTip("Đọc phụ đề gốc và phân vai Nam / Nữ bằng AI")
     gui.voice_gender_check_btn.clicked.connect(gui.run_voice_gender_check)
     layout.addWidget(gui.voice_gender_check_btn)
 
     gui.voice_gender_history_btn = QPushButton("📜 Lịch sử")
     gui.voice_gender_history_btn.setObjectName("secondaryActionBtn")
-    gui.voice_gender_history_btn.setMinimumHeight(38)
-    gui.voice_gender_history_btn.setMinimumWidth(95)
+    gui.voice_gender_history_btn.setMinimumHeight(30)
+    gui.voice_gender_history_btn.setMinimumWidth(80)
     gui.voice_gender_history_btn.setToolTip("Mở danh sách các bản Master Data đã lưu")
     gui.voice_gender_history_btn.clicked.connect(gui.open_voice_gender_history)
     layout.addWidget(gui.voice_gender_history_btn)
 
-    gui.pipeline_b_create_btn = QPushButton("⚡ TẠO VIDEO AI")
+    gui.pipeline_b_create_btn = QPushButton("⚡ TẠO VIDEO")
     gui.pipeline_b_create_btn.setObjectName("pipelineBActionBtn")
-    gui.pipeline_b_create_btn.setMinimumHeight(38)
-    gui.pipeline_b_create_btn.setMinimumWidth(165)
+    gui.pipeline_b_create_btn.setMinimumHeight(30)
+    gui.pipeline_b_create_btn.setMinimumWidth(120)
     gui.pipeline_b_create_btn.setToolTip("Tạo video tự động từ Master Data đã duyệt (Lồng tiếng AI -> Ducking -> Xuất MP4)")
     gui.pipeline_b_create_btn.setStyleSheet(
         "QPushButton { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #ff6a00, stop:1 #e04800); "
-        "color: #ffffff; font-weight: 800; font-size: 13px; border: 1px solid #ff8833; border-radius: 8px; padding: 6px 16px; } "
-        "QPushButton:hover { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #ff7d1a, stop:1 #f05400); border-color: #ffa352; }"
+        "color: #fff; font-weight: 700; font-size: 12px; border: none; border-radius: 4px; padding: 5px 12px; } "
+        "QPushButton:hover { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #ff7d1a, stop:1 #f05400); }"
     )
     gui.pipeline_b_create_btn.clicked.connect(lambda: getattr(gui, "start_pipeline_b_flow", lambda: None)())
     layout.addWidget(gui.pipeline_b_create_btn)
 
-    gui.run_all_btn.setText("▶ Tạo video (1 giọng)")
-    gui.run_all_btn.setMinimumHeight(38)
-    gui.run_all_btn.setMinimumWidth(160)
-    gui.run_all_btn.setToolTip("Chạy toàn bộ quy trình 1 giọng (Setup âm thanh ➔ Quét OCR ➔ DeepSeek AI ➔ Che chữ Trung + Đè phụ đề ➔ Ra video)")
+    gui.run_all_btn.setText("▶ Tạo video")
+    gui.run_all_btn.setMinimumHeight(30)
+    gui.run_all_btn.setMinimumWidth(110)
+    gui.run_all_btn.setToolTip("Chạy toàn bộ quy trình 1 giọng")
     gui.run_all_btn.setStyleSheet(
-        "QToolButton { background: #1a2a3e; color: #8ad7ff; border: 1px solid #2e4768; border-radius: 8px; padding: 6px 14px; font-weight: bold; font-size: 12px; } "
-        "QToolButton:hover { background: #223854; color: #ffffff; border-color: #4ecdc4; }"
+        "QToolButton { background: #141519; color: #8ad7ff; border: 1px solid #27282d; border-radius: 4px; padding: 5px 10px; font-weight: 600; font-size: 11px; } "
+        "QToolButton:hover { background: #1e1f24; color: #fff; border-color: #4ecdc4; }"
     )
     layout.addWidget(gui.run_all_btn)
 
 
-    gui.export_btn.setText("📤 Xuất MP4")
+    gui.export_btn.setText("Export")
     gui.export_btn.setObjectName("secondaryActionBtn")
-    gui.export_btn.setMinimumHeight(38)
+    gui.export_btn.setMinimumHeight(30)
     layout.addWidget(gui.export_btn)
 
-    gui.preview_5s_btn.setText("👁 Xem nhanh")
+    gui.preview_5s_btn.setText("Xem nhanh")
     gui.preview_5s_btn.setObjectName("secondaryActionBtn")
-    gui.preview_5s_btn.setMinimumHeight(38)
-    gui.preview_5s_btn.setMinimumWidth(110)
+    gui.preview_5s_btn.setMinimumHeight(30)
+    gui.preview_5s_btn.setMinimumWidth(90)
     gui.preview_5s_btn.setToolTip("Render 5 giây mẫu với đầy đủ phụ đề và mặt nạ")
     layout.addWidget(gui.preview_5s_btn)
 
     gui.toggle_panel_btn = QPushButton("Control")
     gui.toggle_panel_btn.setObjectName("secondaryActionBtn")
-    gui.toggle_panel_btn.setMinimumHeight(38)
+    gui.toggle_panel_btn.setMinimumHeight(30)
     gui.toggle_panel_btn.setVisible(False)
     layout.addWidget(gui.toggle_panel_btn)
 
-    gui.license_btn = QPushButton("👑 Bản quyền")
+    gui.license_btn = QPushButton("👑 VIP")
     gui.license_btn.setObjectName("secondaryActionBtn")
-    gui.license_btn.setMinimumHeight(38)
-    gui.license_btn.setToolTip("Xem thông tin bản quyền và thời hạn gói tháng")
+    gui.license_btn.setMinimumHeight(30)
+    gui.license_btn.setStyleSheet(
+        "QPushButton { background: #1a1510; color: #fbbf24; border: 1px solid #78530a; border-radius: 4px; font-weight: 700; font-size: 11px; padding: 5px 10px; } "
+        "QPushButton:hover { background: #241e14; border-color: #fbbf24; color: #fff; }"
+    )
+    gui.license_btn.setToolTip("Xem thông tin bản quyền")
     gui.license_btn.clicked.connect(lambda: getattr(gui, "open_license_dialog", lambda: None)())
     layout.addWidget(gui.license_btn)
 
-    gui.update_btn = QPushButton("🚀 Cập nhật")
+    gui.update_btn = QPushButton("Cập nhật")
     gui.update_btn.setObjectName("secondaryActionBtn")
-    gui.update_btn.setMinimumHeight(38)
-    gui.update_btn.setToolTip("Kiểm tra và cập nhật phiên bản mới nhất của TankVideo")
+    gui.update_btn.setMinimumHeight(30)
+    gui.update_btn.setToolTip("Kiểm tra và cập nhật phiên bản mới nhất")
     gui.update_btn.clicked.connect(lambda: getattr(gui, "open_update_dialog", lambda: None)())
     layout.addWidget(gui.update_btn)
 
-    gui.more_actions_btn = QPushButton("⚙ Tùy chọn ▾")
+    gui.more_actions_btn = QPushButton("⚙ ▾")
     gui.more_actions_btn.setObjectName("secondaryActionBtn")
-    gui.more_actions_btn.setMinimumHeight(38)
-    gui.more_actions_btn.setMinimumWidth(120)
+    gui.more_actions_btn.setMinimumHeight(30)
+    gui.more_actions_btn.setMinimumWidth(50)
     more_menu = QMenu(gui.more_actions_btn)
     more_menu.setObjectName("headerMoreMenu")
 
@@ -197,16 +201,16 @@ def _build_header_bar(gui):
     layout.addSpacing(10)
 
     gui.titlebar_min_btn = QPushButton("—")
-    gui.titlebar_min_btn.setFixedSize(36, 36)
+    gui.titlebar_min_btn.setFixedSize(28, 28)
     gui.titlebar_min_btn.setToolTip("Minimize")
-    gui.titlebar_min_btn.setStyleSheet("QPushButton { background: transparent; color: #94a3b8; font-size: 16px; font-weight: bold; border-radius: 6px; } QPushButton:hover { background: #22262e; color: #fff; }")
+    gui.titlebar_min_btn.setStyleSheet("QPushButton { background: transparent; color: #71717a; font-size: 14px; font-weight: bold; border-radius: 4px; border: none; } QPushButton:hover { background: #1e1f24; color: #fff; }")
     gui.titlebar_min_btn.clicked.connect(gui.showMinimized)
     layout.addWidget(gui.titlebar_min_btn)
 
     gui.titlebar_close_btn = QPushButton("✕")
-    gui.titlebar_close_btn.setFixedSize(36, 36)
+    gui.titlebar_close_btn.setFixedSize(28, 28)
     gui.titlebar_close_btn.setToolTip("Close")
-    gui.titlebar_close_btn.setStyleSheet("QPushButton { background: transparent; color: #94a3b8; font-size: 14px; font-weight: bold; border-radius: 6px; } QPushButton:hover { background: #e11d48; color: #fff; }")
+    gui.titlebar_close_btn.setStyleSheet("QPushButton { background: transparent; color: #71717a; font-size: 13px; font-weight: bold; border-radius: 4px; border: none; } QPushButton:hover { background: #e11d48; color: #fff; }")
     gui.titlebar_close_btn.clicked.connect(gui.close)
     layout.addWidget(gui.titlebar_close_btn)
     return header
@@ -236,7 +240,8 @@ def _build_left_panel(gui):
     gui.left_panel_scroll_area = scroll_area
     scroll_area.setObjectName("leftPanelArea")
     scroll_area.setWidgetResizable(True)
-    scroll_area.setFixedWidth(420)
+    scroll_area.setMinimumWidth(280)
+    scroll_area.setMaximumWidth(520)
     scroll_area.setAlignment(Qt.AlignTop | Qt.AlignLeft)
     scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
     scroll_area.setFrameShape(QFrame.NoFrame)
@@ -245,8 +250,8 @@ def _build_left_panel(gui):
     left_panel_container.setObjectName("leftPanelContainer")
     gui.left_panel_container = left_panel_container
     left_layout = QVBoxLayout(left_panel_container)
-    left_layout.setContentsMargins(10, 0, 10, 0)
-    left_layout.setSpacing(12)
+    left_layout.setContentsMargins(6, 0, 6, 0)
+    left_layout.setSpacing(8)
     scroll_area.setWidget(left_panel_container)
     scroll_area.installEventFilter(gui)
     scroll_area.viewport().installEventFilter(gui)
