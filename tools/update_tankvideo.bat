@@ -54,7 +54,7 @@ taskkill /f /im TankVideo.exe >nul 2>&1
 ping 127.0.0.1 -n 3 > nul
 
 :: 2. Tai patch.zip tu Google Drive (xu ly confirm cho file lon)
-echo [2/5] Dang tai ban cap nhat (~33 MB), vui long cho...
+echo [2/5] Dang tai ban cap nhat (~74 MB), vui long cho...
 set "FILE_ID=1r-asAt_CN35hidm8i1f1xqM-Rn9vBe6S"
 set "TEMP_ZIP=%TANK_DIR%temp_update.zip"
 

@@ -65,13 +65,29 @@ def create_patch_zip() -> tuple[Path | None, float]:
         print("⚠️ Chưa tìm thấy dist/TankVideo/TankVideo.exe để đóng gói bản vá.")
         return None, 0.0
 
+    # Delegate to mk_patch.py which bundles exe + Playwright driver + dependencies
+    mk_patch = ROOT_DIR / "scratch" / "mk_patch.py"
+    if mk_patch.exists():
+        res = subprocess.run(
+            [sys.executable, str(mk_patch)],
+            cwd=str(ROOT_DIR),
+            capture_output=False,
+        )
+        if res.returncode != 0:
+            print("⚠️ mk_patch.py thất bại, dùng fallback đóng gói chỉ exe.")
+    else:
+        # Fallback: chỉ nén TankVideo.exe
+        patch_zip = ROOT_DIR / "dist" / "patch.zip"
+        patch_zip.parent.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(patch_zip, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.write(exe_path, "TankVideo.exe")
+
     patch_zip = ROOT_DIR / "dist" / "patch.zip"
-    patch_zip.parent.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(patch_zip, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.write(exe_path, "TankVideo.exe")
+    if not patch_zip.exists():
+        return None, 0.0
 
     size_mb = patch_zip.stat().st_size / (1024 * 1024)
-    print(f"\n📦 ĐÃ ĐÓNG GÓI XONG BẢN VÁ SIÊU NHẸ: dist/patch.zip ({size_mb:.1f} MB)")
+    print(f"\n📦 ĐÃ ĐÓNG GÓI XONG BẢN VÁ: dist/patch.zip ({size_mb:.1f} MB)")
     return patch_zip, size_mb
 
 

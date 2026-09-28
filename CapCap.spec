@@ -5,6 +5,7 @@ import os
 import glob as _glob
 import faster_whisper
 import rapidocr
+import playwright._impl.__pyinstaller as _pw_pyinstaller
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 _spec_dir = globals().get("SPECPATH")
@@ -62,6 +63,10 @@ datas += collect_data_files("piper")
 # Selenium ships ``selenium-manager.exe`` which auto-downloads the correct
 # ChromeDriver at runtime.  Must be bundled for the Douyin cookie extraction.
 datas += collect_data_files("selenium", include_py_files=False)
+# Playwright ships a Node.js driver (node.exe + package/) required at runtime
+# by the RedNote/Xiaohongshu channel scanner.  collect_data_files() copies the
+# entire ``playwright/driver/`` tree (~102 MB) into the frozen bundle.
+datas += collect_data_files("playwright")
 
 # The normalizer package ships its built-in CSV rules as package data.  Keep
 # them in the frozen build; project dictionaries are stored separately in
@@ -238,8 +243,22 @@ a = Analysis(
         "app.services.fuzzy_duplicate_service",
         "app.services.decision_fusion_service",
         "ui.worker_adapters.video_creator_adapter",
+        # Playwright – required by RedNote/Xiaohongshu and other browser-based scanners
+        "playwright",
+        "playwright.sync_api",
+        "playwright._impl",
+        "playwright._impl._driver",
+        "playwright._impl._transport",
+        "playwright._impl._connection",
+        "playwright._impl._browser_type",
+        "playwright._impl._browser",
+        "playwright._impl._browser_context",
+        "playwright._impl._page",
+        "playwright._impl._playwright",
+        "greenlet",
+        "pyee",
     ] + rapidocr_hiddenimports,
-    hookspath=[],
+    hookspath=_pw_pyinstaller.get_hook_dirs(),
     hooksconfig={},
     runtime_hooks=[],
     excludes=excludes,

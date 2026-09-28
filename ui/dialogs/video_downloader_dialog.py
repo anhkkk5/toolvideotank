@@ -105,6 +105,8 @@ class ThumbnailLoader(QThread):
                 headers["Referer"] = "https://www.youtube.com/"
             elif "kuaishou" in img_url or "kwaicdn" in img_url:
                 headers["Referer"] = "https://www.kuaishou.com/"
+            elif "facebook.com" in img_url or "fbcdn.net" in img_url or "fna.fbcdn" in img_url:
+                headers["Referer"] = "https://www.facebook.com/"
             else:
                 headers["Referer"] = "https://www.douyin.com/"
 
@@ -227,18 +229,61 @@ class ScanWorker(QThread):
                     video_found_cb=lambda item: self.sig_video_found.emit(item),
                     is_cancelled_cb=lambda: self._is_cancelled,
                 )
+            elif self.platform in ("facebook", "reels") or "facebook.com" in self.url or "fb.watch" in self.url:
+                from app.services.facebook_channel_scanner import scan_facebook_channel
+                mode = "reels" if self.platform == "reels" or "reels" in self.url else "videos"
+                videos, channel_info, err = scan_facebook_channel(
+                    url=self.url,
+                    max_videos=self.max_count,
+                    browser_id=self.browser_id,
+                    profile_id=self.profile_id,
+                    browser_exe_path=self.browser_exe,
+                    progress_cb=lambda msg, cnt: self.sig_progress.emit(msg, cnt),
+                    video_found_cb=lambda item: self.sig_video_found.emit(item),
+                    is_cancelled_cb=lambda: self._is_cancelled,
+                    mode=mode,
+                )
+            elif self.platform == "xiaohongshu" or "xiaohongshu.com" in self.url or "rednote.com" in self.url or "xhslink.com" in self.url:
+                from app.services.rednote_channel_scanner import scan_rednote
+                videos, channel_info = scan_rednote(
+                    url=self.url,
+                    max_videos=self.max_count,
+                    browser_id=self.browser_id,
+                    profile_id=self.profile_id,
+                    browser_exe_path=self.browser_exe,
+                    progress_cb=lambda msg, cnt: self.sig_progress.emit(msg, cnt),
+                    video_found_cb=lambda item: self.sig_video_found.emit(item),
+                    is_cancelled_cb=lambda: self._is_cancelled,
+                )
             else:
-                # Fallback via yt-dlp for YouTube, TikTok, Facebook, etc.
+                # Fallback via yt-dlp for YouTube, TikTok, etc.
                 import yt_dlp
                 self.sig_progress.emit(f"Đang phân tích liên kết {self.platform.upper()}...", 0)
+
+                scan_url = self.url.strip()
+                if self.platform == "tiktok" and not scan_url.startswith("http"):
+                    # Auto format username to full TikTok channel URL
+                    clean_user = scan_url.lstrip("@")
+                    scan_url = f"https://www.tiktok.com/@{clean_user}"
+
                 ydl_opts = {
                     "quiet": True,
                     "extract_flat": True,
                     "skip_download": True,
                     "no_warnings": True,
+                    "extractor_args": {"tiktok": ["app_version=0"]},
                 }
+
+                # Attach saved cookies for this platform if available
+                from app.services.cookie_storage_service import get_saved_platform_cookies
+                _, netscape_path, ua = get_saved_platform_cookies(self.platform)
+                if netscape_path and os.path.exists(netscape_path):
+                    ydl_opts["cookiefile"] = netscape_path
+                if ua:
+                    ydl_opts["http_headers"] = {"User-Agent": ua}
+
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    info = ydl.extract_info(self.url, download=False)
+                    info = ydl.extract_info(scan_url, download=False)
                     if not info:
                         err = "Không tìm thấy dữ liệu từ liên kết đã nhập."
                     else:
@@ -248,14 +293,28 @@ class ScanWorker(QThread):
                         for i, e in enumerate(entries):
                             if self._is_cancelled:
                                 break
-                            vid = e.get("id") or str(i + 1)
-                            v_url = e.get("url") or e.get("webpage_url") or self.url
+                            vid = str(e.get("id") or (i + 1))
+                            v_url = e.get("url") or e.get("webpage_url") or scan_url
+
+                            # Robust thumbnail extraction: check both 'thumbnail' and 'thumbnails'
+                            cover = e.get("thumbnail") or ""
+                            if not cover and e.get("thumbnails"):
+                                for t in e["thumbnails"]:
+                                    if isinstance(t, dict) and t.get("url"):
+                                        cover = t["url"]
+                                        if t.get("id") in ("cover", "originCover", "0"):
+                                            break
+
+                            # Clean title
+                            raw_title = e.get("title") or e.get("description") or f"Video {i+1}"
+                            clean_title = " ".join(str(raw_title).split())
+
                             v_entry = {
                                 "id": vid,
-                                "title": e.get("title") or f"Video {i+1}",
+                                "title": clean_title,
                                 "url": v_url,
                                 "direct_url": "",
-                                "cover": e.get("thumbnail") or "",
+                                "cover": cover,
                                 "likes": e.get("like_count") or 0,
                                 "views": e.get("view_count") or 0,
                                 "author": e.get("uploader") or ch_name,
@@ -974,9 +1033,9 @@ class VideoDownloaderDialog(QDialog):
 
         # ---- RESULTS TABLE (QTableWidget) ----
         self.table = QTableWidget(self)
-        self.table.setColumnCount(9)
+        self.table.setColumnCount(8)
         self.table.setHorizontalHeaderLabels([
-            "", "STT", "ẢNH BÌA", "ID VIDEO", "TIÊU ĐỀ / NỘI DUNG",
+            "", "STT", "ẢNH BÌA", "TIÊU ĐỀ / NỘI DUNG",
             "❤️ LƯỢT THÍCH", "👁️ LƯỢT XEM", "TÁC GIẢ", "TRẠNG THÁI"
         ])
         self.table.setStyleSheet(f"""
@@ -1015,17 +1074,15 @@ class VideoDownloaderDialog(QDialog):
         self.table.setColumnWidth(1, 46)
         header_view.setSectionResizeMode(2, QHeaderView.Fixed)
         self.table.setColumnWidth(2, 85)
-        header_view.setSectionResizeMode(3, QHeaderView.Fixed)
-        self.table.setColumnWidth(3, 115)
-        header_view.setSectionResizeMode(4, QHeaderView.Stretch)
+        header_view.setSectionResizeMode(3, QHeaderView.Stretch)
+        header_view.setSectionResizeMode(4, QHeaderView.Fixed)
+        self.table.setColumnWidth(4, 95)
         header_view.setSectionResizeMode(5, QHeaderView.Fixed)
         self.table.setColumnWidth(5, 95)
         header_view.setSectionResizeMode(6, QHeaderView.Fixed)
-        self.table.setColumnWidth(6, 95)
+        self.table.setColumnWidth(6, 120)
         header_view.setSectionResizeMode(7, QHeaderView.Fixed)
-        self.table.setColumnWidth(7, 110)
-        header_view.setSectionResizeMode(8, QHeaderView.Fixed)
-        self.table.setColumnWidth(8, 105)
+        self.table.setColumnWidth(7, 105)
 
         # REAL, CLICKABLE HEADER CHECKBOX OVER SECTION 0 (DEFAULT: UNCHECKED)
         self.header_cb = QCheckBox(self.table.horizontalHeader())
@@ -1096,6 +1153,30 @@ class VideoDownloaderDialog(QDialog):
     # ================================================================== #
     #  Card & Widget Styling Helpers                                      #
     # ================================================================== #
+    @staticmethod
+    def _format_duration(seconds) -> str:
+        if not seconds:
+            return "--:--"
+        if isinstance(seconds, str):
+            if ":" in seconds:
+                return seconds
+            try:
+                seconds = float(seconds)
+            except Exception:
+                return seconds
+        try:
+            s = int(float(seconds))
+            if s <= 0:
+                return "--:--"
+            h = s // 3600
+            m = (s % 3600) // 60
+            sec = s % 60
+            if h > 0:
+                return f"{h:02d}:{m:02d}:{sec:02d}"
+            return f"{m:02d}:{sec:02d}"
+        except Exception:
+            return str(seconds)
+
     def _create_card(self, title: str) -> QFrame:
         card = QFrame(self)
         card.setStyleSheet(f"""
@@ -1221,6 +1302,8 @@ class VideoDownloaderDialog(QDialog):
             self.url_input.setPlaceholderText("Dán link kênh hoặc playlist YouTube...")
         elif platform_id == "bilibili":
             self.url_input.setPlaceholderText("Dán link kênh Bilibili (https://space.bilibili.com/...)...")
+        elif platform_id in ("facebook", "reels"):
+            self.url_input.setPlaceholderText("Dán link trang/kênh Facebook, Reels tab (https://www.facebook.com/...) hoặc link video...")
         else:
             self.url_input.setPlaceholderText(f"Dán link video hoặc trang {p_name}...")
 
@@ -1369,8 +1452,9 @@ class VideoDownloaderDialog(QDialog):
         # Auto save cookie if user typed into cookie_input
         ck_text = self.cookie_input.toPlainText().strip()
         if ck_text:
-            save_douyin_cookies(ck_text)
-            self._refresh_cookie_status()
+            curr_plat = getattr(self, "_selected_platform", "douyin")
+            save_platform_cookies(curr_plat, ck_text)
+            self._refresh_cookie_status(curr_plat)
 
         # Update UI state
         self.btn_start_scan.setEnabled(False)
@@ -1497,43 +1581,37 @@ class VideoDownloaderDialog(QDialog):
         thumb_lay.addWidget(thumb_lbl)
         self.table.setCellWidget(t_row, 2, thumb_container)
 
-        # Col 3: ID Video
-        id_item = QTableWidgetItem(str(v.get("id", "")))
-        id_item.setForeground(QColor(self._ACCENT_BLUE))
-        id_item.setFont(QFont("Consolas", 9))
-        self.table.setItem(t_row, 3, id_item)
-
-        # Col 4: Tiêu đề
+        # Col 3: Tiêu đề
         title_item = QTableWidgetItem(v.get("title", ""))
         title_item.setToolTip(v.get("title", ""))
-        self.table.setItem(t_row, 4, title_item)
+        self.table.setItem(t_row, 3, title_item)
 
-        # Col 5: Lượt thích
+        # Col 4: Lượt thích
         likes = v.get("likes", 0)
         like_str = f"{likes:,}".replace(",", ".") if likes else "0"
         like_item = QTableWidgetItem(f"❤️ {like_str}")
         like_item.setForeground(QColor("#f43f5e"))
         like_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self.table.setItem(t_row, 5, like_item)
+        self.table.setItem(t_row, 4, like_item)
 
-        # Col 6: Lượt xem
+        # Col 5: Lượt xem
         views = v.get("views", 0)
         view_str = f"{views:,}".replace(",", ".") if views else "0"
         view_item = QTableWidgetItem(f"👁️ {view_str}")
         view_item.setForeground(QColor(self._ACCENT_BLUE))
         view_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self.table.setItem(t_row, 6, view_item)
+        self.table.setItem(t_row, 5, view_item)
 
-        # Col 7: Tác giả
+        # Col 6: Tác giả
         author_item = QTableWidgetItem(v.get("author", ""))
         author_item.setForeground(QColor("#cbd5e1"))
-        self.table.setItem(t_row, 7, author_item)
+        self.table.setItem(t_row, 6, author_item)
 
-        # Col 8: Trạng thái
+        # Col 7: Trạng thái
         status_item = QTableWidgetItem(v.get("status", "Chờ tải"))
         status_item.setTextAlignment(Qt.AlignCenter)
         status_item.setForeground(QColor("#f59e0b"))
-        self.table.setItem(t_row, 8, status_item)
+        self.table.setItem(t_row, 7, status_item)
 
     def _on_scan_finished(self, videos: list, channel_info: dict, err: str):
         self.btn_start_scan.setEnabled(True)
@@ -1891,7 +1969,7 @@ class VideoDownloaderDialog(QDialog):
 
     def _on_row_status_update(self, row_idx: int, status_text: str):
         if row_idx < self.table.rowCount():
-            item = self.table.item(row_idx, 8)
+            item = self.table.item(row_idx, 7)
             if item:
                 item.setText(status_text)
                 if "Hoàn thành" in status_text:

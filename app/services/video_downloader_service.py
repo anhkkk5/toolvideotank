@@ -1122,6 +1122,13 @@ class VideoDownloaderService:
             cookie_file = _get_douyin_cookie_file(cookie_dir, preferred_browser=self.preferred_browser)
             if cookie_file:
                 ydl_opts["cookiefile"] = cookie_file
+        elif platform in ("tiktok", "bilibili", "youtube", "facebook", "instagram", "kuaishou"):
+            from app.services.cookie_storage_service import get_saved_platform_cookies
+            _, netscape_path, ua = get_saved_platform_cookies(platform)
+            if netscape_path and os.path.exists(netscape_path):
+                ydl_opts["cookiefile"] = netscape_path
+            if ua:
+                ydl_opts["http_headers"] = {"User-Agent": ua}
 
         result = {"success": False, "files": [], "error": "", "platform": platform}
 

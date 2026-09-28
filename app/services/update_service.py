@@ -201,11 +201,13 @@ class UpdateService:
 
         _log("Bat dau cap nhat...")
 
-        # Bước 1: Giải nén TankVideo.exe từ zip ra file tạm TankVideo_new.exe
+        # Bước 1: Giải nén TankVideo.exe + _internal/ từ zip
         try:
             with zipfile.ZipFile(temp_zip, "r") as zf:
-                # Tìm file TankVideo.exe trong zip (có thể ở root hoặc trong subfolder)
-                exe_names = [n for n in zf.namelist() if n.lower().endswith("tankvideo.exe")]
+                all_names = zf.namelist()
+
+                # 1a. Giải nén TankVideo.exe ra file tạm TankVideo_new.exe
+                exe_names = [n for n in all_names if n.lower().endswith("tankvideo.exe")]
                 if not exe_names:
                     _log("LOI: Khong tim thay TankVideo.exe trong file zip!")
                     return False, "Không tìm thấy TankVideo.exe trong bản cập nhật."
@@ -218,6 +220,19 @@ class UpdateService:
                 with open(target_new, "wb") as f:
                     f.write(data)
                 _log(f"Da giai nen thanh cong: {len(data)} bytes")
+
+                # 1b. Giải nén tất cả file _internal/ (Playwright driver, greenlet, v.v.)
+                internal_entries = [n for n in all_names if n.startswith("_internal/") and not n.endswith("/")]
+                if internal_entries:
+                    _log(f"Giai nen {len(internal_entries)} file _internal/ bo sung...")
+                    for entry in internal_entries:
+                        dest_path = os.path.join(self.workspace_root, entry)
+                        dest_dir = os.path.dirname(dest_path)
+                        os.makedirs(dest_dir, exist_ok=True)
+                        entry_data = zf.read(entry)
+                        with open(dest_path, "wb") as f:
+                            f.write(entry_data)
+                    _log(f"Da giai nen {len(internal_entries)} file _internal/ thanh cong")
         except Exception as exc:
             _log(f"LOI giai nen: {exc}")
             self._write_log(update_log, log_lines)
