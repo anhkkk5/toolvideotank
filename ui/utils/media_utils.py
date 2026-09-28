@@ -449,15 +449,8 @@ def append_video_to_timeline(gui, video_path: str):
     timeline.viewport().update()
 
 
-def import_multi_media_files(gui):
-    """Mở hộp thoại chọn một hoặc nhiều file video/media, đưa vào Media Pool và Timeline."""
-    from PySide6.QtWidgets import QFileDialog
-    file_paths, _ = QFileDialog.getOpenFileNames(
-        gui,
-        "Chọn các video hoặc tệp media cần nhập",
-        "",
-        "Media Files (*.mp4 *.mkv *.avi *.mov *.webm *.flv *.mp3 *.wav *.m4a);;All Files (*.*)"
-    )
+def import_media_paths(gui, file_paths):
+    """Xử lý danh sách đường dẫn media được nhập (từ dialog hoặc kéo thả)."""
     if not file_paths:
         return
 
@@ -468,18 +461,17 @@ def import_multi_media_files(gui):
     thumb_dir = os.path.join(workspace_root(), "temp", "launcher_thumbs")
     os.makedirs(thumb_dir, exist_ok=True)
 
+    ctrl = getattr(gui, "_batch_controller", None)
     has_active_video = bool(getattr(gui, "_current_video_path", "") and os.path.exists(getattr(gui, "_current_video_path", "")))
 
     newly_added = []
     for path in file_paths:
         path = os.path.abspath(path)
-        existing = next((item for item in gui.project_media_pool if os.path.normpath(item["path"]) == os.path.normpath(path)), None)
+        existing = next((item for item in gui.project_media_pool if os.path.normpath(item.get("path", "")) == os.path.normpath(path)), None)
         if not existing:
-            print(f"[MediaPool] Importing: {path}")
             try:
                 dur_s, thumb_p = probe_video_duration_and_thumb(path, thumb_dir)
-            except Exception as _exc:
-                print(f"[MediaPool] ERROR probing {path}: {_exc}")
+            except Exception:
                 dur_s, thumb_p = 0.0, ""
             total_s = int(dur_s)
             m = total_s // 60
@@ -496,29 +488,32 @@ def import_multi_media_files(gui):
             }
             gui.project_media_pool.append(item)
             newly_added.append(item)
-            print(f"[MediaPool] Added to pool: {item['name']} (pool size: {len(gui.project_media_pool)})")
-        else:
-            print(f"[MediaPool] Already exists: {path}")
 
-    print(f"[MediaPool] newly_added={len(newly_added)}, has_active={has_active_video}, pool_size={len(gui.project_media_pool)}")
+            # Đồng bộ trực tiếp vào Batch Controller nếu đã khởi tạo
+            if ctrl and not any(os.path.normpath(ws.video_path) == os.path.normpath(path) for ws in ctrl.workspaces):
+                ctrl.add_workspace(path, thumb_dir)
 
-    # Nếu chưa có video nào đang mở trên timeline: khởi tạo video đầu tiên
+    # Nếu chưa có video nào mở: nạp video đầu tiên vào player & timeline
     if not has_active_video and newly_added:
         first_video = newly_added[0]["path"]
         browse_video(gui, file_path=first_video)
-        append_video_to_timeline(gui, first_video)
-        # Nếu chọn nhiều video trong lần nhập đầu tiên: ghép nối tiếp các video còn lại vào timeline
-        for remaining in newly_added[1:]:
-            append_video_to_timeline(gui, remaining["path"])
-    else:
-        # Nếu đã có video gốc (như trường hợp thêm 'clip học đường'):
-        # Thêm vào Media Pool, đồng thời tự động ghép nối vào sau video hiện tại trên timeline!
-        for item in newly_added:
-            append_video_to_timeline(gui, item["path"])
 
-    if hasattr(gui, "_refresh_media_pool_ui"):
-        print(f"[MediaPool] Calling _refresh_media_pool_ui()")
+    # Refresh UI Media Pool
+    if hasattr(gui, "_refresh_media_pool_ui") and callable(gui._refresh_media_pool_ui):
         gui._refresh_media_pool_ui()
+
+
+def import_multi_media_files(gui):
+    """Mở hộp thoại chọn một hoặc nhiều file video/media, đưa vào Media Pool và Batch."""
+    from PySide6.QtWidgets import QFileDialog
+    file_paths, _ = QFileDialog.getOpenFileNames(
+        gui,
+        "Chọn các video hoặc tệp media cần nhập",
+        "",
+        "Media Files (*.mp4 *.mkv *.avi *.mov *.webm *.flv *.mp3 *.wav *.m4a);;All Files (*.*)"
+    )
+    if file_paths:
+        import_media_paths(gui, file_paths)
 
 
 def browse_video(gui, file_path=None):

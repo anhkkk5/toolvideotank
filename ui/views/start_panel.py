@@ -191,23 +191,90 @@ def _update_device_label(gui):
 
 
 def _build_resource_media_card(gui):
-    from PySide6.QtWidgets import QScrollArea
+    """Xây dựng thẻ Tài nguyên & Batch — Quản lý Media Pool và Xử lý hàng loạt tích hợp."""
+    import os
+    import time
+    from PySide6.QtCore import Qt, QTimer, QUrl
+    from PySide6.QtGui import QPixmap, QDragEnterEvent, QDropEvent
+    from PySide6.QtWidgets import (
+        QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame,
+        QScrollArea, QProgressBar, QSpinBox, QMenu, QInputDialog, QMessageBox,
+    )
     from app.layers.base import LayerType
-    from utils.media_utils import import_multi_media_files, append_video_to_timeline
+    from utils.media_utils import (
+        import_multi_media_files, import_media_paths,
+        append_video_to_timeline, browse_video, probe_video_duration_and_thumb,
+    )
+    from runtime_paths import workspace_root
 
     card = QFrame()
     card.setObjectName("resourceMediaCard")
+    card.setAcceptDrops(True)
     card.setStyleSheet(
         "QFrame#resourceMediaCard { background-color: #141820; border: 1px solid #2E323A; border-radius: 8px; }"
     )
     layout = QVBoxLayout(card)
     layout.setContentsMargins(8, 8, 8, 8)
-    layout.setSpacing(8)
+    layout.setSpacing(6)
 
-    # 1. Header Tab: Tài nguyên | Thư viện
+    # ═══════════════════════════════════════════════════════════════════
+    # 0. Batch Controller Initialization & Signal Connections
+    # ═══════════════════════════════════════════════════════════════════
+    def _ensure_batch_controller():
+        if not hasattr(gui, "_batch_controller") or gui._batch_controller is None:
+            try:
+                from controllers.batch_pipeline_controller import BatchPipelineController
+                ws_root = getattr(gui, "workspace_root", os.getcwd())
+                log_fn = getattr(gui, "log", lambda msg: print(msg))
+                ctrl = BatchPipelineController(
+                    workspace_root=str(ws_root),
+                    max_concurrent=1,
+                    log_fn=log_fn,
+                )
+                gui._batch_controller = ctrl
+                ctrl.workspace_added.connect(lambda _wid: _render_media_pool())
+                ctrl.workspace_removed.connect(lambda _wid: _render_media_pool())
+                ctrl.workspace_status_changed.connect(lambda wid, s: _on_batch_status_changed(wid, s))
+                ctrl.workspace_progress_changed.connect(lambda wid, p: _on_batch_progress_changed(wid, p))
+                ctrl.workspace_step_changed.connect(lambda wid, step: _on_batch_step_changed(wid, step))
+                ctrl.batch_started.connect(lambda: _on_batch_started())
+                ctrl.batch_completed.connect(lambda ok, fail: _on_batch_completed(ok, fail))
+                ctrl.log_message.connect(lambda msg: _on_batch_log(msg))
+            except Exception as _e:
+                print(f"[WARN] Failed to init BatchPipelineController: {_e}")
+                gui._batch_controller = None
+        return getattr(gui, "_batch_controller", None)
+
+    ctrl = _ensure_batch_controller()
+
+    # ═══════════════════════════════════════════════════════════════════
+    # Drag & Drop trực tiếp vào Resource Media Card
+    # ═══════════════════════════════════════════════════════════════════
+    def _drag_enter(event: QDragEnterEvent):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def _drop(event: QDropEvent):
+        urls = event.mimeData().urls()
+        video_exts = {".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv", ".mp3", ".wav", ".m4a"}
+        paths = []
+        for url in urls:
+            p = url.toLocalFile()
+            if p and os.path.isfile(p) and os.path.splitext(p)[1].lower() in video_exts:
+                paths.append(p)
+        if paths:
+            import_media_paths(gui, paths)
+        event.acceptProposedAction()
+
+    card.dragEnterEvent = _drag_enter
+    card.dropEvent = _drop
+
+    # ═══════════════════════════════════════════════════════════════════
+    # 1. Header: Tài nguyên | Thư viện & Badge đếm video
+    # ═══════════════════════════════════════════════════════════════════
     top_tab_row = QHBoxLayout()
     top_tab_row.setContentsMargins(2, 0, 2, 0)
-    top_tab_row.setSpacing(14)
+    top_tab_row.setSpacing(10)
 
     tab_res_btn = QPushButton("Tài nguyên")
     tab_res_btn.setCursor(Qt.PointingHandCursor)
@@ -225,6 +292,13 @@ def _build_resource_media_card(gui):
     top_tab_row.addWidget(tab_res_btn)
     top_tab_row.addWidget(tab_lib_btn)
     top_tab_row.addStretch(1)
+
+    gui._batch_count_badge = QLabel("0 tệp")
+    gui._batch_count_badge.setStyleSheet(
+        "background: #FF8A00; color: #ffffff; font-size: 10px; font-weight: 700; "
+        "border-radius: 8px; padding: 2px 8px; border: none;"
+    )
+    top_tab_row.addWidget(gui._batch_count_badge)
     layout.addLayout(top_tab_row)
 
     def _switch_res_tab(is_lib: bool):
@@ -251,27 +325,111 @@ def _build_resource_media_card(gui):
     tab_res_btn.clicked.connect(lambda: _switch_res_tab(False))
     tab_lib_btn.clicked.connect(lambda: _switch_res_tab(True))
 
-    # 2. Nút to màu cam: + Nhập tệp (Hỗ trợ chọn nhiều video cùng lúc, không ghi đè video cũ)
-    import_btn = QPushButton("+ Nhập tệp")
-    import_btn.setMinimumHeight(34)
+    # ═══════════════════════════════════════════════════════════════════
+    # 2. Nút to màu cam: + Nhập tệp (Chọn nhiều video)
+    # ═══════════════════════════════════════════════════════════════════
+    import_btn = QPushButton("＋ Nhập tệp (Chọn nhiều video)")
+    import_btn.setMinimumHeight(32)
     import_btn.setCursor(Qt.PointingHandCursor)
     import_btn.setStyleSheet(
         "QPushButton { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #FF8A00, stop:1 #FF6A00); "
-        "color: #ffffff; font-weight: 700; font-size: 12px; border-radius: 6px; border: none; padding: 6px; } "
+        "color: #ffffff; font-weight: 700; font-size: 12px; border-radius: 6px; border: none; padding: 5px; } "
         "QPushButton:hover { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #FFA033, stop:1 #FF7D1A); } "
         "QPushButton:pressed { background: #E67600; }"
     )
     import_btn.clicked.connect(lambda: import_multi_media_files(gui))
     layout.addWidget(import_btn)
 
-    # 3. Dải nút filter: Tất cả | Video | Ảnh | Âm thanh
+    # ═══════════════════════════════════════════════════════════════════
+    # 3. Batch Action Controls: Xử lý tất cả / Dừng / Retry / Concurrency
+    # ═══════════════════════════════════════════════════════════════════
+    batch_box = QFrame()
+    batch_box.setStyleSheet(
+        "QFrame { background: #0E121A; border: 1px solid #232B3B; border-radius: 6px; }"
+    )
+    bb_layout = QVBoxLayout(batch_box)
+    bb_layout.setContentsMargins(6, 6, 6, 6)
+    bb_layout.setSpacing(5)
+
+    # Hàng 1: Nút ▶ Xử lý tất cả / ⏹ Dừng / ⟳ Retry
+    b_act_row = QHBoxLayout()
+    b_act_row.setSpacing(5)
+
+    gui._batch_start_btn = QPushButton("▶  Xử lý tất cả")
+    gui._batch_start_btn.setCursor(Qt.PointingHandCursor)
+    gui._batch_start_btn.setFixedHeight(28)
+    gui._batch_start_btn.setStyleSheet(
+        "QPushButton { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #FF6B00, stop:1 #FF9500); "
+        "color: #fff; font-size: 11px; font-weight: 800; border-radius: 5px; border: none; padding: 0 10px; } "
+        "QPushButton:hover { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #FF8A00, stop:1 #FFB347); } "
+        "QPushButton:disabled { background: #283446; color: #64748B; }"
+    )
+    gui._batch_start_btn.clicked.connect(lambda: _on_start_batch())
+    b_act_row.addWidget(gui._batch_start_btn, 2)
+
+    gui._batch_stop_btn = QPushButton("⏹ Dừng")
+    gui._batch_stop_btn.setCursor(Qt.PointingHandCursor)
+    gui._batch_stop_btn.setFixedHeight(28)
+    gui._batch_stop_btn.setEnabled(False)
+    gui._batch_stop_btn.setStyleSheet(
+        "QPushButton { background: #1E293B; color: #F87171; font-size: 11px; "
+        "font-weight: 700; border: 1px solid #7F1D1D; border-radius: 5px; padding: 0 8px; } "
+        "QPushButton:hover { background: #7F1D1D; color: #fff; } "
+        "QPushButton:disabled { background: #151A24; color: #475569; border-color: #262D3D; }"
+    )
+    gui._batch_stop_btn.clicked.connect(lambda: _on_stop_batch())
+    b_act_row.addWidget(gui._batch_stop_btn, 1)
+
+    gui._batch_retry_btn = QPushButton("⟳ Retry")
+    gui._batch_retry_btn.setCursor(Qt.PointingHandCursor)
+    gui._batch_retry_btn.setFixedHeight(28)
+    gui._batch_retry_btn.setEnabled(False)
+    gui._batch_retry_btn.setStyleSheet(
+        "QPushButton { background: #1E293B; color: #FBBF24; font-size: 11px; "
+        "font-weight: 700; border: 1px solid #92400E; border-radius: 5px; padding: 0 8px; } "
+        "QPushButton:hover { background: #92400E; color: #fff; } "
+        "QPushButton:disabled { background: #151A24; color: #475569; border-color: #262D3D; }"
+    )
+    gui._batch_retry_btn.clicked.connect(lambda: _on_retry_batch())
+    b_act_row.addWidget(gui._batch_retry_btn, 1)
+    bb_layout.addLayout(b_act_row)
+
+    # Hàng 2: Luồng đồng thời & tóm tắt tiến độ
+    b_sub_row = QHBoxLayout()
+    b_sub_row.setSpacing(6)
+    conc_lbl = QLabel("Luồng:")
+    conc_lbl.setStyleSheet("color: #8C93A0; font-size: 10px; font-weight: 600; border: none; background: transparent;")
+    b_sub_row.addWidget(conc_lbl)
+
+    gui._batch_concurrent_spin = QSpinBox()
+    gui._batch_concurrent_spin.setRange(1, 8)
+    gui._batch_concurrent_spin.setValue(1)
+    gui._batch_concurrent_spin.setFixedWidth(42)
+    gui._batch_concurrent_spin.setFixedHeight(22)
+    gui._batch_concurrent_spin.setStyleSheet(
+        "QSpinBox { background: #141820; color: #F1F5F9; border: 1px solid #2E384C; "
+        "border-radius: 4px; padding: 1px 3px; font-size: 10px; }"
+    )
+    gui._batch_concurrent_spin.setToolTip("Số video xử lý đồng thời")
+    b_sub_row.addWidget(gui._batch_concurrent_spin)
+
+    gui._batch_summary_label = QLabel("")
+    gui._batch_summary_label.setStyleSheet("color: #94A3B8; font-size: 10px; font-weight: 600; border: none; background: transparent;")
+    gui._batch_summary_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+    b_sub_row.addWidget(gui._batch_summary_label, 1)
+    bb_layout.addLayout(b_sub_row)
+
+    layout.addWidget(batch_box)
+
+    # ═══════════════════════════════════════════════════════════════════
+    # 4. Filter Row: Tất cả | Video | Ảnh | Âm thanh
+    # ═══════════════════════════════════════════════════════════════════
     filter_row = QHBoxLayout()
-    filter_row.setSpacing(6)
-    
+    filter_row.setSpacing(4)
     current_filter = ["all"]
     filter_btns = {}
-    f_active_style = "QPushButton { background: #2A1E14; color: #FF8A00; border: 1px solid #FF8A00; border-radius: 4px; font-size: 10px; font-weight: 700; padding: 3px 8px; }"
-    f_inactive_style = "QPushButton { background: #161A22; color: #8C93A0; border: 1px solid #2E323A; border-radius: 4px; font-size: 10px; font-weight: 500; padding: 3px 8px; } QPushButton:hover { color: #E5E7EB; border-color: #3F444E; }"
+    f_active_style = "QPushButton { background: #2A1E14; color: #FF8A00; border: 1px solid #FF8A00; border-radius: 4px; font-size: 10px; font-weight: 700; padding: 2px 6px; }"
+    f_inactive_style = "QPushButton { background: #161A22; color: #8C93A0; border: 1px solid #2E323A; border-radius: 4px; font-size: 10px; font-weight: 500; padding: 2px 6px; } QPushButton:hover { color: #E5E7EB; border-color: #3F444E; }"
 
     def _set_active_filter(active_key):
         current_filter[0] = active_key
@@ -281,7 +439,7 @@ def _build_resource_media_card(gui):
 
     for f_key, f_text in [("all", "Tất cả"), ("video", "Video"), ("image", "Ảnh"), ("audio", "Âm thanh")]:
         f_btn = QPushButton(f_text)
-        f_btn.setFixedHeight(24)
+        f_btn.setFixedHeight(22)
         f_btn.setCursor(Qt.PointingHandCursor)
         f_btn.setStyleSheet(f_active_style if f_key == "all" else f_inactive_style)
         f_btn.clicked.connect(lambda _c=False, fk=f_key: _set_active_filter(fk))
@@ -290,57 +448,85 @@ def _build_resource_media_card(gui):
     filter_row.addStretch(1)
     layout.addLayout(filter_row)
 
-    # 4. Media Pool Grid Container (Ảnh 1 CapCut)
+    # ═══════════════════════════════════════════════════════════════════
+    # 5. Danh sách video dạng List dọc (QScrollArea co giãn 100%, không bị cắt)
+    # ═══════════════════════════════════════════════════════════════════
     scroll_pool = QScrollArea()
     scroll_pool.setWidgetResizable(True)
     scroll_pool.setFrameShape(QFrame.NoFrame)
     scroll_pool.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+    scroll_pool.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
     scroll_pool.setStyleSheet("QScrollArea { background: transparent; border: none; }")
 
     pool_content = QWidget()
     pool_content.setStyleSheet("background: transparent;")
-    pool_grid = QGridLayout(pool_content)
-    pool_grid.setContentsMargins(0, 4, 0, 4)
-    pool_grid.setSpacing(8)
+    pool_layout = QVBoxLayout(pool_content)
+    pool_layout.setContentsMargins(0, 2, 0, 2)
+    pool_layout.setSpacing(6)
+    pool_layout.addStretch(1)
     scroll_pool.setWidget(pool_content)
     layout.addWidget(scroll_pool, 1)
 
+    # Thẻ Drop Zone khi chưa có video nào
+    drop_zone = QFrame()
+    drop_zone.setStyleSheet(
+        "QFrame { background: #0E121A; border: 2px dashed #2E384C; border-radius: 8px; min-height: 80px; }"
+        "QFrame:hover { border-color: #FF8A00; background: #111620; }"
+    )
+    dz_layout = QVBoxLayout(drop_zone)
+    dz_layout.setAlignment(Qt.AlignCenter)
+    dz_layout.setSpacing(4)
+    dz_icon = QLabel("🎬")
+    dz_icon.setAlignment(Qt.AlignCenter)
+    dz_icon.setStyleSheet("font-size: 24px; background: transparent; border: none;")
+    dz_layout.addWidget(dz_icon)
+    dz_txt = QLabel("Kéo thả video vào đây\nhoặc bấm '+ Nhập tệp'")
+    dz_txt.setAlignment(Qt.AlignCenter)
+    dz_txt.setStyleSheet("color: #64748B; font-size: 10px; font-weight: 600; background: transparent; border: none;")
+    dz_layout.addWidget(dz_txt)
+    pool_layout.insertWidget(0, drop_zone)
+
+    # ═══════════════════════════════════════════════════════════════════
+    # 6. Render Media Pool & Batch Items
+    # ═══════════════════════════════════════════════════════════════════
+    gui._batch_card_widgets = {}
+
     def _render_media_pool():
-        # Clear old items in grid
-        while pool_grid.count():
-            item = pool_grid.takeAt(0)
-            w = item.widget()
-            if w is not None:
-                w.deleteLater()
+        c = _ensure_batch_controller()
+        thumb_dir = os.path.join(workspace_root(), "temp", "launcher_thumbs")
+        os.makedirs(thumb_dir, exist_ok=True)
 
-        # Reset tất cả row stretch cũ
-        for row_i in range(pool_grid.rowCount()):
-            pool_grid.setRowStretch(row_i, 0)
-
-        pool = getattr(gui, "project_media_pool", [])
-        # Nếu pool rỗng nhưng có video đang mở, tạo item đại diện
-        if not pool and hasattr(gui, "_current_video_path") and gui._current_video_path and os.path.exists(gui._current_video_path):
-            try:
-                from utils.media_utils import probe_video_duration_and_thumb
-                from runtime_paths import workspace_root
-                thumb_dir = os.path.join(workspace_root(), "temp", "launcher_thumbs")
-                dur_s, thumb = probe_video_duration_and_thumb(gui._current_video_path, thumb_dir)
+        # 1. Đồng bộ video đang mở trên GUI vào Batch/Pool nếu chưa có
+        cur_v = getattr(gui, "_current_video_path", "")
+        if cur_v and os.path.exists(cur_v):
+            if c and not any(os.path.normpath(w.video_path) == os.path.normpath(cur_v) for w in c.workspaces):
+                c.add_workspace(cur_v, thumb_dir)
+            if not hasattr(gui, "project_media_pool"):
+                gui.project_media_pool = []
+            if not any(os.path.normpath(it.get("path", "")) == os.path.normpath(cur_v) for it in gui.project_media_pool):
+                try:
+                    dur_s, th = probe_video_duration_and_thumb(cur_v, thumb_dir)
+                except Exception:
+                    dur_s, th = 0.0, ""
                 total_s = int(dur_s)
-                m = total_s // 60
-                s = total_s % 60
-                pool = [{
-                    "path": gui._current_video_path,
-                    "name": os.path.basename(gui._current_video_path),
+                gui.project_media_pool.append({
+                    "id": str(int(time.time() * 1000)),
+                    "path": cur_v,
+                    "name": os.path.basename(cur_v),
                     "duration": dur_s,
-                    "duration_str": f"{m:02d}:{s:02d}",
-                    "thumb_path": thumb,
+                    "duration_str": f"{total_s // 60:02d}:{total_s % 60:02d}",
+                    "thumb_path": th,
                     "type": "video",
-                }]
-                gui.project_media_pool = pool
-            except Exception:
-                pass
+                })
 
-        # Lấy danh sách video đang có trên timeline Track V1
+        # 2. Đồng bộ các tệp từ gui.project_media_pool sang batch controller
+        if c:
+            for item in getattr(gui, "project_media_pool", []):
+                p = item.get("path", "")
+                if p and os.path.exists(p) and not any(os.path.normpath(w.video_path) == os.path.normpath(p) for w in c.workspaces):
+                    c.add_workspace(p, thumb_dir)
+
+        # 3. Lấy danh sách video đang có trên timeline Track V1
         timeline_video_paths = set()
         try:
             tl = getattr(gui, "timeline", None)
@@ -354,199 +540,295 @@ def _build_resource_media_card(gui):
         except Exception:
             pass
 
-        # Lọc item theo filter
+        # 4. Xóa cards cũ khỏi layout
+        for wid, widget in list(gui._batch_card_widgets.items()):
+            pool_layout.removeWidget(widget)
+            widget.deleteLater()
+        gui._batch_card_widgets.clear()
+
+        # Xóa các card AI thừa (nếu có)
+        for i in range(pool_layout.count() - 1, -1, -1):
+            item = pool_layout.itemAt(i)
+            w = item.widget() if item else None
+            if w and w != drop_zone and w not in gui._batch_card_widgets.values():
+                pool_layout.removeWidget(w)
+                w.deleteLater()
+
+        # 5. Lấy danh sách items để render
+        workspaces = c.workspaces if c else []
         fk = current_filter[0]
-        filtered_items = []
-        for it in pool:
-            it_type = it.get("type", "video")
-            if fk == "all" or fk == it_type:
-                filtered_items.append(it)
 
-        cols = 2
-        for idx, itm in enumerate(filtered_items):
-            r = idx // cols
-            c = idx % cols
-            card_item = _build_media_item_card(itm, timeline_video_paths)
-            pool_grid.addWidget(card_item, r, c)
+        visible_count = 0
+        for ws in workspaces:
+            # Filter
+            if fk not in ("all", "video"):
+                continue
 
-        # Thẻ cuối cùng: "✨ Tạo bằng AI" (như ảnh 1 CapCut)
-        ai_idx = len(filtered_items)
-        r_ai = ai_idx // cols
-        c_ai = ai_idx % cols
+            card_w = _build_video_card(ws, timeline_video_paths)
+            gui._batch_card_widgets[ws.id] = card_w
+            # Chèn trước stretch (vị trí pool_layout.count() - 1)
+            pool_layout.insertWidget(pool_layout.count() - 1, card_w)
+            visible_count += 1
+
+        # 6. Thẻ "✨ Tạo bằng AI" ở cuối
         ai_card = _build_ai_generate_card()
-        pool_grid.addWidget(ai_card, r_ai, c_ai)
+        pool_layout.insertWidget(pool_layout.count() - 1, ai_card)
 
-        # Tính chiều cao tối thiểu cho pool_content dựa trên số hàng
-        total_items = len(filtered_items) + 1  # +1 cho AI card
-        num_rows = (total_items + cols - 1) // cols
-        card_height = 94
-        spacing = pool_grid.spacing()
-        margins = pool_grid.contentsMargins()
-        min_h = num_rows * card_height + max(0, num_rows - 1) * spacing + margins.top() + margins.bottom()
-        pool_content.setMinimumHeight(min_h)
+        # 7. Cập nhật Badge đếm và hiển thị Drop Zone
+        total_items = len(workspaces)
+        gui._batch_count_badge.setText(f"{total_items} tệp")
+        drop_zone.setVisible(total_items == 0)
+        _update_batch_summary()
 
-        # Force Qt layout update
-        pool_grid.invalidate()
-        pool_grid.activate()
-        pool_content.updateGeometry()
-        pool_content.update()
-
-    def _build_media_item_card(item_data, timeline_video_paths):
-        item_path = item_data.get("path", "")
-        item_name = item_data.get("name", "")
-        item_thumb = item_data.get("thumb_path", "") or item_data.get("thumb", "")
-        duration_str = item_data.get("duration_str", "00:00")
-        is_on_timeline = (
-            bool(item_data.get("is_on_timeline"))
-            or (os.path.normpath(item_path) in timeline_video_paths if item_path else False)
-        )
-        is_active = bool(
-            getattr(gui, "_current_video_path", "")
-            and item_path
-            and os.path.normpath(getattr(gui, "_current_video_path", "")) == os.path.normpath(item_path)
-        )
+    def _build_video_card(ws, timeline_video_paths):
+        item_path = ws.video_path
+        cur_active = getattr(gui, "_current_video_path", "")
+        is_active = bool(cur_active and item_path and os.path.normpath(cur_active) == os.path.normpath(item_path))
+        is_on_timeline = os.path.normpath(item_path) in timeline_video_paths if item_path else False
 
         card_w = QFrame()
+        card_w.setObjectName(f"batch_card_{ws.id}")
+        card_w.setFixedHeight(72)
         card_w.setCursor(Qt.PointingHandCursor)
-        card_w.setFixedHeight(94)
-        border_col = "#FF8A00" if is_active else "#283446"
+
+        # Viền: màu cam nổi bật nếu active trên Workspace, nếu không viền theo trạng thái batch
+        border_colors = {
+            "pending": "#283446",
+            "queued": "#3B82F6",
+            "running": "#FF8A00",
+            "done": "#22C55E",
+            "error": "#EF4444",
+            "cancelled": "#6B7280",
+        }
+        if is_active:
+            border = "#FF8A00"
+            bg = "qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #1F2838, stop:1 #141A24)"
+        else:
+            border = border_colors.get(ws.status, "#283446")
+            bg = "qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #141820, stop:1 #0F1318)"
+
         card_w.setStyleSheet(
-            f"QFrame {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #1A2330, stop:1 #111620); "
-            f"border: 1.5px solid {border_col}; border-radius: 6px; }}"
-            f"QFrame:hover {{ border-color: #FF8A00; }}"
+            f"QFrame#batch_card_{ws.id} {{ background: {bg}; border: {'2px solid #FF8A00' if is_active else f'1.5px solid {border}'}; border-radius: 7px; }} "
+            f"QFrame#batch_card_{ws.id}:hover {{ border-color: #FFA033; }}"
         )
-        card_w.setToolTip(f"Tệp: {item_name}\nĐường dẫn: {item_path}\nNhấp đúp hoặc bấm '+ Thêm' để ghép vào timeline")
+        card_w.setToolTip(f"Tệp: {ws.video_name}\nĐường dẫn: {item_path}\nNhấp chuột để mở chỉnh sửa; nhấp đúp để nối vào timeline.")
 
-        c_layout = QVBoxLayout(card_w)
-        c_layout.setContentsMargins(4, 4, 4, 4)
-        c_layout.setSpacing(3)
+        h_layout = QHBoxLayout(card_w)
+        h_layout.setContentsMargins(6, 6, 6, 6)
+        h_layout.setSpacing(7)
 
-        # Thumbnail area with overlay badges
+        # Thumbnail với huy hiệu thời lượng
         thumb_container = QFrame()
-        thumb_container.setStyleSheet("background: #0E121A; border: none; border-radius: 4px;")
+        thumb_container.setFixedSize(48, 48)
+        thumb_container.setStyleSheet("background: #0B0E14; border-radius: 4px; border: none;")
         t_layout = QGridLayout(thumb_container)
-        t_layout.setContentsMargins(3, 3, 3, 3)
+        t_layout.setContentsMargins(0, 0, 0, 0)
 
         img_label = QLabel()
         img_label.setAlignment(Qt.AlignCenter)
         img_label.setScaledContents(True)
-        img_label.setStyleSheet("background: transparent; border-radius: 3px;")
-        if item_thumb and os.path.exists(item_thumb):
-            pm = QPixmap(item_thumb)
+        img_label.setStyleSheet("background: transparent; border-radius: 4px;")
+        if ws.thumb_path and os.path.exists(ws.thumb_path):
+            pm = QPixmap(ws.thumb_path)
             if not pm.isNull():
                 img_label.setPixmap(pm)
             else:
                 img_label.setText("🎬")
-                img_label.setStyleSheet("font-size: 20px; color: #FFA033; background: transparent;")
+                img_label.setStyleSheet("font-size: 18px; color: #FFA033; background: transparent;")
         else:
             img_label.setText("🎬")
-            img_label.setStyleSheet("font-size: 20px; color: #FFA033; background: transparent;")
-        t_layout.addWidget(img_label, 0, 0, 2, 2)
+            img_label.setStyleSheet("font-size: 18px; color: #FFA033; background: transparent;")
+        t_layout.addWidget(img_label, 0, 0)
 
-        # Badge góc trên trái: "Đã thêm" hoặc nút "+ Thêm"
-        if is_on_timeline:
-            badge_added = QLabel("Đã thêm")
-            badge_added.setStyleSheet(
-                "background: rgba(0, 0, 0, 0.75); color: #E2E8F0; font-size: 9px; font-weight: 700; "
-                "border-radius: 3px; padding: 1px 4px;"
+        if ws.duration_s > 0:
+            m, s = divmod(int(ws.duration_s), 60)
+            dur_badge = QLabel(f"{m:02d}:{s:02d}")
+            dur_badge.setStyleSheet(
+                "background: rgba(0, 0, 0, 0.7); color: #E2E8F0; font-size: 8px; font-weight: 700; "
+                "border-radius: 2px; padding: 1px 3px; border: none;"
             )
-            t_layout.addWidget(badge_added, 0, 0, Qt.AlignLeft | Qt.AlignTop)
-        else:
-            btn_add = QPushButton("+ Thêm")
-            btn_add.setCursor(Qt.PointingHandCursor)
-            btn_add.setFixedHeight(18)
-            btn_add.setStyleSheet(
-                "QPushButton { background: #FF8A00; color: #ffffff; font-size: 9px; font-weight: 700; "
-                "border-radius: 3px; padding: 1px 5px; border: none; } "
-                "QPushButton:hover { background: #FFA333; }"
-            )
-            btn_add.clicked.connect(lambda _c=False, p=item_path: (append_video_to_timeline(gui, p), _render_media_pool()))
-            t_layout.addWidget(btn_add, 0, 0, Qt.AlignLeft | Qt.AlignTop)
+            t_layout.addWidget(dur_badge, 0, 0, Qt.AlignRight | Qt.AlignBottom)
 
-        # Badge góc trên phải: Thời lượng
-        dur_label = QLabel(duration_str)
-        dur_label.setStyleSheet(
-            "background: rgba(0, 0, 0, 0.75); color: #F1F5F9; font-size: 9px; font-weight: 700; "
-            "border-radius: 3px; padding: 1px 4px;"
+        h_layout.addWidget(thumb_container)
+
+        # Cột thông tin ở giữa
+        info_layout = QVBoxLayout()
+        info_layout.setContentsMargins(0, 0, 0, 0)
+        info_layout.setSpacing(2)
+
+        # Hàng 1: Tên video + nhãn đang sửa
+        name_row = QHBoxLayout()
+        name_row.setSpacing(4)
+        disp_name = ws.video_name if len(ws.video_name) <= 18 else ws.video_name[:16] + "…"
+        name_lbl = QLabel(disp_name)
+        name_lbl.setStyleSheet("color: #FFFFFF; font-size: 11px; font-weight: 700; border: none;")
+        name_row.addWidget(name_lbl)
+
+        if is_active:
+            active_badge = QLabel("Đang sửa")
+            active_badge.setStyleSheet(
+                "background: #FF8A00; color: #fff; font-size: 8px; font-weight: 800; "
+                "border-radius: 2px; padding: 0 4px; border: none;"
+            )
+            name_row.addWidget(active_badge)
+        elif is_on_timeline:
+            tl_badge = QLabel("Trên timeline")
+            tl_badge.setStyleSheet(
+                "background: #2563EB; color: #fff; font-size: 8px; font-weight: 700; "
+                "border-radius: 2px; padding: 0 4px; border: none;"
+            )
+            name_row.addWidget(tl_badge)
+
+        name_row.addStretch(1)
+        info_layout.addLayout(name_row)
+
+        # Hàng 2: Progress bar mỏng 5px
+        pbar = QProgressBar()
+        pbar.setObjectName(f"pbar_{ws.id}")
+        pbar.setRange(0, 100)
+        pbar.setValue(int(ws.progress * 100))
+        pbar.setFixedHeight(5)
+        pbar.setTextVisible(False)
+        pbar.setStyleSheet(
+            "QProgressBar { background: #1E293B; border-radius: 2px; border: none; }"
+            "QProgressBar::chunk { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #FF6B00, stop:1 #FF9500); border-radius: 2px; }"
         )
-        t_layout.addWidget(dur_label, 0, 1, Qt.AlignRight | Qt.AlignTop)
+        info_layout.addWidget(pbar)
 
-        c_layout.addWidget(thumb_container, 1)
+        # Hàng 3: Trạng thái & bước hiện tại
+        status_row = QHBoxLayout()
+        status_row.setSpacing(4)
 
-        # Label tên tệp cắt ngắn bên dưới
-        display_name = item_name if len(item_name) <= 14 else item_name[:12] + "..."
-        name_lbl = QLabel(display_name)
-        name_lbl.setStyleSheet("color: #CBD5E1; font-size: 10px; font-weight: 600; border: none;")
-        name_lbl.setAlignment(Qt.AlignCenter)
-        c_layout.addWidget(name_lbl)
+        status_display = {
+            "pending": ("⏸️", "Sẵn sàng", "#94A3B8"),
+            "queued": ("🔵", "Hàng đợi", "#60A5FA"),
+            "running": ("🔄", "Đang chạy", "#FF8A00"),
+            "done": ("✅", "Hoàn tất", "#4ADE80"),
+            "error": ("❌", "Lỗi", "#F87171"),
+            "cancelled": ("⛔", "Đã hủy", "#9CA3AF"),
+        }
+        s_icon, s_txt, s_col = status_display.get(ws.status, ("⏸️", ws.status, "#94A3B8"))
 
-        # Sự kiện click & double-click
-        def _handle_click(event):
+        step_names = {
+            "prepare": "Chuẩn bị",
+            "extract_audio": "Trích xuất",
+            "extraction": "Trích xuất",
+            "separation": "Tách giọng",
+            "diarization": "Nhận diện",
+            "transcription": "Chép lời",
+            "translation": "Dịch thuật",
+            "voiceover": "Lồng tiếng",
+            "preview": "Xem trước",
+            "done": "Hoàn tất",
+        }
+        step_str = step_names.get(ws.current_step, ws.current_step or "")
+        status_text = f"{s_icon} {step_str}" if (ws.status == "running" and step_str) else f"{s_icon} {s_txt}"
+
+        status_lbl = QLabel(status_text)
+        status_lbl.setObjectName(f"status_{ws.id}")
+        status_lbl.setStyleSheet(f"color: {s_col}; font-size: 9px; font-weight: 600; border: none;")
+        status_row.addWidget(status_lbl)
+
+        if ws.status == "error" and ws.error_message:
+            err_short = ws.error_message[:20] + "…" if len(ws.error_message) > 20 else ws.error_message
+            err_lbl = QLabel(err_short)
+            err_lbl.setStyleSheet("color: #F87171; font-size: 8px; border: none;")
+            err_lbl.setToolTip(ws.error_message)
+            status_row.addWidget(err_lbl)
+
+        status_row.addStretch(1)
+        info_layout.addLayout(status_row)
+        h_layout.addLayout(info_layout, 1)
+
+        # Cột nút thao tác bên phải: Nút xóa (✕)
+        btn_del = QPushButton("✕")
+        btn_del.setFixedSize(20, 20)
+        btn_del.setCursor(Qt.PointingHandCursor)
+        btn_del.setStyleSheet(
+            "QPushButton { background: transparent; color: #64748B; font-size: 11px; font-weight: 700; border: none; border-radius: 10px; } "
+            "QPushButton:hover { background: #7F1D1D; color: #F87171; }"
+        )
+        btn_del.setToolTip("Xóa video này khỏi danh sách")
+        btn_del.clicked.connect(lambda _c=False, wid=ws.id: _remove_workspace(wid))
+        h_layout.addWidget(btn_del, 0, Qt.AlignTop)
+
+        # Sự kiện Click & Double-click
+        def _on_card_click(event):
             if event.button() == Qt.LeftButton:
-                from utils.media_utils import browse_video
-                # Load toàn bộ workspace: video + timeline + project state
+                # Nạp video vào Workspace chính (Player + Timeline + Subtitle)
                 browse_video(gui, file_path=item_path)
                 _render_media_pool()
             super(QFrame, card_w).mousePressEvent(event)
 
-        def _handle_dbl_click(event):
+        def _on_card_dbl_click(event):
             if event.button() == Qt.LeftButton:
-                # Ghép nối vào timeline
                 append_video_to_timeline(gui, item_path)
                 _render_media_pool()
             super(QFrame, card_w).mouseDoubleClickEvent(event)
 
-        card_w.mousePressEvent = _handle_click
-        card_w.mouseDoubleClickEvent = _handle_dbl_click
+        card_w.mousePressEvent = _on_card_click
+        card_w.mouseDoubleClickEvent = _on_card_dbl_click
 
         # Menu chuột phải
         card_w.setContextMenuPolicy(Qt.CustomContextMenu)
-        def _show_context_menu(pos):
+        def _show_card_menu(pos):
             menu = QMenu(card_w)
-            menu.setStyleSheet("QMenu { background: #161B24; color: #E5E7EB; border: 1px solid #2E384D; padding: 4px; } QMenu::item:selected { background: #FF8A00; color: #fff; }")
-            act_add = menu.addAction("➕ Ghép vào timeline")
-            act_preview = menu.addAction("▶ Xem trước video này")
+            menu.setStyleSheet(
+                "QMenu { background: #161B24; color: #E5E7EB; border: 1px solid #2E384D; padding: 4px; font-size: 11px; } "
+                "QMenu::item:selected { background: #FF8A00; color: #fff; }"
+            )
+            act_edit = menu.addAction("✏️ Mở chỉnh sửa video này")
+            act_add = menu.addAction("➕ Nối vào cuối timeline")
+            act_cfg = menu.addAction("⚙️ Cấu hình riêng (Engine)")
+            if ws.status == "error":
+                act_retry = menu.addAction("⟳ Retry video này")
+            else:
+                act_retry = None
+            act_open_dir = menu.addAction("📁 Mở thư mục chứa file")
             act_del = menu.addAction("🗑️ Xóa khỏi danh sách")
+
             action = menu.exec(card_w.mapToGlobal(pos))
-            if action == act_add:
+            if action == act_edit:
+                browse_video(gui, file_path=item_path)
+                _render_media_pool()
+            elif action == act_add:
                 append_video_to_timeline(gui, item_path)
                 _render_media_pool()
-            elif action == act_preview:
-                gui._current_video_path = os.path.abspath(item_path)
-                gui.video_path_edit.setText(item_path)
-                from PySide6.QtCore import QUrl
-                gui.media_player.setSource(QUrl.fromLocalFile(item_path))
+            elif action == act_cfg:
+                _show_workspace_config(ws.id)
+            elif action == act_retry and act_retry:
+                c = _ensure_batch_controller()
+                if c:
+                    c.retry_single(ws.id)
+                    _render_media_pool()
+            elif action == act_open_dir:
+                _open_file_folder(item_path)
             elif action == act_del:
-                if item_data in gui.project_media_pool:
-                    gui.project_media_pool.remove(item_data)
-                _render_media_pool()
+                _remove_workspace(ws.id)
 
-        card_w.customContextMenuRequested.connect(_show_context_menu)
+        card_w.customContextMenuRequested.connect(_show_card_menu)
         return card_w
 
     def _build_ai_generate_card():
-        # Thẻ "✨ Tạo bằng AI" chuẩn giao diện CapCut
         ai_box = QFrame()
         ai_box.setCursor(Qt.PointingHandCursor)
-        ai_box.setFixedHeight(94)
+        ai_box.setFixedHeight(44)
         ai_box.setStyleSheet(
-            "QFrame { background: #151A24; border: 1px dashed #2E384C; border-radius: 6px; } "
+            "QFrame { background: #121722; border: 1px dashed #2E384C; border-radius: 6px; } "
             "QFrame:hover { background: #1C2433; border-color: #FF8A00; }"
         )
-        ai_box.setToolTip("Nhấp để chuyển sang Quy trình TankVideo hoặc Giọng đọc AI tự động")
-        ai_layout = QVBoxLayout(ai_box)
-        ai_layout.setContentsMargins(6, 12, 6, 12)
-        ai_layout.setSpacing(4)
+        ai_box.setToolTip("Nhấp để chuyển sang Quy trình TankVideo tự động")
+        ai_layout = QHBoxLayout(ai_box)
+        ai_layout.setContentsMargins(8, 4, 8, 4)
+        ai_layout.setSpacing(6)
         ai_layout.setAlignment(Qt.AlignCenter)
 
         sparkle = QLabel("✨")
-        sparkle.setAlignment(Qt.AlignCenter)
-        sparkle.setStyleSheet("font-size: 22px; color: #FFB347; border: none; background: transparent;")
+        sparkle.setStyleSheet("font-size: 16px; color: #FFB347; border: none; background: transparent;")
         ai_layout.addWidget(sparkle)
 
-        ai_txt = QLabel("Tạo bằng AI")
-        ai_txt.setAlignment(Qt.AlignCenter)
-        ai_txt.setStyleSheet("color: #94A3B8; font-size: 11px; font-weight: 700; border: none; background: transparent;")
+        ai_txt = QLabel("Tạo video bằng AI tự động")
+        ai_txt.setStyleSheet("color: #94A3B8; font-size: 10px; font-weight: 700; border: none; background: transparent;")
         ai_layout.addWidget(ai_txt)
 
         def _on_ai_click(event):
@@ -559,11 +841,169 @@ def _build_resource_media_card(gui):
         ai_box.mousePressEvent = _on_ai_click
         return ai_box
 
+    # ═══════════════════════════════════════════════════════════════════
+    # 7. Batch Actions Logic
+    # ═══════════════════════════════════════════════════════════════════
+    def _on_start_batch():
+        c = _ensure_batch_controller()
+        if not c:
+            return
+        if hasattr(gui, "_batch_concurrent_spin"):
+            c.set_max_concurrent(gui._batch_concurrent_spin.value())
+        c.set_defaults_from_gui(gui)
+        c.start_all()
+
+    def _on_stop_batch():
+        c = _ensure_batch_controller()
+        if c:
+            c.stop_all()
+            _render_media_pool()
+
+    def _on_retry_batch():
+        c = _ensure_batch_controller()
+        if c:
+            c.retry_failed()
+            _render_media_pool()
+
+    def _remove_workspace(ws_id):
+        c = _ensure_batch_controller()
+        if c:
+            ws = c.get_workspace(ws_id)
+            c.remove_workspace(ws_id)
+            if ws and hasattr(gui, "project_media_pool"):
+                gui.project_media_pool = [it for it in gui.project_media_pool if os.path.normpath(it.get("path", "")) != os.path.normpath(ws.video_path)]
+            _render_media_pool()
+
+    def _show_workspace_config(ws_id):
+        c = _ensure_batch_controller()
+        if not c:
+            return
+        ws = c.get_workspace(ws_id)
+        if not ws:
+            return
+        engines = ["(Mặc định)", "ocr", "whisper", "sensevoice"]
+        cur_idx = 0
+        if ws.transcription_engine in engines:
+            cur_idx = engines.index(ws.transcription_engine)
+        choice, ok = QInputDialog.getItem(
+            gui, f"Cấu hình — {ws.video_name}",
+            "Chọn engine nhận diện:", engines, cur_idx, False
+        )
+        if ok:
+            ws.transcription_engine = "" if choice == "(Mặc định)" else choice
+            _render_media_pool()
+
+    def _update_batch_summary():
+        c = _ensure_batch_controller()
+        if not c:
+            return
+        s = c.get_summary()
+        parts = []
+        if s["done"] > 0:
+            parts.append(f"✅{s['done']}")
+        if s["running"] > 0:
+            parts.append(f"🔄{s['running']}")
+        if s["pending"] > 0:
+            parts.append(f"⏸{s['pending']}")
+        if s["error"] > 0:
+            parts.append(f"❌{s['error']}")
+        txt = " │ ".join(parts) if parts else ""
+        if s["is_running"]:
+            el = s.get("elapsed", "")
+            el_str = f" ⏱{el}" if el else ""
+            txt = f"Đang chạy (×{s['max_concurrent']}){el_str} • {txt}"
+        gui._batch_summary_label.setText(txt)
+
+    def _open_file_folder(file_path):
+        import subprocess as sp
+        folder = os.path.dirname(os.path.abspath(file_path))
+        if os.path.isdir(folder):
+            if os.name == "nt":
+                os.startfile(folder)
+            else:
+                sp.Popen(["xdg-open", folder])
+
+    # ═══════════════════════════════════════════════════════════════════
+    # 8. Batch Signal Handlers
+    # ═══════════════════════════════════════════════════════════════════
+    def _on_batch_started():
+        gui._batch_start_btn.setEnabled(False)
+        gui._batch_start_btn.setText("⏳ Đang chạy...")
+        gui._batch_stop_btn.setEnabled(True)
+        gui._batch_retry_btn.setEnabled(False)
+        if not hasattr(gui, "_batch_elapsed_timer"):
+            gui._batch_elapsed_timer = QTimer()
+            gui._batch_elapsed_timer.timeout.connect(lambda: _update_batch_summary())
+        gui._batch_elapsed_timer.start(1000)
+
+    def _on_batch_completed(ok_count, fail_count):
+        if hasattr(gui, "_batch_elapsed_timer"):
+            gui._batch_elapsed_timer.stop()
+        gui._batch_start_btn.setEnabled(True)
+        gui._batch_start_btn.setText("▶  Xử lý tất cả")
+        gui._batch_stop_btn.setEnabled(False)
+        gui._batch_retry_btn.setEnabled(fail_count > 0)
+        _render_media_pool()
+
+        c = getattr(gui, "_batch_controller", None)
+        elapsed = c.elapsed_str if c else ""
+        msg_box = QMessageBox(gui)
+        msg_box.setWindowTitle("Xử Lý Hoàn Tất")
+        msg_box.setIcon(QMessageBox.Information if fail_count == 0 else QMessageBox.Warning)
+        msg_box.setText(
+            f"Đã xử lý xong danh sách video!\n\n"
+            f"✅ Thành công: {ok_count}\n"
+            f"❌ Thất bại: {fail_count}\n"
+            f"⏱ Thời gian: {elapsed or 'N/A'}"
+        )
+        btn_open = msg_box.addButton("Mở thư mục output", QMessageBox.ActionRole)
+        msg_box.addButton(QMessageBox.Ok)
+        msg_box.exec()
+        if msg_box.clickedButton() == btn_open:
+            out_folder = os.path.join(str(getattr(gui, "workspace_root", os.getcwd())), "output")
+            if os.path.isdir(out_folder):
+                os.startfile(out_folder)
+
+    def _on_batch_status_changed(ws_id, status):
+        _render_media_pool()
+
+    def _on_batch_progress_changed(ws_id, progress):
+        widget = gui._batch_card_widgets.get(ws_id)
+        if widget:
+            pbar = widget.findChild(QProgressBar, f"pbar_{ws_id}")
+            if pbar:
+                pbar.setValue(int(progress * 100))
+
+    def _on_batch_step_changed(ws_id, step):
+        widget = gui._batch_card_widgets.get(ws_id)
+        if widget:
+            status_lbl = widget.findChild(QLabel, f"status_{ws_id}")
+            if status_lbl:
+                step_names = {
+                    "prepare": "Chuẩn bị",
+                    "extract_audio": "Trích xuất",
+                    "extraction": "Trích xuất",
+                    "separation": "Tách giọng",
+                    "diarization": "Nhận diện",
+                    "transcription": "Chép lời",
+                    "translation": "Dịch thuật",
+                    "voiceover": "Lồng tiếng",
+                    "preview": "Xem trước",
+                    "done": "Hoàn tất",
+                }
+                s_name = step_names.get(step, step)
+                status_lbl.setText(f"🔄 {s_name}")
+                status_lbl.setStyleSheet("color: #FF8A00; font-size: 9px; font-weight: 600; border: none;")
+
+    def _on_batch_log(msg):
+        pass
+
     gui._refresh_media_pool_ui = _render_media_pool
     gui.video_path_edit.textChanged.connect(lambda _t: _render_media_pool())
     _render_media_pool()
 
     return card
+
 
 
 def build_start_group(gui, left_layout):
@@ -1688,14 +2128,13 @@ def build_start_group(gui, left_layout):
     gui.left_master_stack = QStackedWidget()
     gui.left_master_stack.setObjectName("leftMasterStack")
 
-    # Trang 0: Media (Quản lý tệp, CapCut Media Pool Grid, Thẻ Tạo bằng AI)
+    # Trang 0: Media & Batch (Quản lý tệp, Media Pool, Điều khiển hàng loạt tích hợp)
     page_media = QWidget()
     page_media_layout = QVBoxLayout(page_media)
     page_media_layout.setContentsMargins(0, 0, 0, 0)
-    page_media_layout.setSpacing(8)
+    page_media_layout.setSpacing(0)
     gui.resource_media_card = _build_resource_media_card(gui)
-    page_media_layout.addWidget(gui.resource_media_card)
-    page_media_layout.addStretch(1)
+    page_media_layout.addWidget(gui.resource_media_card, 1)
 
     # Trang 1: Quy trình TankVideo 5 bước & Thao tác quy trình
     page_workflow = QWidget()
@@ -1728,17 +2167,6 @@ def build_start_group(gui, left_layout):
     gui.left_master_stack.addWidget(voice_page)      # 5: voice
     gui.left_master_stack.addWidget(media_page)      # 6: framing (Khung hình & Tỷ lệ nền tảng)
     gui.left_master_stack.addWidget(advanced_page)   # 7: advanced
-
-    # Trang 8: Batch (Xử lý hàng loạt)
-    try:
-        from views.batch_panel import build_batch_panel
-        batch_page = build_batch_panel(gui)
-    except Exception as _e:
-        import traceback as _tb
-        print(f"[WARN] Batch panel import failed: {_e}")
-        _tb.print_exc()
-        batch_page = QWidget()  # fallback nếu import lỗi
-    gui.left_master_stack.addWidget(batch_page)       # 8: batch
 
     # Thêm duy nhất gui.left_master_stack vào left_layout, giao diện không còn bị nhồi nhét
     left_layout.addWidget(gui.left_master_stack)

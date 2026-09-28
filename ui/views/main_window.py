@@ -333,7 +333,6 @@ def _build_nav_sidebar(gui):
         "voice": 5,
         "framing": 6,
         "advanced": 7,
-        "batch": 8,
     }
 
     def _on_nav_clicked(key):
@@ -358,7 +357,6 @@ def _build_nav_sidebar(gui):
         ("voice", "🎙️", "Công cụ AI", "Giọng đọc AI & Voice clone"),
         ("framing", "📐", "Khung hình", "Tỷ lệ khung hình & định dạng video"),
         ("advanced", "⚙️", "Nâng cao", "Cài đặt hệ thống, CPU/GPU, tiến trình"),
-        ("batch", "📦", "Batch", "Xử lý hàng loạt nhiều video cùng lúc"),
     ]
 
     for key, icon, title, tooltip in nav_configs:
@@ -422,7 +420,6 @@ def _build_left_panel(gui):
             5: "voice",
             6: "framing",
             7: "advanced",
-            8: "batch",
         }
         target_k = idx_to_key.get(idx)
         if target_k and hasattr(gui, "_select_sidebar_key"):
