@@ -465,12 +465,9 @@ def _build_resource_media_card(gui):
         # Sự kiện click & double-click
         def _handle_click(event):
             if event.button() == Qt.LeftButton:
-                # Nạp xem trước
-                gui._current_video_path = os.path.abspath(item_path)
-                gui.video_path_edit.setText(item_path)
-                from PySide6.QtCore import QUrl
-                gui.media_player.setSource(QUrl.fromLocalFile(item_path))
-                gui.refresh_video_dimensions(item_path)
+                from utils.media_utils import browse_video
+                # Load toàn bộ workspace: video + timeline + project state
+                browse_video(gui, file_path=item_path)
                 _render_media_pool()
             super(QFrame, card_w).mousePressEvent(event)
 
