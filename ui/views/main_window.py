@@ -324,48 +324,27 @@ def _build_nav_sidebar(gui):
         for k, item in gui.sidebar_nav_items.items():
             item.set_active(k == key)
 
+    nav_to_index = {
+        "media": 0,
+        "workflow": 1,
+        "audio": 2,
+        "subtitle": 3,
+        "translate": 4,
+        "voice": 5,
+        "framing": 6,
+        "advanced": 7,
+    }
+
     def _on_nav_clicked(key):
         _select_sidebar_key(key)
+        target_idx = nav_to_index.get(key, 0)
+        if hasattr(gui, "left_master_stack"):
+            gui.left_master_stack.setCurrentIndex(target_idx)
         scroll_area = getattr(gui, "left_panel_scroll_area", None)
-        if key == "media":
-            if scroll_area:
-                scroll_area.verticalScrollBar().setValue(0)
-            if hasattr(gui, "workflow_tab_buttons") and "media" in gui.workflow_tab_buttons:
-                gui.workflow_tab_buttons["media"].setChecked(True)
-        elif key == "workflow":
-            if hasattr(gui, "workflow_shell") and scroll_area:
-                scroll_area.ensureWidgetVisible(gui.workflow_shell)
-        elif key == "audio":
-            if hasattr(gui, "audio_tab_btn"):
-                gui.audio_tab_btn.setEnabled(True)
-                gui.audio_tab_btn.setChecked(True)
-            if hasattr(gui, "workflow_shell") and scroll_area:
-                scroll_area.ensureWidgetVisible(gui.workflow_shell)
-        elif key == "subtitle":
-            if hasattr(gui, "workflow_tab_buttons") and "style" in gui.workflow_tab_buttons:
-                gui.workflow_tab_buttons["style"].setChecked(True)
-            if hasattr(gui, "workflow_shell") and scroll_area:
-                scroll_area.ensureWidgetVisible(gui.workflow_shell)
-        elif key == "translate":
-            if hasattr(gui, "workflow_tab_buttons") and "language" in gui.workflow_tab_buttons:
-                gui.workflow_tab_buttons["language"].setChecked(True)
-            if hasattr(gui, "workflow_shell") and scroll_area:
-                scroll_area.ensureWidgetVisible(gui.workflow_shell)
-        elif key == "voice":
-            if hasattr(gui, "workflow_tab_buttons") and "voice" in gui.workflow_tab_buttons:
-                gui.workflow_tab_buttons["voice"].setChecked(True)
-            if hasattr(gui, "workflow_shell") and scroll_area:
-                scroll_area.ensureWidgetVisible(gui.workflow_shell)
-        elif key == "framing":
-            if hasattr(gui, "workflow_tab_buttons") and "media" in gui.workflow_tab_buttons:
-                gui.workflow_tab_buttons["media"].setChecked(True)
-            if hasattr(gui, "workflow_shell") and scroll_area:
-                scroll_area.ensureWidgetVisible(gui.workflow_shell)
-        elif key == "advanced":
-            if hasattr(gui, "workflow_tab_buttons") and "advanced" in gui.workflow_tab_buttons:
-                gui.workflow_tab_buttons["advanced"].setChecked(True)
-            if hasattr(gui, "workflow_shell") and scroll_area:
-                scroll_area.ensureWidgetVisible(gui.workflow_shell)
+        if scroll_area:
+            scroll_area.verticalScrollBar().setValue(0)
+        if key == "media" and hasattr(gui, "_refresh_media_pool_ui"):
+            gui._refresh_media_pool_ui()
 
     gui._select_sidebar_key = _select_sidebar_key
 
@@ -430,21 +409,25 @@ def _build_left_panel(gui):
     build_start_group(gui, left_layout)
     build_advanced_group(gui, left_layout)
 
-    # Đồng bộ highlight trên thanh sidebar khi chuyển tab trong workflow
-    def _sync_sidebar_from_tab_idx(idx):
+    # Đồng bộ highlight trên thanh sidebar khi chuyển tab trong master stack
+    def _sync_sidebar_from_master_idx(idx):
         idx_to_key = {
             0: "media",
-            1: "audio",
-            2: "translate",
-            3: "voice",
-            4: "subtitle",
-            5: "advanced",
+            1: "workflow",
+            2: "audio",
+            3: "subtitle",
+            4: "translate",
+            5: "voice",
+            6: "framing",
+            7: "advanced",
         }
         target_k = idx_to_key.get(idx)
         if target_k and hasattr(gui, "_select_sidebar_key"):
             gui._select_sidebar_key(target_k)
 
-    if hasattr(gui, "left_panel_stack"):
+    if hasattr(gui, "left_master_stack"):
+        gui.left_master_stack.currentChanged.connect(_sync_sidebar_from_master_idx)
+    elif hasattr(gui, "left_panel_stack"):
         gui.left_panel_stack.currentChanged.connect(_sync_sidebar_from_tab_idx)
 
     wrapper_layout.addWidget(scroll_area, 1)

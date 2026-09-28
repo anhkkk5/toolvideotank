@@ -191,13 +191,17 @@ def _update_device_label(gui):
 
 
 def _build_resource_media_card(gui):
+    from PySide6.QtWidgets import QScrollArea
+    from views.editor.timeline_models import LayerType
+    from utils.media_utils import import_multi_media_files, append_video_to_timeline
+
     card = QFrame()
     card.setObjectName("resourceMediaCard")
     card.setStyleSheet(
         "QFrame#resourceMediaCard { background-color: #141820; border: 1px solid #2E323A; border-radius: 8px; }"
     )
     layout = QVBoxLayout(card)
-    layout.setContentsMargins(10, 10, 10, 10)
+    layout.setContentsMargins(8, 8, 8, 8)
     layout.setSpacing(8)
 
     # 1. Header Tab: Tài nguyên | Thư viện
@@ -247,7 +251,7 @@ def _build_resource_media_card(gui):
     tab_res_btn.clicked.connect(lambda: _switch_res_tab(False))
     tab_lib_btn.clicked.connect(lambda: _switch_res_tab(True))
 
-    # 2. Nút to màu cam: + Nhập tệp
+    # 2. Nút to màu cam: + Nhập tệp (Hỗ trợ chọn nhiều video cùng lúc, không ghi đè video cũ)
     import_btn = QPushButton("+ Nhập tệp")
     import_btn.setMinimumHeight(34)
     import_btn.setCursor(Qt.PointingHandCursor)
@@ -257,21 +261,23 @@ def _build_resource_media_card(gui):
         "QPushButton:hover { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #FFA033, stop:1 #FF7D1A); } "
         "QPushButton:pressed { background: #E67600; }"
     )
-    from utils.media_utils import browse_video
-    import_btn.clicked.connect(lambda: browse_video(gui))
+    import_btn.clicked.connect(lambda: import_multi_media_files(gui))
     layout.addWidget(import_btn)
 
     # 3. Dải nút filter: Tất cả | Video | Ảnh | Âm thanh
     filter_row = QHBoxLayout()
     filter_row.setSpacing(6)
     
+    current_filter = ["all"]
     filter_btns = {}
     f_active_style = "QPushButton { background: #2A1E14; color: #FF8A00; border: 1px solid #FF8A00; border-radius: 4px; font-size: 10px; font-weight: 700; padding: 3px 8px; }"
     f_inactive_style = "QPushButton { background: #161A22; color: #8C93A0; border: 1px solid #2E323A; border-radius: 4px; font-size: 10px; font-weight: 500; padding: 3px 8px; } QPushButton:hover { color: #E5E7EB; border-color: #3F444E; }"
 
     def _set_active_filter(active_key):
+        current_filter[0] = active_key
         for k, b in filter_btns.items():
             b.setStyleSheet(f_active_style if k == active_key else f_inactive_style)
+        _render_media_pool()
 
     for f_key, f_text in [("all", "Tất cả"), ("video", "Video"), ("image", "Ảnh"), ("audio", "Âm thanh")]:
         f_btn = QPushButton(f_text)
@@ -284,131 +290,243 @@ def _build_resource_media_card(gui):
     filter_row.addStretch(1)
     layout.addLayout(filter_row)
 
-    # 4. Media List / Grid Card (Ảnh 1)
-    media_display_frame = QFrame()
-    media_display_frame.setObjectName("mediaDisplayFrame")
-    media_display_frame.setStyleSheet(
-        "QFrame#mediaDisplayFrame { background: #10141B; border: 1px solid #232938; border-radius: 6px; padding: 6px; }"
-    )
-    media_display_layout = QVBoxLayout(media_display_frame)
-    media_display_layout.setContentsMargins(6, 6, 6, 6)
-    media_display_layout.setSpacing(6)
+    # 4. Media Pool Grid Container (Ảnh 1 CapCut)
+    scroll_pool = QScrollArea()
+    scroll_pool.setWidgetResizable(True)
+    scroll_pool.setFrameShape(QFrame.NoFrame)
+    scroll_pool.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+    scroll_pool.setStyleSheet("QScrollArea { background: transparent; border: none; }")
 
-    # Item card thumbnail
-    thumb_box = QFrame()
-    thumb_box.setFixedHeight(88)
-    thumb_box.setCursor(Qt.PointingHandCursor)
-    thumb_box.setStyleSheet(
-        "QFrame { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #1E2530, stop:1 #12161E); "
-        "border: 1.5px solid #FF8A00; border-radius: 5px; }"
-    )
-    thumb_layout = QGridLayout(thumb_box)
-    thumb_layout.setContentsMargins(6, 6, 6, 6)
+    pool_content = QWidget()
+    pool_content.setStyleSheet("background: transparent;")
+    pool_grid = QGridLayout(pool_content)
+    pool_grid.setContentsMargins(0, 4, 0, 4)
+    pool_grid.setSpacing(8)
+    scroll_pool.setWidget(pool_content)
+    layout.addWidget(scroll_pool, 1)
 
-    # Image background label (nếu có thumbnail trích xuất từ video)
-    thumb_img_label = QLabel()
-    thumb_img_label.setAlignment(Qt.AlignCenter)
-    thumb_img_label.setScaledContents(True)
-    thumb_img_label.setStyleSheet("border-radius: 4px; background: transparent;")
-    thumb_layout.addWidget(thumb_img_label, 0, 0, 2, 2)
+    def _render_media_pool():
+        # Clear old items in grid
+        while pool_grid.count():
+            item = pool_grid.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
 
-    # Duration badge (góc dưới trái)
-    duration_badge = QLabel("00:00")
-    duration_badge.setStyleSheet(
-        "background: rgba(0, 0, 0, 0.75); color: #E5E7EB; border-radius: 3px; font-size: 9px; font-weight: 700; padding: 1px 5px;"
-    )
-    thumb_layout.addWidget(duration_badge, 1, 0, Qt.AlignLeft | Qt.AlignBottom)
+        pool = getattr(gui, "project_media_pool", [])
+        # Nếu pool rỗng nhưng có video đang mở, tạo item đại diện
+        if not pool and hasattr(gui, "_current_video_path") and gui._current_video_path and os.path.exists(gui._current_video_path):
+            from utils.media_utils import probe_video_duration_and_thumb
+            d_ms, d_str, thumb = probe_video_duration_and_thumb(gui._current_video_path)
+            pool = [{
+                "path": gui._current_video_path,
+                "name": os.path.basename(gui._current_video_path),
+                "duration_ms": d_ms,
+                "duration_str": d_str,
+                "thumb": thumb,
+                "type": "video",
+            }]
+            gui.project_media_pool = pool
 
-    # Tick checkbox cam (góc trên phải)
-    tick_badge = QLabel("✓")
-    tick_badge.setAlignment(Qt.AlignCenter)
-    tick_badge.setFixedSize(16, 16)
-    tick_badge.setStyleSheet(
-        "background: #FF8A00; color: #ffffff; border-radius: 3px; font-size: 10px; font-weight: 900;"
-    )
-    thumb_layout.addWidget(tick_badge, 0, 1, Qt.AlignRight | Qt.AlignTop)
+        # Lấy danh sách video đang có trên timeline Track V1
+        timeline_video_paths = set()
+        if hasattr(gui, "timeline") and hasattr(gui.timeline, "_layers"):
+            for l in gui.timeline._layers:
+                if l.type == LayerType.VIDEO and l.metadata:
+                    p = l.metadata.get("video_path")
+                    if p:
+                        timeline_video_paths.add(os.path.normpath(p))
 
-    # Center play / media icon
-    center_icon = QLabel("🎬")
-    center_icon.setAlignment(Qt.AlignCenter)
-    center_icon.setStyleSheet("font-size: 24px; color: #FFA033; background: transparent;")
-    thumb_layout.addWidget(center_icon, 0, 0, 2, 2, Qt.AlignCenter)
+        # Lọc item theo filter
+        fk = current_filter[0]
+        filtered_items = []
+        for it in pool:
+            it_type = it.get("type", "video")
+            if fk == "all" or fk == it_type:
+                filtered_items.append(it)
 
-    media_name_label = QLabel("Chưa có video được chọn")
-    media_name_label.setStyleSheet("color: #E5E7EB; font-size: 11px; font-weight: 600;")
-    media_name_label.setWordWrap(True)
+        cols = 2
+        for idx, itm in enumerate(filtered_items):
+            r = idx // cols
+            c = idx % cols
+            card_item = _build_media_item_card(itm, timeline_video_paths)
+            pool_grid.addWidget(card_item, r, c)
 
-    media_display_layout.addWidget(thumb_box)
-    media_display_layout.addWidget(media_name_label)
-    layout.addWidget(media_display_frame)
+        # Thẻ cuối cùng: "✨ Tạo bằng AI" (như ảnh 1 CapCut)
+        ai_idx = len(filtered_items)
+        r_ai = ai_idx // cols
+        c_ai = ai_idx % cols
+        ai_card = _build_ai_generate_card()
+        pool_grid.addWidget(ai_card, r_ai, c_ai)
+        pool_grid.setRowStretch(r_ai + 1, 1)
 
-    def _on_thumb_clicked(event):
-        vid_path = str(getattr(gui, "_current_video_path", "") or gui.video_path_edit.text() or "").strip()
-        if vid_path and os.path.exists(vid_path):
-            if hasattr(gui, "toggle_play"):
-                gui.toggle_play()
-            elif hasattr(gui, "preview_btn"):
-                gui.preview_btn.click()
+    def _build_media_item_card(item_data, timeline_video_paths):
+        item_path = item_data.get("path", "")
+        item_name = item_data.get("name", "")
+        item_thumb = item_data.get("thumb", "")
+        duration_str = item_data.get("duration_str", "00:00")
+        is_on_timeline = os.path.normpath(item_path) in timeline_video_paths if item_path else False
+        is_active = (getattr(gui, "_current_video_path", "") and os.path.normpath(gui._current_video_path) == os.path.normpath(item_path))
+
+        card_w = QFrame()
+        card_w.setCursor(Qt.PointingHandCursor)
+        card_w.setFixedHeight(94)
+        border_col = "#FF8A00" if is_active else "#283446"
+        card_w.setStyleSheet(
+            f"QFrame {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #1A2330, stop:1 #111620); "
+            f"border: 1.5px solid {border_col}; border-radius: 6px; }}"
+            f"QFrame:hover {{ border-color: #FF8A00; }}"
+        )
+        card_w.setToolTip(f"Tệp: {item_name}\nĐường dẫn: {item_path}\nNhấp đúp hoặc bấm '+ Thêm' để ghép vào timeline")
+
+        c_layout = QVBoxLayout(card_w)
+        c_layout.setContentsMargins(4, 4, 4, 4)
+        c_layout.setSpacing(3)
+
+        # Thumbnail area with overlay badges
+        thumb_container = QFrame()
+        thumb_container.setStyleSheet("background: #0E121A; border: none; border-radius: 4px;")
+        t_layout = QGridLayout(thumb_container)
+        t_layout.setContentsMargins(3, 3, 3, 3)
+
+        img_label = QLabel()
+        img_label.setAlignment(Qt.AlignCenter)
+        img_label.setScaledContents(True)
+        img_label.setStyleSheet("background: transparent; border-radius: 3px;")
+        if item_thumb and os.path.exists(item_thumb):
+            pm = QPixmap(item_thumb)
+            if not pm.isNull():
+                img_label.setPixmap(pm)
+            else:
+                img_label.setText("🎬")
+                img_label.setStyleSheet("font-size: 20px; color: #FFA033; background: transparent;")
         else:
-            browse_video(gui)
+            img_label.setText("🎬")
+            img_label.setStyleSheet("font-size: 20px; color: #FFA033; background: transparent;")
+        t_layout.addWidget(img_label, 0, 0, 2, 2)
 
-    thumb_box.mousePressEvent = _on_thumb_clicked
-
-    def _sync_media_item():
-        vid_path = str(getattr(gui, "_current_video_path", "") or gui.video_path_edit.text() or "").strip()
-        if vid_path and os.path.exists(vid_path):
-            base = os.path.basename(vid_path)
-            media_name_label.setText(base)
-            dur_ms = getattr(gui.timeline, "duration", 0) if hasattr(gui, "timeline") else 0
-            if dur_ms <= 0 and hasattr(gui, "media_player"):
-                dur_ms = gui.media_player.duration()
-            total_s = int(dur_ms / 1000) if dur_ms > 0 else 0
-            m = total_s // 60
-            s = total_s % 60
-            duration_badge.setText(f"{m:02d}:{s:02d}")
-            thumb_box.setStyleSheet(
-                "QFrame { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #1E2530, stop:1 #12161E); "
-                "border: 1.5px solid #FF8A00; border-radius: 5px; }"
+        # Badge góc trên trái: "Đã thêm" hoặc nút "+ Thêm"
+        if is_on_timeline:
+            badge_added = QLabel("Đã thêm")
+            badge_added.setStyleSheet(
+                "background: rgba(0, 0, 0, 0.75); color: #E2E8F0; font-size: 9px; font-weight: 700; "
+                "border-radius: 3px; padding: 1px 4px;"
             )
-            tick_badge.show()
-            center_icon.setText("▶")
-            thumb_box.setToolTip(f"Nhấp để phát/tạm dừng: {base}")
-
-            # Thử nạp thumbnail từ thư mục launcher_thumbs nếu đã có
-            try:
-                import hashlib
-                from runtime_paths import workspace_root
-                h = hashlib.md5(os.path.normpath(vid_path).encode()).hexdigest()
-                cached_thumb = os.path.join(workspace_root(), "temp", "launcher_thumbs", f"{h}.jpg")
-                if os.path.exists(cached_thumb):
-                    pm = QPixmap(cached_thumb)
-                    if not pm.isNull():
-                        thumb_img_label.setPixmap(pm.scaled(thumb_box.size(), Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation))
-                        center_icon.hide()
-                    else:
-                        thumb_img_label.clear()
-                        center_icon.show()
-                else:
-                    thumb_img_label.clear()
-                    center_icon.show()
-            except Exception:
-                thumb_img_label.clear()
-                center_icon.show()
+            t_layout.addWidget(badge_added, 0, 0, Qt.AlignLeft | Qt.AlignTop)
         else:
-            media_name_label.setText("Nhấp '+ Nhập tệp' để thêm video")
-            duration_badge.setText("00:00")
-            thumb_box.setStyleSheet(
-                "QFrame { background: #12161E; border: 1px dashed #2E323A; border-radius: 5px; }"
+            btn_add = QPushButton("+ Thêm")
+            btn_add.setCursor(Qt.PointingHandCursor)
+            btn_add.setFixedHeight(18)
+            btn_add.setStyleSheet(
+                "QPushButton { background: #FF8A00; color: #ffffff; font-size: 9px; font-weight: 700; "
+                "border-radius: 3px; padding: 1px 5px; border: none; } "
+                "QPushButton:hover { background: #FFA333; }"
             )
-            tick_badge.hide()
-            center_icon.setText("📁")
-            center_icon.show()
-            thumb_img_label.clear()
-            thumb_box.setToolTip("Nhấp để chọn video")
+            btn_add.clicked.connect(lambda _c=False, p=item_path: (append_video_to_timeline(gui, p), _render_media_pool()))
+            t_layout.addWidget(btn_add, 0, 0, Qt.AlignLeft | Qt.AlignTop)
 
-    gui._sync_resource_media_item = _sync_media_item
-    gui.video_path_edit.textChanged.connect(lambda _t: _sync_media_item())
-    _sync_media_item()
+        # Badge góc trên phải: Thời lượng
+        dur_label = QLabel(duration_str)
+        dur_label.setStyleSheet(
+            "background: rgba(0, 0, 0, 0.75); color: #F1F5F9; font-size: 9px; font-weight: 700; "
+            "border-radius: 3px; padding: 1px 4px;"
+        )
+        t_layout.addWidget(dur_label, 0, 1, Qt.AlignRight | Qt.AlignTop)
+
+        c_layout.addWidget(thumb_container, 1)
+
+        # Label tên tệp cắt ngắn bên dưới
+        display_name = item_name if len(item_name) <= 14 else item_name[:12] + "..."
+        name_lbl = QLabel(display_name)
+        name_lbl.setStyleSheet("color: #CBD5E1; font-size: 10px; font-weight: 600; border: none;")
+        name_lbl.setAlignment(Qt.AlignCenter)
+        c_layout.addWidget(name_lbl)
+
+        # Sự kiện click & double-click
+        def _handle_click(event):
+            if event.button() == Qt.LeftButton:
+                # Nạp xem trước
+                gui._current_video_path = os.path.abspath(item_path)
+                gui.video_path_edit.setText(item_path)
+                from PySide6.QtCore import QUrl
+                gui.media_player.setSource(QUrl.fromLocalFile(item_path))
+                gui.refresh_video_dimensions(item_path)
+                _render_media_pool()
+            super(QFrame, card_w).mousePressEvent(event)
+
+        def _handle_dbl_click(event):
+            if event.button() == Qt.LeftButton:
+                # Ghép nối vào timeline
+                append_video_to_timeline(gui, item_path)
+                _render_media_pool()
+            super(QFrame, card_w).mouseDoubleClickEvent(event)
+
+        card_w.mousePressEvent = _handle_click
+        card_w.mouseDoubleClickEvent = _handle_dbl_click
+
+        # Menu chuột phải
+        card_w.setContextMenuPolicy(Qt.CustomContextMenu)
+        def _show_context_menu(pos):
+            menu = QMenu(card_w)
+            menu.setStyleSheet("QMenu { background: #161B24; color: #E5E7EB; border: 1px solid #2E384D; padding: 4px; } QMenu::item:selected { background: #FF8A00; color: #fff; }")
+            act_add = menu.addAction("➕ Ghép vào timeline")
+            act_preview = menu.addAction("▶ Xem trước video này")
+            act_del = menu.addAction("🗑️ Xóa khỏi danh sách")
+            action = menu.exec(card_w.mapToGlobal(pos))
+            if action == act_add:
+                append_video_to_timeline(gui, item_path)
+                _render_media_pool()
+            elif action == act_preview:
+                gui._current_video_path = os.path.abspath(item_path)
+                gui.video_path_edit.setText(item_path)
+                from PySide6.QtCore import QUrl
+                gui.media_player.setSource(QUrl.fromLocalFile(item_path))
+            elif action == act_del:
+                if item_data in gui.project_media_pool:
+                    gui.project_media_pool.remove(item_data)
+                _render_media_pool()
+
+        card_w.customContextMenuRequested.connect(_show_context_menu)
+        return card_w
+
+    def _build_ai_generate_card():
+        # Thẻ "✨ Tạo bằng AI" chuẩn giao diện CapCut
+        ai_box = QFrame()
+        ai_box.setCursor(Qt.PointingHandCursor)
+        ai_box.setFixedHeight(94)
+        ai_box.setStyleSheet(
+            "QFrame { background: #151A24; border: 1px dashed #2E384C; border-radius: 6px; } "
+            "QFrame:hover { background: #1C2433; border-color: #FF8A00; }"
+        )
+        ai_box.setToolTip("Nhấp để chuyển sang Quy trình TankVideo hoặc Giọng đọc AI tự động")
+        ai_layout = QVBoxLayout(ai_box)
+        ai_layout.setContentsMargins(6, 12, 6, 12)
+        ai_layout.setSpacing(4)
+        ai_layout.setAlignment(Qt.AlignCenter)
+
+        sparkle = QLabel("✨")
+        sparkle.setAlignment(Qt.AlignCenter)
+        sparkle.setStyleSheet("font-size: 22px; color: #FFB347; border: none; background: transparent;")
+        ai_layout.addWidget(sparkle)
+
+        ai_txt = QLabel("Tạo bằng AI")
+        ai_txt.setAlignment(Qt.AlignCenter)
+        ai_txt.setStyleSheet("color: #94A3B8; font-size: 11px; font-weight: 700; border: none; background: transparent;")
+        ai_layout.addWidget(ai_txt)
+
+        def _on_ai_click(event):
+            if hasattr(gui, "left_master_stack"):
+                gui.left_master_stack.setCurrentIndex(1)
+            elif hasattr(gui, "workflow_shell"):
+                gui.workflow_shell.show()
+            if hasattr(gui, "_select_sidebar_key"):
+                gui._select_sidebar_key("workflow")
+        ai_box.mousePressEvent = _on_ai_click
+        return ai_box
+
+    gui._refresh_media_pool_ui = _render_media_pool
+    gui.video_path_edit.textChanged.connect(lambda _t: _render_media_pool())
+    _render_media_pool()
 
     return card
 
@@ -516,13 +634,26 @@ def build_start_group(gui, left_layout):
 
         # Click to jump to tab
         def _bind_stage_jump(frame, target_idx):
-            tab_keys = ["media", "audio", "language", "voice", "style", "advanced"]
+            stage_to_master = {
+                0: 0, # prepare -> media
+                1: 0, # transcript -> media
+                2: 4, # translate -> translate
+                3: 5, # tts -> voice
+                5: 6, # export -> framing
+            }
+            stage_to_key = {
+                0: "media",
+                1: "media",
+                2: "translate",
+                3: "voice",
+                5: "framing",
+            }
             def handler(event):
-                if target_idx < len(tab_keys):
-                    pk = tab_keys[target_idx]
-                    btn = gui.workflow_tab_buttons.get(pk)
-                    if btn:
-                        btn.setChecked(True)
+                m_idx = stage_to_master.get(target_idx, 0)
+                if hasattr(gui, "left_master_stack"):
+                    gui.left_master_stack.setCurrentIndex(m_idx)
+                if hasattr(gui, "_select_sidebar_key"):
+                    gui._select_sidebar_key(stage_to_key.get(target_idx, "media"))
             frame.mousePressEvent = handler
         _bind_stage_jump(row_frame, stage_tab_map.get(key, 0))
 
@@ -1515,10 +1646,64 @@ def build_start_group(gui, left_layout):
         page.layout().addStretch()
         gui.left_panel_stack.addWidget(page)
 
-    workflow_shell_layout.addWidget(gui.left_panel_stack, 1)
+    # Ẩn tab_bar con 6 nút bên trong vì thanh điều hướng Sidebar Nav 8 icon bên ngoài đã đảm nhiệm
+    tab_bar.hide()
+
+    # Tạo Master Stack 8 trang chuyên nghiệp cho Cột bên trái
+    gui.left_master_stack = QStackedWidget()
+    gui.left_master_stack.setObjectName("leftMasterStack")
+
+    # Trang 0: Media (Quản lý tệp, CapCut Media Pool Grid, Thẻ Tạo bằng AI)
+    page_media = QWidget()
+    page_media_layout = QVBoxLayout(page_media)
+    page_media_layout.setContentsMargins(0, 0, 0, 0)
+    page_media_layout.setSpacing(8)
     gui.resource_media_card = _build_resource_media_card(gui)
-    left_layout.addWidget(gui.resource_media_card)
-    left_layout.addWidget(workflow_shell)
+    page_media_layout.addWidget(gui.resource_media_card)
+    page_media_layout.addStretch(1)
+
+    # Trang 1: Quy trình TankVideo 5 bước & Thao tác quy trình
+    page_workflow = QWidget()
+    page_workflow_layout = QVBoxLayout(page_workflow)
+    page_workflow_layout.setContentsMargins(0, 0, 0, 0)
+    page_workflow_layout.setSpacing(8)
+    page_workflow_layout.addWidget(workflow_shell)
+
+    workflow_actions_card = QFrame()
+    workflow_actions_card.setObjectName("statusCard")
+    workflow_actions_card.setStyleSheet("QFrame#statusCard { background-color: #141820; border: 1px solid #2E323A; border-radius: 8px; }")
+    wfa_layout = QVBoxLayout(workflow_actions_card)
+    wfa_layout.setContentsMargins(10, 10, 10, 10)
+    wfa_layout.setSpacing(8)
+    wfa_title = QLabel("Thao tác quy trình")
+    wfa_title.setObjectName("sectionTitle")
+    wfa_layout.addWidget(wfa_title)
+    wfa_layout.addWidget(gui.preview_5s_btn)
+    wfa_layout.addWidget(gui.preview_frame_btn)
+    wfa_layout.addWidget(gui.open_output_btn)
+    page_workflow_layout.addWidget(workflow_actions_card)
+    page_workflow_layout.addStretch(1)
+
+    # Nạp 8 trang tương ứng 8 icon ở Sidebar Nav
+    gui.left_master_stack.addWidget(page_media)      # 0: media
+    gui.left_master_stack.addWidget(page_workflow)   # 1: workflow
+    gui.left_master_stack.addWidget(audio_page)      # 2: audio
+    gui.left_master_stack.addWidget(style_page)      # 3: subtitle
+    gui.left_master_stack.addWidget(language_page)   # 4: translate
+    gui.left_master_stack.addWidget(voice_page)      # 5: voice
+    gui.left_master_stack.addWidget(media_page)      # 6: framing (Khung hình & Tỷ lệ nền tảng)
+    gui.left_master_stack.addWidget(advanced_page)   # 7: advanced
+
+    # Thêm duy nhất gui.left_master_stack vào left_layout, giao diện không còn bị nhồi nhét
+    left_layout.addWidget(gui.left_master_stack)
+
+    # Đồng bộ tương thích nếu có code cũ gọi gui.left_panel_stack.setCurrentIndex(...)
+    def _on_old_stack_changed(old_idx):
+        old_to_master = {0: 6, 1: 2, 2: 4, 3: 5, 4: 3, 5: 7}
+        m_idx = old_to_master.get(old_idx)
+        if m_idx is not None and gui.left_master_stack.currentIndex() != m_idx:
+            gui.left_master_stack.setCurrentIndex(m_idx)
+    gui.left_panel_stack.currentChanged.connect(_on_old_stack_changed)
 
 
 def build_workflow_group(left_layout):

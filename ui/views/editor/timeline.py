@@ -947,10 +947,13 @@ class EditorTimeline(QGraphicsView):
             )
             return max(value, left_boundary)
         right_boundary = min(
-            (float(getattr(item, "start", self._duration) or self._duration) for item in neighbors
-             if float(getattr(item, "start", self._duration) or self._duration) >= float(layer.end) - 0.001),
-            default=self._duration,
+            (float(getattr(item, "start", 0.0) or 0.0) for item in neighbors
+             if float(getattr(item, "start", 0.0) or 0.0) >= float(layer.end) - 0.001),
+            default=max(self._duration, value + 5.0),
         )
+        if value > self._duration:
+            self._duration = value
+            self.set_duration_ms(int(self._duration * 1000))
         return min(value, right_boundary)
 
     def _clamp_subtitle_resize(self, track, layer, edge: str, value: float) -> float:
@@ -958,38 +961,33 @@ class EditorTimeline(QGraphicsView):
         return self._clamp_layer_resize(track, layer, edge, value)
 
     def _clamp_layer_move(self, track, layer, start: float, end: float) -> float:
-        """Clamp a body drag without moving any neighboring layer."""
+        """Clamp a body drag without freezing layers."""
         if track is None:
-            return start
-        visible = [item for item in track.layers if item.visible and item is not layer]
-        row_map = self._overlap_row_assignments.get(str(track.id), {})
-        if self._should_overlap_stack(track):
-            if str(getattr(layer, "id", "")) not in row_map:
-                self._compute_overlap_rows([*visible, layer], track_id=track.id)
-                row_map = self._overlap_row_assignments.get(str(track.id), {})
-            row = self._drag_pinned_row(track, layer)
-            if row is None:
-                row = row_map.get(str(getattr(layer, "id", "")))
-            visible = [item for item in visible
-                       if row_map.get(str(getattr(item, "id", ""))) == row]
-        elif self._uses_layer_rows(track):
-            return start
-        else:
-            # Single-row tracks constrain against every visible neighbor.
-            pass
+            return max(0.0, start)
         duration = max(self.MIN_DUR, end - start)
-        original_start = float(getattr(layer, "start", start) or start)
-        original_end = float(getattr(layer, "end", end) or end)
+
+        from app.layers.base import LayerType
+        if getattr(track, "type", None) in (LayerType.VIDEO, LayerType.AUDIO):
+            new_start = max(0.0, start)
+            if new_start + duration > self._duration:
+                self._duration = new_start + duration
+                self.set_duration_ms(int(self._duration * 1000))
+            return new_start
+
+        visible = [item for item in track.layers if item.visible and item is not layer]
+        if self._should_overlap_stack(track) or self._uses_layer_rows(track):
+            return max(0.0, start)
+
         lower = 0.0
-        upper = self._duration - duration
+        upper = max(self._duration, start + duration + 10.0) - duration
         for item in visible:
             item_start = float(getattr(item, "start", 0.0) or 0.0)
             item_end = float(getattr(item, "end", item_start) or item_start)
-            if item_end <= original_start + 0.001:
+            if item_end <= float(getattr(layer, "start", start) or start) + 0.001:
                 lower = max(lower, item_end)
-            elif item_start >= original_end - 0.001:
+            elif item_start >= float(getattr(layer, "end", end) or end) - 0.001:
                 upper = min(upper, item_start - duration)
-        return max(lower, min(start, upper))
+        return max(lower, min(start, max(lower, upper)))
 
     def paintEvent(self, event):
         super().paintEvent(event)
@@ -1819,6 +1817,19 @@ class EditorTimeline(QGraphicsView):
             lid = drag["layer_id"]
             track, layer = self._find_layer_by_id(lid)
             if layer and str(getattr(track, "id", "") or "") == str(drag.get("track_id", "") or ""):
+                # Nếu là track Video và có nhiều clip: sắp xếp và hít nam châm (magnetic ripple CapCut)
+                from app.layers.base import LayerType
+                if getattr(track, "type", None) == LayerType.VIDEO and len(track.layers) > 1:
+                    track.layers.sort(key=lambda l: float(l.start))
+                    cursor = 0.0
+                    for l in track.layers:
+                        d = max(self.MIN_DUR, float(l.end) - float(l.start))
+                        l.start = cursor
+                        l.end = cursor + d
+                        cursor += d
+                    self._duration = max(self._duration, cursor)
+                    self.set_duration_ms(int(self._duration * 1000))
+
                 start = float(layer.start)
                 end = float(self._get_effective_layer_end(layer))
                 self.layerTimingChanged.emit(lid, start, end)

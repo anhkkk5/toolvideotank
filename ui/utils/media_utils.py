@@ -341,10 +341,178 @@ def update_duration_label(gui, current, total):
     gui.time_label.setText(f"{fmt(current)} / {fmt(total)}")
 
 
-def browse_video(gui):
-    from PySide6.QtWidgets import QFileDialog
+def probe_video_duration_and_thumb(file_path: str, thumb_dir: str) -> tuple[float, str]:
+    dur = 0.0
+    thumb_path = ""
+    try:
+        import hashlib
+        h = hashlib.md5(os.path.normpath(file_path).encode()).hexdigest()
+        os.makedirs(thumb_dir, exist_ok=True)
+        thumb_path = os.path.join(thumb_dir, f"{h}.jpg")
 
-    file_path, _ = QFileDialog.getOpenFileName(gui, "Open Video", "", "Video Files (*.mp4 *.mkv *.avi *.mov)")
+        import cv2
+        cap = cv2.VideoCapture(file_path)
+        if cap.isOpened():
+            fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+            count = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0
+            dur = float(count / fps) if fps > 0 and count > 0 else 0.0
+            if not os.path.exists(thumb_path):
+                ret, frame = cap.read()
+                if ret and frame is not None:
+                    h_orig, w_orig = frame.shape[:2]
+                    target_w = int(w_orig * (120 / max(1, h_orig)))
+                    resized = cv2.resize(frame, (target_w, 120))
+                    cv2.imwrite(thumb_path, resized)
+            cap.release()
+    except Exception:
+        pass
+    return dur, thumb_path
+
+
+def append_video_to_timeline(gui, video_path: str):
+    """Ghép nối clip video vào Track V1 trên timeline (chuẩn CapCut ghép nối)."""
+    video_path = os.path.abspath(video_path)
+    if not os.path.exists(video_path):
+        return
+    filename = os.path.basename(video_path)
+
+    from runtime_paths import workspace_root
+    thumb_dir = os.path.join(workspace_root(), "temp", "launcher_thumbs")
+    dur_s, _ = probe_video_duration_and_thumb(video_path, thumb_dir)
+    if dur_s <= 0:
+        dur_s = 10.0
+
+    timeline = getattr(gui, "timeline", None)
+    if not timeline or not getattr(timeline, "_timeline", None):
+        return
+
+    from app.layers.video import VideoLayer
+    from app.layers.audio import AudioLayer
+    from app.layers.transform import Transform
+    from app.layers.base import LayerType
+    from app.layers.timeline import Track
+
+    v1 = a1 = None
+    for track in timeline._timeline.tracks:
+        if str(getattr(track, "name", "")).startswith("V1") or getattr(track, "type", None) == LayerType.VIDEO:
+            v1 = track
+        elif str(getattr(track, "name", "")).startswith("A1") or getattr(track, "type", None) == LayerType.AUDIO:
+            a1 = track
+
+    if v1 is None:
+        v1 = Track(name="V1 Video", type=LayerType.VIDEO, height=36)
+        timeline._timeline.tracks.insert(0, v1)
+    if a1 is None:
+        a1 = Track(name="A1 Audio", type=LayerType.AUDIO, height=30)
+        v1_idx = timeline._timeline.tracks.index(v1)
+        timeline._timeline.tracks.insert(v1_idx + 1, a1)
+
+    # Nếu Track V1 đang có placeholder rỗng (source == "") thì xóa bỏ
+    if v1.layers and len(v1.layers) == 1 and not getattr(v1.layers[0], "source", ""):
+        v1.layers.clear()
+    if a1.layers and len(a1.layers) == 1 and not getattr(a1.layers[0], "source", ""):
+        a1.layers.clear()
+
+    # Vị trí bắt đầu của clip mới: ngay sau điểm kết thúc của clip cuối cùng trên V1
+    last_end = max((float(l.end) for l in v1.layers), default=0.0)
+
+    new_v = VideoLayer(
+        name=filename,
+        source=video_path,
+        start=last_end,
+        end=last_end + dur_s,
+        source_start=0.0,
+        transform=Transform(x=0, y=0, scale_x=1.0, scale_y=1.0),
+    )
+    new_a = AudioLayer(
+        name=f"A1 {filename}",
+        source=video_path,
+        start=last_end,
+        end=last_end + dur_s,
+        volume=1.0,
+    )
+    v1.layers.append(new_v)
+    a1.layers.append(new_a)
+
+    total_dur = max(float(l.end) for l in v1.layers)
+    timeline.set_duration_ms(int(total_dur * 1000))
+    timeline._duration = total_dur
+
+    # Cập nhật trạng thái 'is_on_timeline' trong kho Media
+    for item in getattr(gui, "project_media_pool", []):
+        if os.path.normpath(item.get("path", "")) == os.path.normpath(video_path):
+            item["is_on_timeline"] = True
+
+    if hasattr(gui, "_refresh_media_pool_ui"):
+        gui._refresh_media_pool_ui()
+
+    timeline.viewport().update()
+
+
+def import_multi_media_files(gui):
+    """Mở hộp thoại chọn một hoặc nhiều file video/media, đưa vào Media Pool và Timeline."""
+    from PySide6.QtWidgets import QFileDialog
+    file_paths, _ = QFileDialog.getOpenFileNames(
+        gui,
+        "Chọn các video hoặc tệp media cần nhập",
+        "",
+        "Media Files (*.mp4 *.mkv *.avi *.mov *.webm *.flv *.mp3 *.wav *.m4a);;All Files (*.*)"
+    )
+    if not file_paths:
+        return
+
+    if not hasattr(gui, "project_media_pool"):
+        gui.project_media_pool = []
+
+    from runtime_paths import workspace_root
+    thumb_dir = os.path.join(workspace_root(), "temp", "launcher_thumbs")
+    os.makedirs(thumb_dir, exist_ok=True)
+
+    has_active_video = bool(getattr(gui, "_current_video_path", "") and os.path.exists(getattr(gui, "_current_video_path", "")))
+
+    newly_added = []
+    for path in file_paths:
+        path = os.path.abspath(path)
+        existing = next((item for item in gui.project_media_pool if os.path.normpath(item["path"]) == os.path.normpath(path)), None)
+        if not existing:
+            dur_s, thumb_p = probe_video_duration_and_thumb(path, thumb_dir)
+            total_s = int(dur_s)
+            m = total_s // 60
+            s = total_s % 60
+            item = {
+                "id": str(int(time.time() * 1000)),
+                "path": path,
+                "name": os.path.basename(path),
+                "duration": dur_s,
+                "duration_str": f"{m:02d}:{s:02d}",
+                "thumb_path": thumb_p,
+                "is_on_timeline": False,
+            }
+            gui.project_media_pool.append(item)
+            newly_added.append(item)
+
+    # Nếu chưa có video nào đang mở trên timeline: khởi tạo video đầu tiên
+    if not has_active_video and newly_added:
+        first_video = newly_added[0]["path"]
+        browse_video(gui, file_path=first_video)
+        append_video_to_timeline(gui, first_video)
+        # Nếu chọn nhiều video trong lần nhập đầu tiên: ghép nối tiếp các video còn lại vào timeline
+        for remaining in newly_added[1:]:
+            append_video_to_timeline(gui, remaining["path"])
+    else:
+        # Nếu đã có video gốc (như trường hợp thêm 'clip học đường'):
+        # Thêm vào Media Pool, đồng thời tự động ghép nối vào sau video hiện tại trên timeline!
+        for item in newly_added:
+            append_video_to_timeline(gui, item["path"])
+
+    if hasattr(gui, "_refresh_media_pool_ui"):
+        gui._refresh_media_pool_ui()
+
+
+def browse_video(gui, file_path=None):
+    if not file_path:
+        from PySide6.QtWidgets import QFileDialog
+        file_path, _ = QFileDialog.getOpenFileName(gui, "Open Video", "", "Video Files (*.mp4 *.mkv *.avi *.mov)")
     if not file_path:
         return
 

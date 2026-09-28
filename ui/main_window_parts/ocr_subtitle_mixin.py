@@ -1318,32 +1318,24 @@ class OcrSubtitleMixin:
         # Overlay layers use the same Split action as subtitle/audio blocks.
         # Copying the layer preserves its style, transform and visibility;
         # only its identity and timing are changed.
+        split_time = float(getattr(getattr(self, "timeline", None), "_playhead", 0.0)) or (float(self.media_player.position()) / 1000.0)
+        
+        # Kiểm tra trước nếu playhead đang nằm trên một Video layer hoặc Audio layer trên timeline:
+        if hasattr(self, "timeline") and getattr(self.timeline, "_timeline", None):
+            from app.layers.base import LayerType
+            for track in self.timeline._timeline.tracks:
+                t_name = str(getattr(track, "name", "") or "")
+                t_type = getattr(track, "type", None)
+                if t_name.startswith("V1") or t_type == LayerType.VIDEO or t_name.startswith("A1") or t_type == LayerType.AUDIO:
+                    for layer in track.layers:
+                        if float(layer.start) + 0.05 < split_time < float(layer.end) - 0.05:
+                            self.timeline._selected_layer_id = layer.id
+                            if self._split_selected_overlay_layer(selection):
+                                return
+
         segments = list(self.get_active_segments() or [])
         if not segments:
-            return
-        split_time = float(getattr(getattr(self, "timeline", None), "_playhead", 0.0)) or (float(self.media_player.position()) / 1000.0)
-        index = int(getattr(self, "_selected_segment_index", -1))
-        if not (0 <= index < len(segments)):
-            index = self._find_active_segment_index(int(split_time * 1000), segments)
-        if not (0 <= index < len(segments)):
-            for i, seg in enumerate(segments):
-                if float(seg.get("start", 0)) <= split_time <= float(seg.get("end", 0)):
-                    index = i
-                    break
-        if not (0 <= index < len(segments)):
-            # Tự động tìm Video layer tại vị trí playhead để tách
-            if hasattr(self, "timeline") and getattr(self.timeline, "_timeline", None):
-                from app.layers.base import LayerType
-                for track in self.timeline._timeline.tracks:
-                    t_name = str(getattr(track, "name", "") or "")
-                    t_type = getattr(track, "type", None)
-                    if t_name.startswith("V1") or t_type == LayerType.VIDEO:
-                        for layer in track.layers:
-                            if float(layer.start) < split_time < float(layer.end):
-                                self.timeline._selected_layer_id = layer.id
-                                if self._split_selected_overlay_layer(selection):
-                                    return
-            QMessageBox.information(self, "Cắt đoạn", "Vui lòng di chuyển kim thời gian vào bên trong đoạn cần cắt hoặc chọn một đoạn trước.")
+            QMessageBox.information(self, "Cắt đoạn", "Vui lòng di chuyển kim thời gian vào bên trong đoạn video cần cắt.")
             return
 
         target = segments[index]
