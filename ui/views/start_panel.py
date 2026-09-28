@@ -316,26 +316,39 @@ def _build_resource_media_card(gui):
         pool = getattr(gui, "project_media_pool", [])
         # Nếu pool rỗng nhưng có video đang mở, tạo item đại diện
         if not pool and hasattr(gui, "_current_video_path") and gui._current_video_path and os.path.exists(gui._current_video_path):
-            from utils.media_utils import probe_video_duration_and_thumb
-            d_ms, d_str, thumb = probe_video_duration_and_thumb(gui._current_video_path)
-            pool = [{
-                "path": gui._current_video_path,
-                "name": os.path.basename(gui._current_video_path),
-                "duration_ms": d_ms,
-                "duration_str": d_str,
-                "thumb": thumb,
-                "type": "video",
-            }]
-            gui.project_media_pool = pool
+            try:
+                from utils.media_utils import probe_video_duration_and_thumb
+                from runtime_paths import workspace_root
+                thumb_dir = os.path.join(workspace_root(), "temp", "launcher_thumbs")
+                dur_s, thumb = probe_video_duration_and_thumb(gui._current_video_path, thumb_dir)
+                total_s = int(dur_s)
+                m = total_s // 60
+                s = total_s % 60
+                pool = [{
+                    "path": gui._current_video_path,
+                    "name": os.path.basename(gui._current_video_path),
+                    "duration": dur_s,
+                    "duration_str": f"{m:02d}:{s:02d}",
+                    "thumb_path": thumb,
+                    "type": "video",
+                }]
+                gui.project_media_pool = pool
+            except Exception:
+                pass
 
         # Lấy danh sách video đang có trên timeline Track V1
         timeline_video_paths = set()
-        if hasattr(gui, "timeline") and hasattr(gui.timeline, "_layers"):
-            for l in gui.timeline._layers:
-                if l.type == LayerType.VIDEO and l.metadata:
-                    p = l.metadata.get("video_path")
-                    if p:
-                        timeline_video_paths.add(os.path.normpath(p))
+        try:
+            tl = getattr(gui, "timeline", None)
+            if tl and hasattr(tl, "_timeline") and tl._timeline:
+                for track in tl._timeline.tracks:
+                    if str(getattr(track, "name", "")).startswith("V1") or getattr(track, "type", None) == LayerType.VIDEO:
+                        for layer in getattr(track, "layers", []):
+                            src = getattr(layer, "source", "")
+                            if src:
+                                timeline_video_paths.add(os.path.normpath(src))
+        except Exception:
+            pass
 
         # Lọc item theo filter
         fk = current_filter[0]
@@ -363,10 +376,17 @@ def _build_resource_media_card(gui):
     def _build_media_item_card(item_data, timeline_video_paths):
         item_path = item_data.get("path", "")
         item_name = item_data.get("name", "")
-        item_thumb = item_data.get("thumb", "")
+        item_thumb = item_data.get("thumb_path", "") or item_data.get("thumb", "")
         duration_str = item_data.get("duration_str", "00:00")
-        is_on_timeline = os.path.normpath(item_path) in timeline_video_paths if item_path else False
-        is_active = (getattr(gui, "_current_video_path", "") and os.path.normpath(gui._current_video_path) == os.path.normpath(item_path))
+        is_on_timeline = (
+            bool(item_data.get("is_on_timeline"))
+            or (os.path.normpath(item_path) in timeline_video_paths if item_path else False)
+        )
+        is_active = bool(
+            getattr(gui, "_current_video_path", "")
+            and item_path
+            and os.path.normpath(getattr(gui, "_current_video_path", "")) == os.path.normpath(item_path)
+        )
 
         card_w = QFrame()
         card_w.setCursor(Qt.PointingHandCursor)
