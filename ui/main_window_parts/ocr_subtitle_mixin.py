@@ -934,7 +934,14 @@ class OcrSubtitleMixin:
                 or timeline_text_by_index.get(idx, "")
                 or ""
             )
-            shown_text = str(translated.get("text", "") or original_text)
+            shown_text = str(
+                translated.get("translated_text")
+                or translated.get("translated")
+                or translated.get("subtitle_vi")
+                or translated.get("dubbing_vi")
+                or translated.get("text", "")
+                or original_text
+            )
             trans_meta = translated.get("metadata", {}) if isinstance(translated.get("metadata"), dict) else {}
             base_meta = base.get("metadata", {}) if isinstance(base.get("metadata"), dict) else {}
             spk = str(
@@ -2014,11 +2021,14 @@ class OcrSubtitleMixin:
             is_ocr = os.getenv("TRANSCRIPTION_ENGINE", _default_asr_engine()).strip().lower() == "ocr"
             alternate_ocr_active = bool(getattr(self, "_alternate_ocr_range_pending", None))
             btn = getattr(self, "ocr_region_btn", None)
+            save_btn = getattr(self, "ocr_save_btn", None)
             if btn:
                 btn.setVisible(is_ocr)
                 btn.blockSignals(True)
                 btn.setChecked(bool(getattr(self, "_ocr_overlay_visible", True)))
                 btn.blockSignals(False)
+            if save_btn:
+                save_btn.setVisible(is_ocr)
             if not is_ocr and not alternate_ocr_active:
                 overlay._requested_visible = False
                 overlay.hide()
@@ -2040,6 +2050,9 @@ class OcrSubtitleMixin:
     def toggle_ocr_overlay_visibility(self, checked: bool):
         self._ocr_overlay_visible = bool(checked)
         overlay = getattr(self, "ocr_region_overlay", None)
+        save_btn = getattr(self, "ocr_save_btn", None)
+        if save_btn:
+            save_btn.setVisible(True)
         if overlay is not None:
             try:
                 overlay._requested_visible = bool(checked)

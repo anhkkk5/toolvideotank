@@ -10,9 +10,11 @@ Executes the full 1-voice automated workflow:
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 import threading
+import time
 import traceback
 from typing import Any
 
@@ -180,24 +182,39 @@ class SingleVoicePipelineWorker(QThread):
         voice_name = str(self.selected_voice.get("name", voice_id)).strip()
         self.log_emitted.emit(f"[Lồng tiếng] Áp dụng giọng thuyết minh: {voice_name} (ID: {voice_id})")
 
+        CHINESE_CHAR_RE = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]")
+        AD_NOISE_KEYWORDS = ("闲置", "二手", "转卖", "私信", "关注", "点击", "下载", "优惠", "进群", "看简介", "主页")
+
         segments: list[SubtitleSegment] = []
         for idx, cue in enumerate(translated_cues, start=1):
             start_s = float(cue.get("start", 0.0) or 0.0)
             end_s = float(cue.get("end", 0.0) or 0.0)
-            txt = str(cue.get("translated_text", "") or cue.get("text", "")).strip()
-            if not txt:
-                continue
+            orig_txt = str(cue.get("text", "") or cue.get("original_text", "") or cue.get("source_text", "")).strip()
+            trans_txt = str(cue.get("translated_text", "") or cue.get("translated", "")).strip()
+
+            is_noise = bool(cue.get("is_noise", False))
+            if any(kw in orig_txt for kw in AD_NOISE_KEYWORDS) and (not trans_txt or bool(CHINESE_CHAR_RE.search(trans_txt))):
+                is_noise = True
+
+            # Kiểm tra nếu bản dịch rỗng HOẶC bản dịch vẫn chứa chữ Hán (chưa được dịch sang tiếng Việt)
+            has_chinese_in_trans = bool(CHINESE_CHAR_RE.search(trans_txt))
+            skip_tts = is_noise or (not trans_txt) or has_chinese_in_trans
+
+            # Nếu skip_tts vì rỗng hoặc còn chữ Hán/quảng cáo, để trống effective_trans để TTS không đọc nhầm tiếng Trung
+            effective_trans = "" if skip_tts else trans_txt
 
             seg = SubtitleSegment(
                 id=idx,
                 start=start_s,
                 end=end_s,
-                text=str(cue.get("text", "") or txt),
-                translated_text=txt,
+                text=orig_txt,
+                translated_text=effective_trans,
                 voice_id=voice_id,
                 voice_name=voice_name,
                 gender="male",
                 final_gender="male",
+                is_noise=is_noise,
+                skip_tts=skip_tts,
             )
             segments.append(seg)
 
@@ -266,6 +283,16 @@ class SingleVoicePipelineWorker(QThread):
 
         if self._cancel_event.is_set():
             return
+
+        # Xuất file SRT phụ đề tiếng Việt ngay cạnh video kết quả
+        try:
+            from app.translation.srt_utils import to_srt
+            srt_path = os.path.splitext(self.output_video_path)[0] + ".srt"
+            with open(srt_path, "w", encoding="utf-8") as f_srt:
+                f_srt.write(to_srt(translated_cues, prefer_translated=True))
+            self.log_emitted.emit(f"[Phụ đề] Đã xuất file phụ đề tiếng Việt: {os.path.basename(srt_path)}")
+        except Exception as srt_e:
+            self.log_emitted.emit(f"[Phụ đề] Ghi nhận phụ đề SRT: {srt_e}")
 
         self.progress_updated.emit(100.0, "Hoàn tất tạo video thành công!")
         self.pipeline_finished.emit(result, translated_cues)
@@ -460,6 +487,7 @@ class SingleVoiceProgressDialog(QDialog):
         self._worker.pipeline_finished.connect(self._on_pipeline_finished)
         self._worker.pipeline_error.connect(self._on_pipeline_error)
 
+        self._start_time = time.time()
         self._worker.start()
 
     def _on_progress_updated(self, pct: float, message: str):
@@ -489,6 +517,29 @@ class SingleVoiceProgressDialog(QDialog):
         self._last_result = result
         self._translated_cues = translated_cues
 
+        elapsed = max(0.1, time.time() - getattr(self, "_start_time", time.time()))
+        s_int = int(round(elapsed))
+        if s_int < 60:
+            dur_str = f"{s_int}s"
+            full_str = f"{s_int} giây"
+        else:
+            m = s_int // 60
+            rem = s_int % 60
+            dur_str = f"{m}m {rem:02d}s"
+            full_str = f"{m} phút {rem} giây"
+
+        if self.video_path:
+            norm_v = os.path.normpath(self.video_path)
+            parent_gui = self.parent() if hasattr(self, "parent") else None
+            if parent_gui:
+                if hasattr(parent_gui, "_video_durations"):
+                    parent_gui._video_durations[norm_v] = elapsed
+                if hasattr(parent_gui, "_video_output_paths"):
+                    parent_gui._video_output_paths[norm_v] = self.output_video_path
+                if hasattr(parent_gui, "_video_translated_cues"):
+                    parent_gui._video_translated_cues[norm_v] = translated_cues
+                self._sync_to_parent_gui(parent_gui, translated_cues)
+
         self.lbl_step1.setText("1. 📄 OCR & DeepSeek\n[✅ Xong]")
         self.lbl_step1.setStyleSheet("color: #3fb950; font-weight: bold; font-size: 11px;")
         self.lbl_step2.setText("2. 🎙️ Lồng tiếng AI (1 giọng)\n[✅ Xong]")
@@ -497,8 +548,13 @@ class SingleVoiceProgressDialog(QDialog):
         self.lbl_step3.setStyleSheet("color: #3fb950; font-weight: bold; font-size: 11px;")
 
         self.progress_bar.setValue(100)
-        self.lbl_status.setText("🎉 Đã tạo video thành công!")
+        self.lbl_status.setText(f"🎉 Đã tạo video thành công trong {dur_str}!")
         self.lbl_status.setStyleSheet("color: #3fb950; font-weight: bold; font-size: 13px;")
+
+        self.log_box.append("\n" + "=" * 50)
+        self.log_box.append(f"⏱️ TỔNG THỜI GIAN HOÀN THÀNH: {full_str} ({elapsed:.1f}s)")
+        self.log_box.append(f"⚡ HIỆU SUẤT XỬ LÝ: Hoàn tất xuất video MP4 {os.path.basename(self.video_path)}")
+        self.log_box.append("=" * 50)
 
         self.btn_cancel.setVisible(False)
         self.btn_open_folder.setVisible(True)
@@ -540,3 +596,45 @@ class SingleVoiceProgressDialog(QDialog):
                     os.startfile(target_dir)
         except Exception as exc:
             QMessageBox.warning(self, "Lỗi mở thư mục", str(exc))
+
+    def _sync_to_parent_gui(self, parent_gui, translated_cues: list):
+        """Đồng bộ danh sách phụ đề tiếng Việt và tiếng Trung lên giao diện chính."""
+        try:
+            trans_segs = []
+            base_segs = []
+            for c in translated_cues:
+                if not isinstance(c, dict):
+                    continue
+                s_s = float(c.get("start", 0.0))
+                e_s = float(c.get("end", 0.0))
+                t_txt = str(c.get("translated_text", "") or c.get("translated", "")).strip()
+                o_txt = str(c.get("source_text", "") or c.get("original", "") or c.get("text", "")).strip()
+
+                trans_segs.append({
+                    "start": s_s,
+                    "end": e_s,
+                    "text": t_txt,
+                    "translated": t_txt,
+                    "translated_text": t_txt,
+                    "original": o_txt,
+                    "source_text": o_txt,
+                })
+                base_segs.append({
+                    "start": s_s,
+                    "end": e_s,
+                    "text": o_txt,
+                    "original": o_txt,
+                    "source_text": o_txt,
+                })
+
+            parent_gui.current_translated_segments = trans_segs
+            if base_segs:
+                parent_gui.current_segments = base_segs
+
+            if hasattr(parent_gui, "timeline") and hasattr(parent_gui.timeline, "set_segments"):
+                parent_gui.timeline.set_segments(trans_segs)
+
+            if hasattr(parent_gui, "subtitle_list_view") and hasattr(parent_gui.subtitle_list_view, "refresh_segments"):
+                parent_gui.subtitle_list_view.refresh_segments()
+        except Exception:
+            pass

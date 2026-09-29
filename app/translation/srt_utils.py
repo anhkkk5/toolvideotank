@@ -25,7 +25,7 @@ def parse_srt(srt_text: str) -> list[dict]:
     return segments
 
 
-def to_srt(segments: list[dict], max_gap_ms: float = 100.0) -> str:
+def to_srt(segments: list[dict], max_gap_ms: float = 100.0, prefer_translated: bool = True) -> str:
     lines = []
     max_gap_s = max_gap_ms / 1000.0
     for idx, seg in enumerate(segments, 1):
@@ -40,7 +40,24 @@ def to_srt(segments: list[dict], max_gap_ms: float = 100.0) -> str:
                 end_time = next_seg['start']
         
         lines.append(f"{format_timestamp(seg['start'])} --> {format_timestamp(end_time)}")
-        lines.append((seg.get("text") or "").strip())
+        if prefer_translated:
+            val = (
+                seg.get("translated_text")
+                or seg.get("translated")
+                or seg.get("subtitle_vi")
+                or seg.get("dubbing_vi")
+                or seg.get("text")
+                or ""
+            )
+        else:
+            val = (
+                seg.get("source_text")
+                or seg.get("original")
+                or seg.get("original_text")
+                or seg.get("text")
+                or ""
+            )
+        lines.append(str(val).strip())
         lines.append("")
     return "\n".join(lines).strip() + "\n"
 

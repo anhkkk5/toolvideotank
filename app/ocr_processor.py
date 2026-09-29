@@ -339,8 +339,12 @@ def _sanitize_ocr_line(text: str) -> str:
         # e.g., '咋7' -> '咋了', '来7' -> '来了', '对J' -> '对了', '太7' -> '太了'
         cleaned = re.sub(r"(?<=[\u4e00-\u9fff\u3400-\u4dbf])\s*[7J](?=[^\d]|$)", "了", cleaned)
 
-    # Filter out non-dialogue text (food receipts, medication deliveries, address headers, letter salutations)
-    if re.search(r"(?:份餐具|外卖|送药|医药也快|A栋|a栋|To\s*[\u4e00-\u9fff]|排骨.*必涌泉)", cleaned):
+    # Filter out non-dialogue text (food receipts, medication deliveries, address headers, letter salutations, ads)
+    if re.search(
+        r"(?:份餐具|外卖|送药|医药也快|A栋|a栋|To\s*[\u4e00-\u9fff]|排骨.*必涌泉|"
+        r"想卖闲置|卖闲置|闲置.*嫌麻烦|转转.*二手|二手.*转卖|点击评论区|主页有|评论区置顶|关注公众号|私信获取)",
+        cleaned,
+    ):
         return ""
 
     # Discard isolated single Chinese character (unless common modal particles/interjections)

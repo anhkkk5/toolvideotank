@@ -230,6 +230,34 @@ class PipelineController:
         self.gui.progress_bar.setValue(0)
         self.gui.refresh_ui_state()
         self.gui.log("[Pipeline] Stop requested. Local worker process killed.")
+        cb = getattr(self.gui, "on_pipeline_finished_callback", None)
+        if callable(cb):
+            cb(False, "User stopped")
+
+    def stop_pipeline_immediately(self):
+        """Immediately stop the running pipeline without asking confirmation (used by queue controller)."""
+        self.gui._pipeline_active = False
+        self.gui._pipeline_step = ""
+        self.prepare_run_id += 1
+        self._stop_prepare_status_polling()
+        self._mark_running_project_steps_stopped()
+        self._stop_local_worker_server()
+        if self.progress_dialog:
+            try:
+                self.progress_dialog.fail_step("ai_process")
+                self.progress_dialog.hide()
+            except Exception:
+                pass
+        if hasattr(self.gui, "run_all_btn"):
+            self.gui.run_all_btn.setEnabled(True)
+            self.gui.run_all_btn.setText("Tạo")
+        self.gui.progress_bar.setRange(0, 100)
+        self.gui.progress_bar.setValue(0)
+        self.gui.refresh_ui_state()
+        self.gui.log("[Pipeline] Pipeline stopped immediately.")
+        cb = getattr(self.gui, "on_pipeline_finished_callback", None)
+        if callable(cb):
+            cb(False, "Stopped immediately")
 
     
     def _whisper_model_cached(self, model_name: str) -> bool:
@@ -346,6 +374,7 @@ class PipelineController:
         self.gui._pipeline_active = True
         self.gui._pipeline_step = "prepare"
         self.target_stage = ctx.target_stage
+        self._pipeline_start_time = time.time()
         # Store context for later phases (voiceover, preview) to read from
         self._active_context = ctx
 
@@ -563,7 +592,8 @@ class PipelineController:
             message += "Đây là số giọng khác nhau trong âm thanh, không phải số người xuất hiện trên hình. "
         message += "Kết quả này đã được dùng để phân vai tự động."
         self.gui.log(f"[OpenAI Speaker Analysis] {message.replace(chr(10), ' ')}")
-        QMessageBox.information(self.gui, "Phân tích người nói", message)
+        if not getattr(self.gui, "_queue_running", False):
+            QMessageBox.information(self.gui, "Phân tích người nói", message)
 
     def pipeline_advance(self, completed_step: str):
         """Manages transitions between major pipeline segments."""
@@ -634,6 +664,9 @@ class PipelineController:
         self.gui.progress_bar.setRange(0, 100)
         self.gui.progress_bar.setValue(0)
         self.gui.refresh_ui_state()
+        cb = getattr(self.gui, "on_pipeline_finished_callback", None)
+        if callable(cb):
+            cb(False, str(reason))
 
     def pipeline_review_required(self, reason: str):
         """Stop an automatic run cleanly when human review is required."""
@@ -654,6 +687,9 @@ class PipelineController:
         self.gui.progress_bar.setRange(0, 100)
         self.gui.progress_bar.setValue(0)
         self.gui.refresh_ui_state()
+        cb = getattr(self.gui, "on_pipeline_finished_callback", None)
+        if callable(cb):
+            cb(False, str(reason))
 
     def pipeline_done(self):
         """Marks the entire pipeline as successfully finished."""
@@ -662,6 +698,28 @@ class PipelineController:
         self._stop_prepare_status_polling()
         self._stop_local_worker_server()
         
+        elapsed = max(0.1, time.time() - getattr(self, "_pipeline_start_time", time.time()))
+        s_int = int(round(elapsed))
+        if s_int < 60:
+            dur_str = f"{s_int}s"
+            full_str = f"{s_int} giây"
+        else:
+            m = s_int // 60
+            rem = s_int % 60
+            dur_str = f"{m}m {rem:02d}s"
+            full_str = f"{m} phút {rem} giây"
+
+        cur_p = getattr(self.gui, "_current_video_path", "")
+        if cur_p:
+            if not hasattr(self.gui, "_video_durations"):
+                self.gui._video_durations = {}
+            self.gui._video_durations[os.path.normpath(cur_p)] = elapsed
+
+        self.gui.log(f"[Pipeline] 🎉 Toàn bộ quy trình hoàn tất trong {full_str} ({elapsed:.1f}s)!")
+        if self.progress_dialog and hasattr(self.progress_dialog, "footer"):
+            self.progress_dialog.footer.setText(f"🎉 Hoàn thành trong {dur_str}!")
+            self.progress_dialog.footer.setStyleSheet("color: #3fb950; font-weight: bold; font-size: 14px; margin-top: 15px;")
+
         if hasattr(self.gui, "run_all_btn"):
             self.gui.run_all_btn.setEnabled(True)
             self.gui.run_all_btn.setText("Tạo")
@@ -669,3 +727,6 @@ class PipelineController:
         self.gui.progress_bar.setRange(0, 100)
         self.gui.progress_bar.setValue(100)
         self.gui.refresh_ui_state()
+        cb = getattr(self.gui, "on_pipeline_finished_callback", None)
+        if callable(cb):
+            cb(True, "")

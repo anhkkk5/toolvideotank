@@ -155,14 +155,16 @@ class OcrRegionOverlay(QWidget):
             if not rect_tuple and w:
                 ps = getattr(w, "current_project_state", None)
                 if ps and hasattr(ps, "settings"):
-                    s = ps.settings.get("ocr_subtitle_rect", "")
-                    if s:
-                        try:
-                            parts = [float(x) for x in s.split(",")]
-                            if len(parts) == 4:
-                                rect_tuple = tuple(parts)
-                        except Exception:
-                            pass
+                    ps_vid = getattr(ps, "input_video", "")
+                    if ps_vid and os.path.normpath(ps_vid) == norm_p:
+                        s = ps.settings.get("ocr_subtitle_rect", "")
+                        if s:
+                            try:
+                                parts = [float(x) for x in s.split(",")]
+                                if len(parts) == 4:
+                                    rect_tuple = tuple(parts)
+                            except Exception:
+                                pass
 
             # 4. Tra trực tiếp trong file project.json đã lưu nếu có
             if not rect_tuple:
@@ -213,6 +215,14 @@ class OcrRegionOverlay(QWidget):
             if not hasattr(w, "_video_ocr_rects"):
                 w._video_ocr_rects = {}
             w._video_ocr_rects[norm_p] = default_rect
+            ctrl = getattr(w, "_batch_controller", None)
+            if ctrl:
+                for ws in ctrl.workspaces:
+                    if os.path.normpath(ws.video_path) == norm_p:
+                        if not getattr(ws, "ocr_rect", None):
+                            ws.ocr_rect = default_rect
+                            ws.blur_rect = default_rect
+                        break
 
     def restore_for_video(self, video_path: str):
         """Khôi phục khung OCR riêng của video được chỉ định."""
@@ -1102,6 +1112,17 @@ def build_preview_panel(gui, left_panel=None):
     gui.add_text_btn.hide()
     blur_group.addWidget(gui.blur_add_btn)
     blur_group.addWidget(gui.ocr_region_btn)
+
+    gui.ocr_save_btn = QPushButton("💾 Ghi nhớ OCR")
+    gui.ocr_save_btn.setToolTip("Lưu và ghi nhớ khung OCR hiện tại cho riêng video này")
+    gui.ocr_save_btn.setFixedHeight(30)
+    gui.ocr_save_btn.setStyleSheet(
+        "QPushButton { background: #1E293B; color: #38BDF8; font-weight: 700; font-size: 11px; padding: 0 10px; border: 1px solid #0284C7; border-radius: 4px; } "
+        "QPushButton:hover { background: #0284C7; color: #FFFFFF; border-color: #38BDF8; }"
+    )
+    gui.ocr_save_btn.show()
+    blur_group.addWidget(gui.ocr_save_btn)
+
     blur_group.addWidget(gui.ocr_translator_btn)
 
     speed_group = QHBoxLayout()
@@ -1124,9 +1145,66 @@ def build_preview_panel(gui, left_panel=None):
     gui.frame_preview_badge_label.raise_()
 
     gui.ocr_region_overlay = OcrRegionOverlay()
+    gui.ocr_region_overlay._main_window = gui
     gui.ocr_region_overlay.attach_to_view(gui.video_view)
     gui.ocr_translator_overlay = OcrTranslatorOverlay()
     gui.ocr_translator_overlay.attach_to_view(gui.video_view)
+
+    def _save_current_video_ocr():
+        cur_p = getattr(gui, "_current_video_path", "")
+        overlay = getattr(gui, "ocr_region_overlay", None)
+        if not cur_p or not overlay:
+            return
+        rect = overlay.get_norm_rect()
+        norm_p = os.path.normpath(cur_p)
+        if not hasattr(gui, "_video_ocr_rects"):
+            gui._video_ocr_rects = {}
+        gui._video_ocr_rects[norm_p] = rect
+
+        ctrl = getattr(gui, "_batch_controller", None)
+        if ctrl:
+            for ws in ctrl.workspaces:
+                if os.path.normpath(ws.video_path) == norm_p:
+                    ws.ocr_rect = rect
+                    ws.blur_rect = rect
+                    break
+
+        ps = getattr(gui, "current_project_state", None)
+        if ps and hasattr(ps, "settings"):
+            r_str = f"{rect[0]:.4f},{rect[1]:.4f},{rect[2]:.4f},{rect[3]:.4f}"
+            ps.settings["ocr_subtitle_rect"] = r_str
+            project_service = getattr(gui, "project_service", None)
+            if project_service and hasattr(project_service, "save_project"):
+                try:
+                    project_service.save_project(ps)
+                except Exception:
+                    pass
+
+        # Đổi giao diện nút báo thành công
+        y_pct = int(rect[1] * 100)
+        h_pct = int(rect[3] * 100)
+        v_name = os.path.basename(cur_p)
+        gui.ocr_save_btn.setText("✅ Đã ghi nhớ!")
+        gui.ocr_save_btn.setStyleSheet(
+            "QPushButton { background: #065F46; color: #34D399; font-weight: 800; font-size: 11px; padding: 0 10px; border: 1px solid #10B981; border-radius: 4px; }"
+        )
+        def _reset_save_btn():
+            if hasattr(gui, "ocr_save_btn"):
+                gui.ocr_save_btn.setText("💾 Ghi nhớ OCR")
+                gui.ocr_save_btn.setStyleSheet(
+                    "QPushButton { background: #1E293B; color: #38BDF8; font-weight: 700; font-size: 11px; padding: 0 10px; border: 1px solid #0284C7; border-radius: 4px; } "
+                    "QPushButton:hover { background: #0284C7; color: #FFFFFF; border-color: #38BDF8; }"
+                )
+        QtCore.QTimer.singleShot(2000, _reset_save_btn)
+
+        if hasattr(gui, "show_status_message"):
+            gui.show_status_message(f"💾 Đã ghi nhớ khung OCR cho {v_name} (y={y_pct}%, h={h_pct}%)", 3000)
+
+        # Cập nhật danh sách thẻ Media
+        if hasattr(gui, "_refresh_media_pool_ui") and callable(gui._refresh_media_pool_ui):
+            gui._refresh_media_pool_ui()
+
+    gui.ocr_save_btn.clicked.connect(_save_current_video_ocr)
 
     def _sync_ocr_overlay():
         overlay = getattr(gui, "ocr_region_overlay", None)

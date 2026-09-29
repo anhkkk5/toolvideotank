@@ -1,6 +1,7 @@
 from .pipeline_controller import PipelineController
 from .preview_controller import PreviewController
 from .subtitle_controller import SubtitleController
+from .queue_controller import SequentialQueueController
 
 # Lazy import — BatchPipelineController kéo theo runtime_paths,
 # chỉ cần khi user mở Batch panel.
@@ -13,4 +14,5 @@ __all__ = [
     "PreviewController",
     "SubtitleController",
     "BatchPipelineController",
+    "SequentialQueueController",
 ]

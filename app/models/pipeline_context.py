@@ -11,7 +11,10 @@ trạng thái xử lý, progress, output.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -185,6 +188,15 @@ class PipelineContext:
         if not ws_ocr and base.video_path and os.path.normpath(base.video_path) == os.path.normpath(workspace.video_path):
             ws_ocr = getattr(base, "ocr_rect", None) or base.blur_rect
 
+        diar_enabled = workspace.speaker_diarization if getattr(workspace, "speaker_diarization", None) is not None else base.speaker_diarization
+        diar_num = workspace.speaker_diarization_num_speakers if getattr(workspace, "speaker_diarization_num_speakers", None) is not None else base.speaker_diarization_num_speakers
+        if getattr(workspace, "voice_mode", "") == "multi":
+            diar_enabled = True
+            diar_num = 2
+
+        out_mode = workspace.output_mode or base.output_mode or "both"
+        v_name = workspace.voice_name or base.voice_name
+
         return cls(
             workspace_root=base.workspace_root,
             video_path=workspace.video_path,
@@ -196,10 +208,10 @@ class PipelineContext:
             ai_polish_enabled=base.ai_polish_enabled,
             skip_translation=base.skip_translation,
             ai_style_instruction=base.ai_style_instruction,
-            speaker_diarization=base.speaker_diarization,
-            speaker_diarization_num_speakers=base.speaker_diarization_num_speakers,
-            output_mode=workspace.output_mode or base.output_mode,
-            voice_name=workspace.voice_name or base.voice_name,
+            speaker_diarization=diar_enabled,
+            speaker_diarization_num_speakers=diar_num,
+            output_mode=out_mode,
+            voice_name=v_name,
             voice_speed=workspace.voice_speed if workspace.voice_speed != 1.0 else base.voice_speed,
             target_stage=base.target_stage,
             blur_rect=ws_ocr,
@@ -238,6 +250,13 @@ class VideoWorkspace:
     output_mode: str = ""
     voice_name: str = ""
     voice_speed: float = 1.0
+    voice_mode: str = ""                    # "" / "single" / "multi"
+    voice_name_male: str = ""               # Giọng nam (cho phân vai nam/nữ)
+    voice_name_female: str = ""             # Giọng nữ (cho phân vai nam/nữ)
+    speaker_diarization: Optional[bool] = None
+    speaker_diarization_num_speakers: Optional[int] = None
+    voice_setup_summary: str = ""           # Tóm tắt hiển thị badge (vd: "1 Giọng: Hoài Nam", "Phân vai: Nam + Nữ")
+    role_config: Optional[dict] = None
     blur_rect: Optional[tuple] = None
     ocr_rect: Optional[tuple] = None        # (x, y, w, h) normalized riêng từng video
 
@@ -276,8 +295,16 @@ class VideoWorkspace:
             except Exception:
                 pass
 
-        # Thử đọc ocr_rect từ project state đã lưu nếu có
+        # Thử đọc ocr_rect và batch_voice_config từ project state đã lưu nếu có
         ocr_rect = None
+        v_mode = ""
+        v_name = ""
+        v_male = ""
+        v_female = ""
+        v_speed = 1.0
+        v_diar = None
+        v_diar_num = None
+        v_sum = ""
         try:
             import hashlib, json, re
             from runtime_paths import workspace_root
@@ -286,7 +313,7 @@ class VideoWorkspace:
             slug = re.sub(r"[^a-zA-Z0-9]+", "_", video_stem).strip("_").lower() or "project"
             digest = hashlib.sha1(os.path.abspath(video_path).encode("utf-8")).hexdigest()[:8]
             state_file = os.path.join(proj_root, f"{slug}_{digest}", "project.json")
-            if os.path.isfile(state_file):
+            if os.path.isfile(state_file) and os.path.getsize(state_file) > 0:
                 with open(state_file, "r", encoding="utf-8") as f:
                     s_data = json.load(f)
                     s_rect = s_data.get("settings", {}).get("ocr_subtitle_rect", "")
@@ -294,6 +321,16 @@ class VideoWorkspace:
                         parts = [float(x) for x in s_rect.split(",")]
                         if len(parts) == 4:
                             ocr_rect = tuple(parts)
+                    b_cfg = s_data.get("settings", {}).get("batch_voice_config", {})
+                    if b_cfg:
+                        v_mode = b_cfg.get("voice_mode", "")
+                        v_name = b_cfg.get("voice_name", "")
+                        v_male = b_cfg.get("voice_name_male", "")
+                        v_female = b_cfg.get("voice_name_female", "")
+                        v_speed = float(b_cfg.get("voice_speed", 1.0) or 1.0)
+                        v_diar = b_cfg.get("speaker_diarization")
+                        v_diar_num = b_cfg.get("speaker_diarization_num_speakers")
+                        v_sum = b_cfg.get("voice_setup_summary", "")
         except Exception:
             pass
 
@@ -304,7 +341,54 @@ class VideoWorkspace:
             duration_s=dur_s,
             ocr_rect=ocr_rect,
             blur_rect=ocr_rect,
+            voice_mode=v_mode,
+            voice_name=v_name,
+            voice_name_male=v_male,
+            voice_name_female=v_female,
+            voice_speed=v_speed,
+            speaker_diarization=v_diar,
+            speaker_diarization_num_speakers=v_diar_num,
+            voice_setup_summary=v_sum,
         )
+
+    def get_project_file_path(self) -> str:
+        """Lấy đường dẫn file project.json gắn với video này."""
+        import hashlib, re
+        from runtime_paths import workspace_root
+        proj_root = os.path.join(workspace_root(), "projects")
+        video_stem = os.path.splitext(self.video_name or os.path.basename(self.video_path))[0] or "project"
+        slug = re.sub(r"[^a-zA-Z0-9]+", "_", video_stem).strip("_").lower() or "project"
+        digest = hashlib.sha1(os.path.abspath(self.video_path).encode("utf-8")).hexdigest()[:8]
+        return os.path.join(proj_root, f"{slug}_{digest}", "project.json")
+
+    def save_voice_config(self):
+        """Lưu cấu hình phân vai / giọng đọc riêng của video vào project.json."""
+        try:
+            p_path = self.get_project_file_path()
+            os.makedirs(os.path.dirname(p_path), exist_ok=True)
+            data = {}
+            if os.path.isfile(p_path) and os.path.getsize(p_path) > 0:
+                try:
+                    with open(p_path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                except Exception:
+                    data = {}
+            settings = data.setdefault("settings", {})
+            settings["batch_voice_config"] = {
+                "voice_mode": self.voice_mode,
+                "voice_name": self.voice_name,
+                "voice_name_male": self.voice_name_male,
+                "voice_name_female": self.voice_name_female,
+                "voice_speed": self.voice_speed,
+                "speaker_diarization": self.speaker_diarization,
+                "speaker_diarization_num_speakers": self.speaker_diarization_num_speakers,
+                "voice_setup_summary": self.voice_setup_summary,
+                "role_config": self.role_config,
+            }
+            with open(p_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
 
     def mark_queued(self):
         self.status = "queued"
@@ -363,6 +447,12 @@ class VideoWorkspace:
             "output_mode": self.output_mode,
             "voice_name": self.voice_name,
             "voice_speed": self.voice_speed,
+            "voice_mode": self.voice_mode,
+            "voice_name_male": self.voice_name_male,
+            "voice_name_female": self.voice_name_female,
+            "speaker_diarization": self.speaker_diarization,
+            "speaker_diarization_num_speakers": self.speaker_diarization_num_speakers,
+            "voice_setup_summary": self.voice_setup_summary,
             "blur_rect": self.blur_rect,
             "ocr_rect": self.ocr_rect,
             "status": self.status,

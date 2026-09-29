@@ -590,6 +590,7 @@ def browse_video(gui, file_path=None):
     if hasattr(gui, "seek_frame_preview_timer"):
         gui.seek_frame_preview_timer.stop()
     QTimer.singleShot(120, lambda: gui.media_player.setPosition(0))
+    QTimer.singleShot(160, lambda: gui._sync_ocr_overlay() if hasattr(gui, "_sync_ocr_overlay") else None)
     QTimer.singleShot(220, gui.video_view.reposition_subtitle)
     gui.refresh_ui_state()
     gui.sync_live_subtitle_preview()

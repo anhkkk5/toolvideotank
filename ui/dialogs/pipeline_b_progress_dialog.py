@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import time
 from typing import Any
 
 from PySide6.QtCore import Qt, Signal
@@ -283,6 +284,7 @@ class PipelineBProgressDialog(QDialog):
         self._worker.log_emitted.connect(self._on_log_emitted)
         self._worker.pipeline_finished.connect(self._on_pipeline_finished)
         self._worker.finished.connect(self._on_worker_thread_finished)
+        self._start_time = time.time()
         self._worker.start()
 
     def _on_progress_updated(self, percent: float, message: str):
@@ -323,11 +325,27 @@ class PipelineBProgressDialog(QDialog):
         self.btn_cancel.setVisible(False)
         self.btn_close.setEnabled(True)
 
+        elapsed = max(0.1, time.time() - getattr(self, "_start_time", time.time()))
+        s_int = int(round(elapsed))
+        if s_int < 60:
+            dur_str = f"{s_int}s"
+            full_str = f"{s_int} giây"
+        else:
+            m = s_int // 60
+            rem = s_int % 60
+            dur_str = f"{m}m {rem:02d}s"
+            full_str = f"{m} phút {rem} giây"
+
         if result.status == "success":
             self.output_mp4 = result.output_video_path
             self.progress_bar.setValue(100)
-            self.lbl_status.setText("🎉 ĐÃ TẠO VIDEO THÀNH CÔNG!")
+            self.lbl_status.setText(f"🎉 ĐÃ TẠO VIDEO THÀNH CÔNG trong {dur_str}!")
             self.lbl_status.setStyleSheet("color: #3fb950; font-weight: bold; font-size: 13px;")
+
+            if self.original_video_path and hasattr(self, "parent") and self.parent():
+                p_gui = self.parent()
+                if hasattr(p_gui, "_video_durations"):
+                    p_gui._video_durations[os.path.normpath(self.original_video_path)] = elapsed
 
             self.lbl_step2.setText("2. 🎙️ Lồng tiếng AI\n[✅ Đã xong]")
             self.lbl_step2.setStyleSheet("color: #3fb950; font-weight: bold; font-size: 11px;")
@@ -335,12 +353,13 @@ class PipelineBProgressDialog(QDialog):
             self.lbl_step3.setStyleSheet("color: #3fb950; font-weight: bold; font-size: 11px;")
 
             self._append_log("\n" + "=" * 55)
-            self._append_log("🎉 XUẤT BẢN VIDEO THÀNH CÔNG!")
+            self._append_log(f"🎉 XUẤT BẢN VIDEO THÀNH CÔNG (Thời gian: {full_str} / {elapsed:.1f}s)!")
             self._append_log(f"🎬 Video thành phẩm: {result.output_video_path}")
             if result.output_audio_path:
                 self._append_log(f"🎵 Audio thành phẩm: {result.output_audio_path}")
             self._append_log("-" * 55)
             self._append_log("📊 BÁO CÁO THỐNG KÊ:")
+            self._append_log(f"   • Thời gian hoàn thành: {full_str} ({elapsed:.1f}s)")
             self._append_log(f"   • Thời lượng video thành phẩm: {result.final_video_duration:.2f}s")
             self._append_log(f"   • Thời lượng audio thành phẩm: {result.audio_duration:.2f}s")
             self._append_log(f"   • Tổng số câu: {result.total_segments}")

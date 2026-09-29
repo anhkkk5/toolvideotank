@@ -951,7 +951,8 @@ class VideoExportService:
             cmd.extend([
                 "-map", "1:a:0",
                 "-c:v", "libx264",
-                "-preset", "fast",
+                "-preset", "veryfast",
+                "-threads", "0",
                 "-crf", "20",
                 "-pix_fmt", "yuv420p",
                 "-c:a", "aac",

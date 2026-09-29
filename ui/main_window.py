@@ -4873,8 +4873,38 @@ class VideoTranslatorGUI(QMainWindow, VoiceGenderMixin, ProjectSettingsMixin, Vi
             trans_cues = getattr(progress_dlg, "_translated_cues", [])
             if trans_cues:
                 try:
-                    self.current_translated_segments = trans_cues
-                    self.timeline.set_segments(trans_cues)
+                    trans_segs = []
+                    base_segs = []
+                    for c in trans_cues:
+                        if not isinstance(c, dict):
+                            continue
+                        s_s = float(c.get("start", 0.0))
+                        e_s = float(c.get("end", 0.0))
+                        t_txt = str(c.get("translated_text", "") or c.get("translated", "")).strip()
+                        o_txt = str(c.get("source_text", "") or c.get("original", "") or c.get("text", "")).strip()
+                        trans_segs.append({
+                            "start": s_s,
+                            "end": e_s,
+                            "text": t_txt,
+                            "translated": t_txt,
+                            "translated_text": t_txt,
+                            "original": o_txt,
+                            "source_text": o_txt,
+                        })
+                        base_segs.append({
+                            "start": s_s,
+                            "end": e_s,
+                            "text": o_txt,
+                            "original": o_txt,
+                            "source_text": o_txt,
+                        })
+                    self.current_translated_segments = trans_segs
+                    if base_segs:
+                        self.current_segments = base_segs
+                    if hasattr(self, "timeline") and hasattr(self.timeline, "set_segments"):
+                        self.timeline.set_segments(trans_segs)
+                    if hasattr(self, "subtitle_list_view") and hasattr(self.subtitle_list_view, "refresh_segments"):
+                        self.subtitle_list_view.refresh_segments()
                 except Exception:
                     pass
 

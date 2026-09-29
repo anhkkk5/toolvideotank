@@ -46,17 +46,26 @@ class SingleVoiceSetupDialog(QDialog):
         parent: QWidget | None = None,
         *,
         video_path: str = "",
+        video_paths: list[str] | None = None,
         initial_orig_volume: int = 50,
         initial_tts_volume: int = 100,
         blur_rect: tuple[float, float, float, float] | None = None,
         workspace_root: str = "",
+        initial_voice_id: str = "",
+        individual_voices: dict[str, dict[str, str]] | None = None,
     ):
         super().__init__(parent)
         self.video_path = video_path
+        self.video_paths = [os.path.normpath(p) for p in (video_paths or []) if p]
+        if not self.video_path and self.video_paths:
+            self.video_path = self.video_paths[0]
         self.workspace_root = workspace_root or os.getcwd()
         self.initial_orig_volume = max(0, min(100, int(initial_orig_volume)))
         self.initial_tts_volume = max(0, min(200, int(initial_tts_volume)))
         self.blur_rect = blur_rect
+        self.initial_voice_id = initial_voice_id
+        self.individual_voices = individual_voices
+        self.start_now = False
 
         self.setWindowTitle("Cài đặt lồng tiếng (1 giọng) & Tạo video tự động")
         # Tự động tính toán kích thước rộng rãi, vừa vặn độ phân giải màn hình
@@ -95,7 +104,9 @@ class SingleVoiceSetupDialog(QDialog):
         layout.setSpacing(14)
 
         # Header Title
-        title_label = QLabel("🎬 CÀI ĐẶT LỒNG TIẾNG (1 GIỌNG) & TẠO VIDEO")
+        count = len(self.video_paths)
+        title_text = f"🎬 CÀI ĐẶT LỒNG TIẾNG (1 GIỌNG) CHO {count} VIDEO ĐÃ CHỌN" if count > 1 else "🎬 CÀI ĐẶT LỒNG TIẾNG (1 GIỌNG) & TẠO VIDEO"
+        title_label = QLabel(title_text)
         t_font = QFont()
         t_font.setPointSize(12)
         t_font.setBold(True)
@@ -110,6 +121,13 @@ class SingleVoiceSetupDialog(QDialog):
         desc_label.setWordWrap(True)
         desc_label.setStyleSheet("color: #9fb3ca; font-size: 12px; line-height: 1.4;")
         layout.addWidget(desc_label)
+
+        if count > 1:
+            names = [os.path.basename(p) for p in self.video_paths]
+            disp = ", ".join(names[:3]) + (f" ...và {len(names) - 3} video khác" if len(names) > 3 else "")
+            v_box = QLabel(f"🎬 Video áp dụng: {disp}")
+            v_box.setStyleSheet("color: #38BDF8; font-size: 11px; font-weight: 600; background: #162032; padding: 4px 8px; border-radius: 4px;")
+            layout.addWidget(v_box)
 
         # --- 1. KHUNG CHỌN 1 GIỌNG LỒNG TIẾNG ---
         voice_box = QGroupBox("1. Chọn giọng đọc nhân vật lồng tiếng")
@@ -149,20 +167,71 @@ class SingleVoiceSetupDialog(QDialog):
                 prefix = "👩 " if "vieneu" not in v["id"] else ""
                 all_voices.append({**v, "name": f"{prefix}{v['name']}"})
 
+        # Kiểm tra xem các video đã chọn có cài giọng riêng từ trước không
+        has_individual = False
+        indiv_map = getattr(self, "individual_voices", None)
+        if indiv_map is None and self.parent() and hasattr(self.parent(), "_video_voice_configs"):
+            indiv_map = {}
+            for p in self.video_paths:
+                cfg = getattr(self.parent(), "_video_voice_configs", {}).get(os.path.normpath(p), {})
+                if cfg.get("voice_name") and cfg.get("label"):
+                    indiv_map[os.path.normpath(p)] = cfg
+
+        if len(self.video_paths) > 1 and indiv_map and len(indiv_map) > 0:
+            summaries = []
+            for p in self.video_paths:
+                c = indiv_map.get(os.path.normpath(p), {})
+                v_l = c.get("label", "")
+                base = os.path.basename(p)
+                short_b = base if len(base) <= 12 else base[:10] + "…"
+                if v_l:
+                    summaries.append(f"{short_b}: {v_l}")
+                else:
+                    summaries.append(f"{short_b}: Mặc định")
+            summ_txt = ", ".join(summaries[:2]) + ("..." if len(summaries) > 2 else "")
+            keep_item = {
+                "id": "keep_individual",
+                "name": f"🎯 Giữ nguyên giọng riêng từng video ({summ_txt})",
+                "provider": "individual",
+            }
+            all_voices.insert(0, keep_item)
+            has_individual = True
+
         def_voice_idx = 0
+        if not has_individual:
+            target_v = getattr(self, "initial_voice_id", "").strip()
+            for idx, item in enumerate(all_voices):
+                if target_v and (item["id"] == target_v or target_v in item["id"]):
+                    def_voice_idx = idx
+                    break
+                elif not target_v and item["id"] in ("adam1", "adam"):
+                    def_voice_idx = idx
+
         for idx, item in enumerate(all_voices):
             self.combo_voice.addItem(item["name"], item)
-            # Mặc định chọn Adam hoặc Thanh niên tự tin
-            if item["id"] in ("adam1", "adam"):
-                def_voice_idx = idx
 
         self.combo_voice.setCurrentIndex(def_voice_idx)
         v_row.addWidget(self.combo_voice, 1)
         voice_layout.addLayout(v_row)
 
-        voice_hint = QLabel("Giọng này sẽ được dùng để lồng tiếng cho toàn bộ các câu thoại trong video.")
-        voice_hint.setStyleSheet("color: #8ea3bb; font-size: 11px;")
-        voice_layout.addWidget(voice_hint)
+        self.voice_hint = QLabel("Giọng này sẽ được dùng để lồng tiếng cho toàn bộ các câu thoại trong video.")
+        self.voice_hint.setStyleSheet("color: #8ea3bb; font-size: 11px;")
+        voice_layout.addWidget(self.voice_hint)
+
+        def _update_voice_hint():
+            cur = self.combo_voice.currentData()
+            if isinstance(cur, dict) and cur.get("id") == "keep_individual":
+                self.voice_hint.setText("💡 Mỗi video trong hàng đợi sẽ được tạo đúng theo giọng đọc bạn đã chọn trên từng thẻ video.")
+                self.voice_hint.setStyleSheet("color: #34D399; font-size: 11px; font-weight: bold;")
+            elif len(self.video_paths) > 1:
+                self.voice_hint.setText("⚠️ Áp dụng giọng này để thay thế cho toàn bộ các video trong hàng đợi.")
+                self.voice_hint.setStyleSheet("color: #FBBF24; font-size: 11px;")
+            else:
+                self.voice_hint.setText("Giọng này sẽ được dùng để lồng tiếng cho toàn bộ các câu thoại trong video.")
+                self.voice_hint.setStyleSheet("color: #8ea3bb; font-size: 11px;")
+
+        self.combo_voice.currentIndexChanged.connect(_update_voice_hint)
+        _update_voice_hint()
 
         layout.addWidget(voice_box)
 
@@ -464,16 +533,21 @@ class SingleVoiceSetupDialog(QDialog):
         self.cancel_btn.clicked.connect(self.reject)
         btn_layout.addWidget(self.cancel_btn)
 
-        self.start_btn = QPushButton("🚀 Bắt đầu tạo video")
+        count = len(self.video_paths)
+        btn_txt = f"🚀 Bắt đầu tạo video ({count} video)" if count > 1 else "🚀 Bắt đầu tạo video"
+        self.start_btn = QPushButton(btn_txt)
         self.start_btn.setObjectName("primaryActionBtn")
         self.start_btn.setMinimumHeight(38)
-        self.start_btn.setMinimumWidth(160)
+        self.start_btn.setMinimumWidth(180)
         self.start_btn.setStyleSheet(
             "QPushButton { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #ff6a00, stop:1 #e04800); "
-            "color: #ffffff; font-weight: 800; font-size: 13px; border: 1px solid #ff8833; border-radius: 8px; padding: 6px 18px; } "
+            "color: #ffffff; font-weight: 800; font-size: 13px; border: 1px solid #ff8833; border-radius: 8px; padding: 6px 20px; } "
             "QPushButton:hover { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #ff7d1a, stop:1 #f05400); border-color: #ffa352; }"
         )
-        self.start_btn.clicked.connect(self.accept)
+        def _on_start_btn_clicked():
+            self.start_now = True
+            self.accept()
+        self.start_btn.clicked.connect(_on_start_btn_clicked)
         btn_layout.addWidget(self.start_btn)
 
         root_layout.addLayout(btn_layout)
@@ -552,6 +626,24 @@ class SingleVoiceSetupDialog(QDialog):
 
     def is_burn_subtitles_enabled(self) -> bool:
         return self.chk_burn_subtitles.isChecked()
+
+    def get_voice_config(self) -> dict[str, Any]:
+        """Trả về cấu hình giọng đọc chuẩn hóa."""
+        v = self.get_selected_voice()
+        mix = self.get_audio_mix_settings()
+        return {
+            "mode": "single",
+            "voice": v,
+            "voice_id": v.get("id", ""),
+            "voice_name": v.get("name", ""),
+            "provider": v.get("provider", "piper"),
+            "orig_volume": int(mix.get("original_volume", 0.5) * 100),
+            "tts_volume": int(mix.get("tts_volume", 1.0) * 100),
+            "duck_volume": mix.get("duck_volume", 0.2),
+            "blur_mask": self.is_blur_mask_enabled(),
+            "burn_subtitles": self.is_burn_subtitles_enabled(),
+            "start_now": getattr(self, "start_now", False),
+        }
 
     def _refresh_deepseek_status(self):
         provider = str(os.getenv("OPENAI_PROVIDER") or os.getenv("AI_POLISHER_PROVIDER") or "deepseek").strip().lower()

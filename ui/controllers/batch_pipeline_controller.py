@@ -61,6 +61,7 @@ class PipelineWorker(QThread):
                  log_fn: Optional[Callable] = None):
         super().__init__()
         self.workspace = workspace
+        self.ws = workspace
         self.ctx = ctx
         self._log_fn = log_fn or (lambda msg: None)
         self._cancelled = False
@@ -104,11 +105,11 @@ class PipelineWorker(QThread):
                 and self.ctx.output_mode in ("voice", "both")
             )
 
-            ocr_rect = getattr(self.ws, "ocr_rect", None) or getattr(self.ctx, "ocr_rect", None)
+            ocr_rect = getattr(self.workspace, "ocr_rect", None) or getattr(self.ctx, "ocr_rect", None)
             if not ocr_rect or len(ocr_rect) != 4:
                 try:
                     from views.preview_panel import get_default_ocr_rect_for_video
-                    ocr_rect = get_default_ocr_rect_for_video(self.ws.video_path)
+                    ocr_rect = get_default_ocr_rect_for_video(self.workspace.video_path)
                 except Exception:
                     ocr_rect = (0.05, 0.65, 0.90, 0.16)
             ocr_rect_str = f"{ocr_rect[0]:.4f},{ocr_rect[1]:.4f},{ocr_rect[2]:.4f},{ocr_rect[3]:.4f}" if (ocr_rect and len(ocr_rect) == 4) else ""
@@ -154,6 +155,38 @@ class PipelineWorker(QThread):
                 return
 
             ws.project_state_path = state_path
+            if state_path and os.path.isfile(state_path):
+                try:
+                    import json
+                    with open(state_path, "r", encoding="utf-8") as f:
+                        s_data = json.load(f)
+                    settings = s_data.setdefault("settings", {})
+                    settings["batch_voice_config"] = {
+                        "voice_mode": ws.voice_mode,
+                        "voice_name": ws.voice_name,
+                        "voice_name_male": ws.voice_name_male,
+                        "voice_name_female": ws.voice_name_female,
+                        "voice_speed": ws.voice_speed,
+                        "speaker_diarization": ws.speaker_diarization,
+                        "speaker_diarization_num_speakers": ws.speaker_diarization_num_speakers,
+                        "voice_setup_summary": ws.voice_setup_summary,
+                        "role_config": ws.role_config,
+                    }
+                    if ws.voice_mode == "multi" and (ws.voice_name_male or ws.voice_name_female):
+                        svm = settings.get("speaker_voice_map", {})
+                        for spk_id, cur_v in list(svm.items()):
+                            if "male" in str(spk_id).lower() or "nam" in str(cur_v).lower():
+                                if ws.voice_name_male:
+                                    svm[spk_id] = ws.voice_name_male
+                            else:
+                                if ws.voice_name_female:
+                                    svm[spk_id] = ws.voice_name_female
+                        settings["speaker_voice_map"] = svm
+                    with open(state_path, "w", encoding="utf-8") as f:
+                        json.dump(s_data, f, ensure_ascii=False, indent=2)
+                except Exception as _e:
+                    self._log_fn(f"[Batch] Cảnh báo lưu voice config vào project: {_e}")
+
             ws.mark_done(output_path=state_path)
 
             self.step_changed.emit(ws_id, "done")
@@ -189,11 +222,11 @@ class PipelineWorker(QThread):
         env["PYTHONUTF8"] = "1"
         env["PYTHONIOENCODING"] = "utf-8"
         env["CAPCAP_DEVICE"] = os.getenv("CAPCAP_DEVICE", "cpu").strip().lower()
-        ocr_rect = getattr(self.ws, "ocr_rect", None) or getattr(self.ctx, "ocr_rect", None)
+        ocr_rect = getattr(self.workspace, "ocr_rect", None) or getattr(self.ctx, "ocr_rect", None)
         if not ocr_rect or len(ocr_rect) != 4:
             try:
                 from views.preview_panel import get_default_ocr_rect_for_video
-                ocr_rect = get_default_ocr_rect_for_video(self.ws.video_path)
+                ocr_rect = get_default_ocr_rect_for_video(self.workspace.video_path)
             except Exception:
                 ocr_rect = (0.05, 0.65, 0.90, 0.16)
         if ocr_rect and len(ocr_rect) == 4:
@@ -490,6 +523,32 @@ class BatchPipelineController(QObject):
 
         self.batch_started.emit()
         self._log(f"[Batch] Bắt đầu xử lý {len(pending)} video (đồng thời: {self.max_concurrent})")
+        self._dispatch_next()
+
+    def start_selected(self, workspace_ids: list[str]):
+        """Đưa danh sách các workspace được chỉ định vào queue và bắt đầu xử lý."""
+        if self._is_running:
+            self._log("[Batch] Đang chạy batch, bỏ qua start_selected")
+            return
+
+        target_set = set(workspace_ids)
+        targets = [ws for ws in self.workspaces if ws.id in target_set and ws.status in ("pending", "done", "error", "cancelled")]
+        if not targets:
+            self._log("[Batch] Không có video nào được chọn để xử lý")
+            return
+
+        self._is_running = True
+        self._success_count = 0
+        self._fail_count = 0
+        self._batch_start_time = time.time()
+
+        for ws in targets:
+            ws.mark_queued()
+            self._queue.append(ws.id)
+            self.workspace_status_changed.emit(ws.id, "queued")
+
+        self.batch_started.emit()
+        self._log(f"[Batch] Bắt đầu xử lý {len(targets)} video đã chọn (đồng thời: {self.max_concurrent})")
         self._dispatch_next()
 
     def stop_all(self):

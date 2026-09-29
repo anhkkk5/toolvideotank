@@ -104,6 +104,17 @@ def _load_chinese_cues_from_project(gui) -> list[str]:
                     return cues
             except Exception:
                 pass
+
+    if hasattr(gui, "current_segments") and gui.current_segments:
+        cues = []
+        for s in gui.current_segments:
+            if isinstance(s, dict):
+                cues.append(str(s.get("text", "") or s.get("original", "") or s.get("source_text", "") or ""))
+            elif hasattr(s, "text"):
+                cues.append(str(getattr(s, "text", "") or ""))
+        if any(cues):
+            return cues
+
     return []
 
 

@@ -1,4 +1,5 @@
 import os
+import re
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QPixmap
@@ -6,12 +7,15 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QComboBox,
+    QDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMenu,
+    QMessageBox,
     QPushButton,
     QProgressBar,
     QRadioButton,
@@ -218,36 +222,6 @@ def _build_resource_media_card(gui):
     layout.setSpacing(6)
 
     # ═══════════════════════════════════════════════════════════════════
-    # 0. Batch Controller Initialization & Signal Connections
-    # ═══════════════════════════════════════════════════════════════════
-    def _ensure_batch_controller():
-        if not hasattr(gui, "_batch_controller") or gui._batch_controller is None:
-            try:
-                from controllers.batch_pipeline_controller import BatchPipelineController
-                ws_root = getattr(gui, "workspace_root", os.getcwd())
-                log_fn = getattr(gui, "log", lambda msg: print(msg))
-                ctrl = BatchPipelineController(
-                    workspace_root=str(ws_root),
-                    max_concurrent=1,
-                    log_fn=log_fn,
-                )
-                gui._batch_controller = ctrl
-                ctrl.workspace_added.connect(lambda _wid: _render_media_pool())
-                ctrl.workspace_removed.connect(lambda _wid: _render_media_pool())
-                ctrl.workspace_status_changed.connect(lambda wid, s: _on_batch_status_changed(wid, s))
-                ctrl.workspace_progress_changed.connect(lambda wid, p: _on_batch_progress_changed(wid, p))
-                ctrl.workspace_step_changed.connect(lambda wid, step: _on_batch_step_changed(wid, step))
-                ctrl.batch_started.connect(lambda: _on_batch_started())
-                ctrl.batch_completed.connect(lambda ok, fail: _on_batch_completed(ok, fail))
-                ctrl.log_message.connect(lambda msg: _on_batch_log(msg))
-            except Exception as _e:
-                print(f"[WARN] Failed to init BatchPipelineController: {_e}")
-                gui._batch_controller = None
-        return getattr(gui, "_batch_controller", None)
-
-    ctrl = _ensure_batch_controller()
-
-    # ═══════════════════════════════════════════════════════════════════
     # Drag & Drop trực tiếp vào Resource Media Card
     # ═══════════════════════════════════════════════════════════════════
     def _drag_enter(event: QDragEnterEvent):
@@ -329,11 +303,11 @@ def _build_resource_media_card(gui):
     # 2. Nút to màu cam: + Nhập tệp (Chọn nhiều video)
     # ═══════════════════════════════════════════════════════════════════
     import_btn = QPushButton("＋ Nhập tệp (Chọn nhiều video)")
-    import_btn.setMinimumHeight(32)
+    import_btn.setMinimumHeight(34)
     import_btn.setCursor(Qt.PointingHandCursor)
     import_btn.setStyleSheet(
         "QPushButton { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #FF8A00, stop:1 #FF6A00); "
-        "color: #ffffff; font-weight: 700; font-size: 12px; border-radius: 6px; border: none; padding: 5px; } "
+        "color: #ffffff; font-weight: 700; font-size: 12px; border-radius: 6px; border: none; padding: 6px; } "
         "QPushButton:hover { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #FFA033, stop:1 #FF7D1A); } "
         "QPushButton:pressed { background: #E67600; }"
     )
@@ -341,88 +315,342 @@ def _build_resource_media_card(gui):
     layout.addWidget(import_btn)
 
     # ═══════════════════════════════════════════════════════════════════
-    # 3. Batch Action Controls: Xử lý tất cả / Dừng / Retry / Concurrency
+    # 2b. Khởi tạo SequentialQueueController & State hàng đợi
     # ═══════════════════════════════════════════════════════════════════
-    batch_box = QFrame()
-    batch_box.setStyleSheet(
-        "QFrame { background: #0E121A; border: 1px solid #232B3B; border-radius: 6px; }"
-    )
-    bb_layout = QVBoxLayout(batch_box)
-    bb_layout.setContentsMargins(6, 6, 6, 6)
-    bb_layout.setSpacing(5)
+    if not hasattr(gui, "queue_controller"):
+        from controllers.queue_controller import SequentialQueueController
+        gui.queue_controller = SequentialQueueController(gui)
 
-    # Hàng 1: Nút ▶ Xử lý tất cả / ⏹ Dừng / ⟳ Retry
-    b_act_row = QHBoxLayout()
-    b_act_row.setSpacing(5)
-
-    gui._batch_start_btn = QPushButton("▶  Xử lý tất cả")
-    gui._batch_start_btn.setCursor(Qt.PointingHandCursor)
-    gui._batch_start_btn.setFixedHeight(28)
-    gui._batch_start_btn.setStyleSheet(
-        "QPushButton { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #FF6B00, stop:1 #FF9500); "
-        "color: #fff; font-size: 11px; font-weight: 800; border-radius: 5px; border: none; padding: 0 10px; } "
-        "QPushButton:hover { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #FF8A00, stop:1 #FFB347); } "
-        "QPushButton:disabled { background: #283446; color: #64748B; }"
-    )
-    gui._batch_start_btn.clicked.connect(lambda: _on_start_batch())
-    b_act_row.addWidget(gui._batch_start_btn, 2)
-
-    gui._batch_stop_btn = QPushButton("⏹ Dừng")
-    gui._batch_stop_btn.setCursor(Qt.PointingHandCursor)
-    gui._batch_stop_btn.setFixedHeight(28)
-    gui._batch_stop_btn.setEnabled(False)
-    gui._batch_stop_btn.setStyleSheet(
-        "QPushButton { background: #1E293B; color: #F87171; font-size: 11px; "
-        "font-weight: 700; border: 1px solid #7F1D1D; border-radius: 5px; padding: 0 8px; } "
-        "QPushButton:hover { background: #7F1D1D; color: #fff; } "
-        "QPushButton:disabled { background: #151A24; color: #475569; border-color: #262D3D; }"
-    )
-    gui._batch_stop_btn.clicked.connect(lambda: _on_stop_batch())
-    b_act_row.addWidget(gui._batch_stop_btn, 1)
-
-    gui._batch_retry_btn = QPushButton("⟳ Retry")
-    gui._batch_retry_btn.setCursor(Qt.PointingHandCursor)
-    gui._batch_retry_btn.setFixedHeight(28)
-    gui._batch_retry_btn.setEnabled(False)
-    gui._batch_retry_btn.setStyleSheet(
-        "QPushButton { background: #1E293B; color: #FBBF24; font-size: 11px; "
-        "font-weight: 700; border: 1px solid #92400E; border-radius: 5px; padding: 0 8px; } "
-        "QPushButton:hover { background: #92400E; color: #fff; } "
-        "QPushButton:disabled { background: #151A24; color: #475569; border-color: #262D3D; }"
-    )
-    gui._batch_retry_btn.clicked.connect(lambda: _on_retry_batch())
-    b_act_row.addWidget(gui._batch_retry_btn, 1)
-    bb_layout.addLayout(b_act_row)
-
-    # Hàng 2: Luồng đồng thời & tóm tắt tiến độ
-    b_sub_row = QHBoxLayout()
-    b_sub_row.setSpacing(6)
-    conc_lbl = QLabel("Luồng:")
-    conc_lbl.setStyleSheet("color: #8C93A0; font-size: 10px; font-weight: 600; border: none; background: transparent;")
-    b_sub_row.addWidget(conc_lbl)
-
-    gui._batch_concurrent_spin = QSpinBox()
-    gui._batch_concurrent_spin.setRange(1, 8)
-    gui._batch_concurrent_spin.setValue(1)
-    gui._batch_concurrent_spin.setFixedWidth(42)
-    gui._batch_concurrent_spin.setFixedHeight(22)
-    gui._batch_concurrent_spin.setStyleSheet(
-        "QSpinBox { background: #141820; color: #F1F5F9; border: 1px solid #2E384C; "
-        "border-radius: 4px; padding: 1px 3px; font-size: 10px; }"
-    )
-    gui._batch_concurrent_spin.setToolTip("Số video xử lý đồng thời")
-    b_sub_row.addWidget(gui._batch_concurrent_spin)
-
-    gui._batch_summary_label = QLabel("")
-    gui._batch_summary_label.setStyleSheet("color: #94A3B8; font-size: 10px; font-weight: 600; border: none; background: transparent;")
-    gui._batch_summary_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-    b_sub_row.addWidget(gui._batch_summary_label, 1)
-    bb_layout.addLayout(b_sub_row)
-
-    layout.addWidget(batch_box)
+    if not hasattr(gui, "_selected_media_paths"):
+        gui._selected_media_paths = set()
+    if not hasattr(gui, "_seen_media_paths"):
+        gui._seen_media_paths = set()
+    if not hasattr(gui, "_video_voice_configs"):
+        gui._video_voice_configs = {}
+    if not hasattr(gui, "_video_ocr_rects"):
+        gui._video_ocr_rects = {}
+    if not hasattr(gui, "_video_queue_status"):
+        gui._video_queue_status = {}
 
     # ═══════════════════════════════════════════════════════════════════
-    # 4. Filter Row: Tất cả | Video | Ảnh | Âm thanh
+    # 2c. Khung Hàng Đợi (1 Luồng tuần tự) & Cài đặt chung / riêng
+    # ═══════════════════════════════════════════════════════════════════
+    queue_card = QFrame()
+    queue_card.setStyleSheet(
+        "QFrame { background: #11151F; border: 1px solid #232B3B; border-radius: 6px; }"
+    )
+    qc_layout = QVBoxLayout(queue_card)
+    qc_layout.setContentsMargins(6, 6, 6, 6)
+    qc_layout.setSpacing(6)
+
+    # Hàng 1: Checkbox Tất cả + Nút Đặt OCR chung
+    setup_row = QHBoxLayout()
+    setup_row.setSpacing(6)
+
+    gui._queue_select_all_cb = QCheckBox("Tất cả (0/0)")
+    gui._queue_select_all_cb.setCursor(Qt.PointingHandCursor)
+    gui._queue_select_all_cb.setStyleSheet(
+        "QCheckBox { color: #CBD5E1; font-size: 10px; font-weight: 700; } "
+        "QCheckBox::indicator { width: 13px; height: 13px; border-radius: 3px; border: 1px solid #475569; background: #0B0E14; } "
+        "QCheckBox::indicator:checked { background: #FF8A00; border-color: #FF8A00; }"
+    )
+    setup_row.addWidget(gui._queue_select_all_cb)
+    setup_row.addStretch(1)
+
+    btn_group_ocr = QPushButton("🎯 Đặt OCR chung")
+    btn_group_ocr.setFixedHeight(22)
+    btn_group_ocr.setCursor(Qt.PointingHandCursor)
+    btn_group_ocr.setToolTip("Cài đặt chung: Áp dụng vị trí khung OCR cho các video đang chọn")
+    btn_group_ocr.setStyleSheet(
+        "QPushButton { background: #132420; color: #34D399; border: 1px solid #059669; border-radius: 3px; font-size: 10px; font-weight: 700; padding: 1px 8px; } "
+        "QPushButton:hover { background: #059669; color: #FFFFFF; }"
+    )
+    setup_row.addWidget(btn_group_ocr)
+
+    btn_open_folder = QPushButton("📁 Thư mục video")
+    btn_open_folder.setFixedHeight(22)
+    btn_open_folder.setCursor(Qt.PointingHandCursor)
+    btn_open_folder.setToolTip("Mở thư mục lưu các video kết quả đã xuất")
+    btn_open_folder.setStyleSheet(
+        "QPushButton { background: #162032; color: #38BDF8; border: 1px solid #0284C7; border-radius: 3px; font-size: 10px; font-weight: 700; padding: 1px 8px; } "
+        "QPushButton:hover { background: #0284C7; color: #FFFFFF; }"
+    )
+    def _on_open_output_folder():
+        out_f = (
+            gui.final_output_folder_edit.text().strip()
+            if hasattr(gui, "final_output_folder_edit") and gui.final_output_folder_edit.text().strip()
+            else os.path.join(str(getattr(gui, "workspace_root", os.getcwd())), "output")
+        )
+        os.makedirs(out_f, exist_ok=True)
+        if hasattr(gui, "open_folder") and callable(gui.open_folder):
+            gui.open_folder(out_f)
+        else:
+            try:
+                os.startfile(out_f)
+            except Exception:
+                import subprocess
+                subprocess.Popen(["explorer", out_f])
+    btn_open_folder.clicked.connect(_on_open_output_folder)
+    setup_row.addWidget(btn_open_folder)
+    qc_layout.addLayout(setup_row)
+
+    # Hàng 2: Nút chạy hàng đợi (1 luồng tuần tự)
+    gui._queue_run_btn = QPushButton("▶ CHẠY HÀNG ĐỢI (0 video)")
+    gui._queue_run_btn.setFixedHeight(32)
+    gui._queue_run_btn.setCursor(Qt.PointingHandCursor)
+    gui._queue_run_btn.setStyleSheet(
+        "QPushButton { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #FF8A00, stop:1 #FF5500); "
+        "color: #FFFFFF; font-weight: 800; font-size: 11px; border-radius: 5px; border: none; } "
+        "QPushButton:hover { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #FFA033, stop:1 #FF6E1A); } "
+        "QPushButton:disabled { background: #262E3D; color: #64748B; }"
+    )
+    qc_layout.addWidget(gui._queue_run_btn)
+    layout.addWidget(queue_card)
+
+    def _set_voice_for_paths(paths, voice_name="", label=""):
+        if not hasattr(gui, "_video_voice_configs"):
+            gui._video_voice_configs = {}
+        for p in paths:
+            norm_p = os.path.normpath(p) if p else ""
+            if norm_p:
+                gui._video_voice_configs[norm_p] = {
+                    "voice_mode": "single",
+                    "voice_name": voice_name,
+                    "label": label or "1 Giọng",
+                }
+        _render_media_pool()
+
+    def _set_ocr_for_paths(paths, rect_tuple):
+        if not hasattr(gui, "_video_ocr_rects"):
+            gui._video_ocr_rects = {}
+        for p in paths:
+            norm_p = os.path.normpath(p) if p else ""
+            if norm_p:
+                gui._video_ocr_rects[norm_p] = rect_tuple
+        cur_p = getattr(gui, "_current_video_path", "")
+        if cur_p and os.path.normpath(cur_p) in [os.path.normpath(x) for x in paths if x]:
+            overlay = getattr(gui, "ocr_region_overlay", None)
+            if overlay and hasattr(overlay, "set_norm_rect"):
+                overlay.set_norm_rect(*rect_tuple)
+            if hasattr(gui, "_sync_ocr_overlay"):
+                gui._sync_ocr_overlay()
+            ps = getattr(gui, "current_project_state", None)
+            if ps and hasattr(ps, "settings"):
+                ps.settings["ocr_subtitle_rect"] = f"{rect_tuple[0]:.4f},{rect_tuple[1]:.4f},{rect_tuple[2]:.4f},{rect_tuple[3]:.4f}"
+        _render_media_pool()
+
+    def _on_group_ocr_click():
+        sel = list(getattr(gui, "_selected_media_paths", set()))
+        if not sel:
+            QMessageBox.information(gui, "Cài đặt chung", "Vui lòng tích chọn ít nhất 1 video để cài đặt.")
+            return
+        m = QMenu(btn_group_ocr)
+        m.setStyleSheet(
+            "QMenu { background: #161B24; color: #E5E7EB; border: 1px solid #2E384D; padding: 4px; font-size: 11px; } "
+            "QMenu::item:selected { background: #FF8A00; color: #fff; }"
+        )
+        act_cur = m.addAction("💾 Áp dụng khung OCR hiện tại trên màn hình")
+        m.addSeparator()
+        act_b = m.addAction("👇 OCR Dưới đáy (65%)")
+        act_m = m.addAction("👉 OCR Ở giữa màn hình (40%)")
+        act_t = m.addAction("👆 OCR Trên đỉnh màn hình (10%)")
+        pos = btn_group_ocr.mapToGlobal(QPoint(0, btn_group_ocr.height()))
+        chosen = m.exec(pos)
+        if chosen == act_cur:
+            overlay = getattr(gui, "ocr_region_overlay", None)
+            if overlay and hasattr(overlay, "get_norm_rect"):
+                _set_ocr_for_paths(sel, overlay.get_norm_rect())
+        elif chosen == act_b:
+            _set_ocr_for_paths(sel, (0.05, 0.65, 0.90, 0.16))
+        elif chosen == act_m:
+            _set_ocr_for_paths(sel, (0.05, 0.40, 0.90, 0.16))
+        elif chosen == act_t:
+            _set_ocr_for_paths(sel, (0.05, 0.10, 0.90, 0.16))
+
+    btn_group_ocr.clicked.connect(_on_group_ocr_click)
+
+    def _on_select_all_toggled(checked):
+        if not hasattr(gui, "_selected_media_paths"):
+            gui._selected_media_paths = set()
+        pool = getattr(gui, "project_media_pool", [])
+        if checked:
+            for it in pool:
+                p = it.get("path")
+                if p:
+                    gui._selected_media_paths.add(os.path.normpath(p))
+        else:
+            gui._selected_media_paths.clear()
+        _update_queue_ui_state()
+        _render_media_pool()
+
+    gui._queue_select_all_cb.toggled.connect(_on_select_all_toggled)
+
+    def _on_queue_run_click():
+        if getattr(gui.queue_controller, "is_running", False):
+            gui.queue_controller.stop_queue()
+        else:
+            pool = getattr(gui, "project_media_pool", [])
+            selected = [it for it in pool if os.path.normpath(it.get("path", "")) in gui._selected_media_paths]
+            if not selected:
+                QMessageBox.warning(gui, "Hàng đợi", "Vui lòng tích chọn ít nhất 1 video để chạy hàng đợi.")
+                return
+
+            # 1. Xác định khung che chữ Trung từ vùng OCR / Blur Region đã vẽ
+            blur_rect = None
+            cur_p = getattr(gui, "_current_video_path", "")
+            if cur_p:
+                blur_rect = getattr(gui, "_video_ocr_rects", {}).get(os.path.normpath(cur_p))
+            if not blur_rect and hasattr(gui, "video_view") and hasattr(gui.video_view, "get_blur_region_normalized"):
+                try:
+                    norm_blur = gui.video_view.get_blur_region_normalized()
+                    if isinstance(norm_blur, dict):
+                        blur_rect = (
+                            float(norm_blur.get("x", 0.0)),
+                            float(norm_blur.get("y", 0.0)),
+                            float(norm_blur.get("width", 0.0)),
+                            float(norm_blur.get("height", 0.0)),
+                        )
+                except Exception:
+                    blur_rect = None
+
+            if not blur_rect:
+                rect_env = os.getenv("OCR_SUBTITLE_RECT", "").strip()
+                if rect_env:
+                    try:
+                        parts = [float(p) for p in rect_env.split(",")]
+                        if len(parts) == 4 and parts[2] > 0 and parts[3] > 0:
+                            blur_rect = (parts[0], parts[1], parts[2], parts[3])
+                    except Exception:
+                        blur_rect = None
+
+            # 2. Mở bảng Cài đặt lồng tiếng (1 giọng) & Tạo video tự động (đầy đủ các giọng)
+            from ui.dialogs.single_voice_setup_dialog import SingleVoiceSetupDialog
+            from PySide6.QtWidgets import QDialog
+            selected_paths = [it.get("path") for it in selected if it.get("path")]
+            init_orig = int(gui.audio_a1_volume_slider.value()) if hasattr(gui, "audio_a1_volume_slider") else 50
+            init_tts = int(gui.audio_a2_volume_slider.value()) if hasattr(gui, "audio_a2_volume_slider") else 100
+            last_voice_id = getattr(gui, "_last_single_voice_id", "adam1")
+
+            dialog = SingleVoiceSetupDialog(
+                gui,
+                video_path=selected_paths[0] if selected_paths else "",
+                video_paths=selected_paths,
+                initial_orig_volume=init_orig,
+                initial_tts_volume=init_tts,
+                blur_rect=blur_rect,
+                workspace_root=str(getattr(gui, "workspace_root", os.getcwd())),
+                initial_voice_id=last_voice_id,
+            )
+            if dialog.exec() != QDialog.Accepted:
+                return
+
+            selected_voice = dialog.get_selected_voice()
+            audio_mix = dialog.get_audio_mix_settings()
+            enable_blur = dialog.is_blur_mask_enabled()
+            burn_subs = dialog.is_burn_subtitles_enabled()
+            sub_cfg = dialog.get_subtitle_config()
+            brand_logo = dialog.get_brand_logo_settings()
+            watermark = dialog.get_watermark_settings()
+            is_individual = (selected_voice.get("id") == "keep_individual")
+            if not is_individual:
+                gui._last_single_voice_id = selected_voice.get("id", "adam1")
+
+            # 3. Kiểm tra bản quyền VIP nếu chọn giọng VieNeu
+            v_id = selected_voice.get("id", "")
+            if not is_individual and ("vieneu" in selected_voice.get("provider", "") or "vieneu" in v_id):
+                from app.services.license_service import LicenseService
+                lic = LicenseService(str(getattr(gui, "workspace_root", os.getcwd())))
+                is_valid, msg = lic.is_license_valid()
+                if not is_valid:
+                    QMessageBox.warning(
+                        gui,
+                        "Yêu cầu kích hoạt bản quyền VIP",
+                        f"Giọng {selected_voice.get('name')} yêu cầu kích hoạt bản quyền VIP TankVideo!\n\n"
+                        f"Trạng thái: {msg}\n\n"
+                        "Vui lòng nhấn vào nút 'Bản quyền' trên thanh tiêu đề để đăng nhập và kích hoạt.",
+                    )
+                    getattr(gui, "open_license_dialog", lambda: None)()
+                    return
+
+            # 4. Cập nhật nhãn giọng đọc trên thẻ video: CHỈ CẬP NHẬT KHI KHÔNG CHỌN GIỮ GIỌNG RIÊNG
+            if not is_individual:
+                v_label = selected_voice.get("name", "1 Giọng").split("(")[0].replace("👩 ", "").replace("👨 ", "").replace("👑 ", "").strip()
+                for it in selected:
+                    p = it.get("path")
+                    if p:
+                        norm_p = os.path.normpath(p)
+                        gui._video_voice_configs[norm_p] = {
+                            "voice_mode": "single",
+                            "voice_name": selected_voice.get("id", ""),
+                            "label": v_label,
+                        }
+                _render_media_pool()
+
+            # 5. Khởi động hàng đợi 1 giọng nhanh
+            setup_config = {
+                "selected_voice": selected_voice,
+                "audio_mix": audio_mix,
+                "enable_blur": enable_blur,
+                "default_blur_rect": blur_rect,
+                "burn_subs": burn_subs,
+                "sub_cfg": sub_cfg,
+                "brand_logo": brand_logo,
+                "watermark": watermark,
+                "use_individual_voices": is_individual,
+            }
+            gui.queue_controller.start_single_voice_queue(selected, setup_config)
+
+        _update_queue_ui_state()
+
+    gui._queue_run_btn.clicked.connect(_on_queue_run_click)
+
+    def _update_queue_ui_state():
+        pool = getattr(gui, "project_media_pool", [])
+        total_count = len(pool)
+        selected_count = len(getattr(gui, "_selected_media_paths", set()))
+        if hasattr(gui, "_queue_select_all_cb"):
+            gui._queue_select_all_cb.blockSignals(True)
+            gui._queue_select_all_cb.setText(f"Tất cả ({selected_count}/{total_count})")
+            gui._queue_select_all_cb.setChecked(selected_count == total_count and total_count > 0)
+            gui._queue_select_all_cb.blockSignals(False)
+
+        if hasattr(gui, "_queue_run_btn"):
+            if getattr(gui.queue_controller, "is_running", False):
+                curr = getattr(gui.queue_controller, "current_index", 0) + 1
+                q_len = len(getattr(gui.queue_controller, "queue", []))
+                # Lấy phần trăm tiến độ của video hiện tại
+                pct = 0
+                if hasattr(gui.queue_controller, "queue") and 0 <= gui.queue_controller.current_index < len(gui.queue_controller.queue):
+                    cur_item = gui.queue_controller.queue[gui.queue_controller.current_index]
+                    cur_p = os.path.normpath(cur_item.get("path", ""))
+                    pct = getattr(gui, "_video_queue_percent", {}).get(cur_p, 0)
+                pct_str = f" - {pct}%" if pct > 0 else ""
+                gui._queue_run_btn.setText(f"⏹ DỪNG HÀNG ĐỢI ({curr}/{q_len}{pct_str})")
+                gui._queue_run_btn.setStyleSheet(
+                    "QPushButton { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #EF4444, stop:1 #B91C1C); "
+                    "color: #FFFFFF; font-weight: 800; font-size: 11px; border-radius: 5px; border: none; } "
+                    "QPushButton:hover { background: #DC2626; }"
+                )
+                gui._queue_run_btn.setEnabled(True)
+            else:
+                gui._queue_run_btn.setText(f"▶ CHẠY HÀNG ĐỢI ({selected_count} video)")
+                gui._queue_run_btn.setStyleSheet(
+                    "QPushButton { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #FF8A00, stop:1 #FF5500); "
+                    "color: #FFFFFF; font-weight: 800; font-size: 11px; border-radius: 5px; border: none; } "
+                    "QPushButton:hover { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #FFA033, stop:1 #FF6E1A); } "
+                    "QPushButton:disabled { background: #262E3D; color: #64748B; }"
+                )
+                gui._queue_run_btn.setEnabled(selected_count > 0)
+
+    try:
+        gui.queue_controller.status_changed.connect(lambda _p, _s: _render_media_pool())
+        gui.queue_controller.queue_progress.connect(lambda _c, _t: _update_queue_ui_state())
+        gui.queue_controller.queue_finished.connect(lambda _ok, _m: _update_queue_ui_state())
+    except Exception:
+        pass
+
+    # ═══════════════════════════════════════════════════════════════════
+    # 3. Filter Row: Tất cả | Video | Ảnh | Âm thanh
     # ═══════════════════════════════════════════════════════════════════
     filter_row = QHBoxLayout()
     filter_row.setSpacing(4)
@@ -449,7 +677,7 @@ def _build_resource_media_card(gui):
     layout.addLayout(filter_row)
 
     # ═══════════════════════════════════════════════════════════════════
-    # 5. Danh sách video dạng List dọc (QScrollArea co giãn 100%, không bị cắt)
+    # 4. Danh sách video dạng List dọc (QScrollArea co giãn 100%, không bị cắt)
     # ═══════════════════════════════════════════════════════════════════
     scroll_pool = QScrollArea()
     scroll_pool.setWidgetResizable(True)
@@ -487,162 +715,147 @@ def _build_resource_media_card(gui):
     pool_layout.insertWidget(0, drop_zone)
 
     # ═══════════════════════════════════════════════════════════════════
-    # 6. Render Media Pool & Batch Items
+    # 5. Render Media Pool Items
     # ═══════════════════════════════════════════════════════════════════
-    gui._batch_card_widgets = {}
+    gui._media_card_widgets = {}
 
-    def _render_media_pool():
-        c = _ensure_batch_controller()
-        thumb_dir = os.path.join(workspace_root(), "temp", "launcher_thumbs")
-        os.makedirs(thumb_dir, exist_ok=True)
-
-        # 1. Đồng bộ video đang mở trên GUI vào Batch/Pool nếu chưa có
-        cur_v = getattr(gui, "_current_video_path", "")
-        if cur_v and os.path.exists(cur_v):
-            if c and not any(os.path.normpath(w.video_path) == os.path.normpath(cur_v) for w in c.workspaces):
-                c.add_workspace(cur_v, thumb_dir)
-            if not hasattr(gui, "project_media_pool"):
-                gui.project_media_pool = []
-            if not any(os.path.normpath(it.get("path", "")) == os.path.normpath(cur_v) for it in gui.project_media_pool):
-                try:
-                    dur_s, th = probe_video_duration_and_thumb(cur_v, thumb_dir)
-                except Exception:
-                    dur_s, th = 0.0, ""
-                total_s = int(dur_s)
-                gui.project_media_pool.append({
-                    "id": str(int(time.time() * 1000)),
-                    "path": cur_v,
-                    "name": os.path.basename(cur_v),
-                    "duration": dur_s,
-                    "duration_str": f"{total_s // 60:02d}:{total_s % 60:02d}",
-                    "thumb_path": th,
-                    "type": "video",
-                })
-
-        # 2. Đồng bộ các tệp từ gui.project_media_pool sang batch controller
-        if c:
-            for item in getattr(gui, "project_media_pool", []):
-                p = item.get("path", "")
-                if p and os.path.exists(p) and not any(os.path.normpath(w.video_path) == os.path.normpath(p) for w in c.workspaces):
-                    c.add_workspace(p, thumb_dir)
-
-        # 3. Lấy danh sách video đang có trên timeline Track V1
-        timeline_video_paths = set()
-        try:
-            tl = getattr(gui, "timeline", None)
-            if tl and hasattr(tl, "_timeline") and tl._timeline:
-                for track in tl._timeline.tracks:
-                    if str(getattr(track, "name", "")).startswith("V1") or getattr(track, "type", None) == LayerType.VIDEO:
-                        for layer in getattr(track, "layers", []):
-                            src = getattr(layer, "source", "")
-                            if src:
-                                timeline_video_paths.add(os.path.normpath(src))
-        except Exception:
-            pass
-
-        # 4. Xóa cards cũ khỏi layout
-        for wid, widget in list(gui._batch_card_widgets.items()):
-            pool_layout.removeWidget(widget)
-            widget.deleteLater()
-        gui._batch_card_widgets.clear()
-
-        # Xóa các card AI thừa (nếu có)
-        for i in range(pool_layout.count() - 1, -1, -1):
-            item = pool_layout.itemAt(i)
-            w = item.widget() if item else None
-            if w and w != drop_zone and w not in gui._batch_card_widgets.values():
-                pool_layout.removeWidget(w)
-                w.deleteLater()
-
-        # 5. Lấy danh sách items để render
-        workspaces = c.workspaces if c else []
-        fk = current_filter[0]
-
-        visible_count = 0
-        for ws in workspaces:
-            # Filter
-            if fk not in ("all", "video"):
-                continue
-
-            card_w = _build_video_card(ws, timeline_video_paths)
-            gui._batch_card_widgets[ws.id] = card_w
-            # Chèn trước stretch (vị trí pool_layout.count() - 1)
-            pool_layout.insertWidget(pool_layout.count() - 1, card_w)
-            visible_count += 1
-
-        # 6. Thẻ "✨ Tạo bằng AI" ở cuối
-        ai_card = _build_ai_generate_card()
-        pool_layout.insertWidget(pool_layout.count() - 1, ai_card)
-
-        # 7. Cập nhật Badge đếm và hiển thị Drop Zone
-        total_items = len(workspaces)
-        gui._batch_count_badge.setText(f"{total_items} tệp")
-        drop_zone.setVisible(total_items == 0)
-        _update_batch_summary()
-
-    def _apply_video_ocr(target_ws, rect_tuple):
-        target_ws.ocr_rect = rect_tuple
-        target_ws.blur_rect = rect_tuple
-        norm_p = os.path.normpath(target_ws.video_path) if target_ws.video_path else ""
-        if not hasattr(gui, "_video_ocr_rects"):
-            gui._video_ocr_rects = {}
-        if norm_p:
-            gui._video_ocr_rects[norm_p] = rect_tuple
-        cur_p = getattr(gui, "_current_video_path", "")
-        if cur_p and norm_p and os.path.normpath(cur_p) == norm_p:
-            overlay = getattr(gui, "ocr_region_overlay", None)
-            if overlay and hasattr(overlay, "set_norm_rect"):
-                overlay.set_norm_rect(*rect_tuple)
-            if hasattr(gui, "_sync_ocr_overlay"):
-                gui._sync_ocr_overlay()
-        ps = getattr(gui, "current_project_state", None)
-        if ps and hasattr(ps, "settings") and cur_p and norm_p and os.path.normpath(cur_p) == norm_p:
-            r_str = f"{rect_tuple[0]:.4f},{rect_tuple[1]:.4f},{rect_tuple[2]:.4f},{rect_tuple[3]:.4f}"
-            ps.settings["ocr_subtitle_rect"] = r_str
-            project_service = getattr(gui, "project_service", None)
-            if project_service and hasattr(project_service, "save_project"):
-                try:
-                    project_service.save_project(ps)
-                except Exception:
-                    pass
+    def _remove_media_item(item_path):
+        if hasattr(gui, "project_media_pool"):
+            gui.project_media_pool = [it for it in gui.project_media_pool if os.path.normpath(it.get("path", "")) != os.path.normpath(item_path)]
+        if hasattr(gui, "_selected_media_paths"):
+            gui._selected_media_paths.discard(os.path.normpath(item_path))
         _render_media_pool()
 
-    def _build_video_card(ws, timeline_video_paths):
-        item_path = ws.video_path
+    def _open_file_folder(file_path, select_file=True):
+        import subprocess as sp
+        abs_p = os.path.abspath(file_path) if file_path else ""
+        if abs_p and os.path.isfile(abs_p) and select_file:
+            if os.name == "nt":
+                sp.Popen(f'explorer /select,"{os.path.normpath(abs_p)}"')
+                return
+        folder = abs_p if os.path.isdir(abs_p) else os.path.dirname(abs_p)
+        if folder and os.path.isdir(folder):
+            if os.name == "nt":
+                os.startfile(folder)
+            else:
+                sp.Popen(["xdg-open", folder])
+
+    def _sync_subtitles_for_video(norm_item, item_path):
+        """Đồng bộ phụ đề tiếng Việt đã dịch của video này vào Cột Phụ đề và Timeline."""
+        cues = getattr(gui, "_video_translated_cues", {}).get(norm_item)
+        if not cues:
+            out_folder = (
+                gui.final_output_folder_edit.text().strip()
+                if hasattr(gui, "final_output_folder_edit") and gui.final_output_folder_edit.text().strip()
+                else os.path.join(str(getattr(gui, "workspace_root", os.getcwd())), "output")
+            )
+            base_name = os.path.splitext(os.path.basename(item_path))[0]
+            candidate_srt = os.path.join(out_folder, f"{base_name}_final_vi.srt")
+            if not os.path.isfile(candidate_srt):
+                candidate_srt = os.path.join(out_folder, f"{base_name}.srt")
+            if os.path.isfile(candidate_srt):
+                try:
+                    from app.translation.srt_utils import parse_srt
+                    with open(candidate_srt, "r", encoding="utf-8") as sf:
+                        cues = parse_srt(sf.read())
+                    if cues:
+                        if not hasattr(gui, "_video_translated_cues"):
+                            gui._video_translated_cues = {}
+                        gui._video_translated_cues[norm_item] = cues
+                except Exception:
+                    cues = None
+
+        if cues and isinstance(cues, list):
+            trans_segs = []
+            base_segs = []
+            for c in cues:
+                if not isinstance(c, dict):
+                    continue
+                s_s = float(c.get("start", 0.0))
+                e_s = float(c.get("end", 0.0))
+                raw_txt = str(c.get("text", "")).strip()
+                t_txt = str(c.get("translated_text", "") or c.get("translated", "")).strip()
+                o_txt = str(c.get("source_text", "") or c.get("original", "")).strip()
+
+                has_cjk_raw = bool(re.search(r"[\u4e00-\u9fff\u3400-\u4dbf]", raw_txt)) if raw_txt else False
+                if not t_txt and raw_txt and not has_cjk_raw:
+                    t_txt = raw_txt
+                if not o_txt and raw_txt and has_cjk_raw:
+                    o_txt = raw_txt
+
+                trans_segs.append({
+                    "start": s_s,
+                    "end": e_s,
+                    "text": t_txt or raw_txt,
+                    "translated": t_txt,
+                    "translated_text": t_txt,
+                    "original": o_txt,
+                    "source_text": o_txt,
+                })
+                base_segs.append({
+                    "start": s_s,
+                    "end": e_s,
+                    "text": o_txt,
+                    "original": o_txt,
+                    "source_text": o_txt,
+                })
+            gui.current_translated_segments = trans_segs
+            if base_segs:
+                gui.current_segments = base_segs
+            if hasattr(gui, "timeline") and hasattr(gui.timeline, "set_segments"):
+                gui.timeline.set_segments(trans_segs)
+            if hasattr(gui, "subtitle_list_view") and hasattr(gui.subtitle_list_view, "refresh_segments"):
+                gui.subtitle_list_view.refresh_segments()
+
+    def _build_media_item_card(item_data, timeline_video_paths):
+        item_path = item_data.get("path", "")
+        norm_item = os.path.normpath(item_path) if item_path else ""
+        item_name = item_data.get("name", "") or os.path.basename(item_path)
         cur_active = getattr(gui, "_current_video_path", "")
-        is_active = bool(cur_active and item_path and os.path.normpath(cur_active) == os.path.normpath(item_path))
-        is_on_timeline = os.path.normpath(item_path) in timeline_video_paths if item_path else False
+        is_active = bool(cur_active and item_path and os.path.normpath(cur_active) == norm_item)
+        is_on_timeline = norm_item in timeline_video_paths if norm_item else False
 
         card_w = QFrame()
-        card_w.setObjectName(f"batch_card_{ws.id}")
-        card_w.setFixedHeight(72)
+        card_w.setFixedHeight(66)
         card_w.setCursor(Qt.PointingHandCursor)
 
-        # Viền: màu cam nổi bật nếu active trên Workspace, nếu không viền theo trạng thái batch
-        border_colors = {
-            "pending": "#283446",
-            "queued": "#3B82F6",
-            "running": "#FF8A00",
-            "done": "#22C55E",
-            "error": "#EF4444",
-            "cancelled": "#6B7280",
-        }
         if is_active:
             border = "#FF8A00"
             bg = "qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #1F2838, stop:1 #141A24)"
         else:
-            border = border_colors.get(ws.status, "#283446")
+            border = "#283446"
             bg = "qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #141820, stop:1 #0F1318)"
 
         card_w.setStyleSheet(
-            f"QFrame#batch_card_{ws.id} {{ background: {bg}; border: {'2px solid #FF8A00' if is_active else f'1.5px solid {border}'}; border-radius: 7px; }} "
-            f"QFrame#batch_card_{ws.id}:hover {{ border-color: #FFA033; }}"
+            f"QFrame {{ background: {bg}; border: {'2px solid #FF8A00' if is_active else f'1px solid {border}'}; border-radius: 7px; }} "
+            f"QFrame:hover {{ border-color: #FFA033; }}"
         )
-        card_w.setToolTip(f"Tệp: {ws.video_name}\nĐường dẫn: {item_path}\nNhấp chuột để mở chỉnh sửa; nhấp đúp để nối vào timeline.")
+        card_w.setToolTip(f"Tệp: {item_name}\nĐường dẫn: {item_path}\nNhấp chuột để mở chỉnh sửa; nhấp đúp để nối vào timeline.")
 
         h_layout = QHBoxLayout(card_w)
         h_layout.setContentsMargins(6, 6, 6, 6)
-        h_layout.setSpacing(7)
+        h_layout.setSpacing(6)
+
+        # Checkbox tích chọn video vào hàng đợi
+        cb_select = QCheckBox()
+        cb_select.setCursor(Qt.PointingHandCursor)
+        is_selected = norm_item in getattr(gui, "_selected_media_paths", set())
+        cb_select.setChecked(is_selected)
+        cb_select.setStyleSheet(
+            "QCheckBox::indicator { width: 14px; height: 14px; border-radius: 3px; border: 1px solid #475569; background: #0B0E14; } "
+            "QCheckBox::indicator:checked { background: #FF8A00; border-color: #FF8A00; }"
+        )
+        def _on_item_check_toggled(checked):
+            if not hasattr(gui, "_selected_media_paths"):
+                gui._selected_media_paths = set()
+            if checked:
+                gui._selected_media_paths.add(norm_item)
+            else:
+                gui._selected_media_paths.discard(norm_item)
+            _update_queue_ui_state()
+
+        cb_select.toggled.connect(_on_item_check_toggled)
+        h_layout.addWidget(cb_select, 0, Qt.AlignVCenter)
 
         # Thumbnail với huy hiệu thời lượng
         thumb_container = QFrame()
@@ -655,8 +868,9 @@ def _build_resource_media_card(gui):
         img_label.setAlignment(Qt.AlignCenter)
         img_label.setScaledContents(True)
         img_label.setStyleSheet("background: transparent; border-radius: 4px;")
-        if ws.thumb_path and os.path.exists(ws.thumb_path):
-            pm = QPixmap(ws.thumb_path)
+        thumb_p = item_data.get("thumb_path", "")
+        if thumb_p and os.path.exists(thumb_p):
+            pm = QPixmap(thumb_p)
             if not pm.isNull():
                 img_label.setPixmap(pm)
             else:
@@ -667,9 +881,9 @@ def _build_resource_media_card(gui):
             img_label.setStyleSheet("font-size: 18px; color: #FFA033; background: transparent;")
         t_layout.addWidget(img_label, 0, 0)
 
-        if ws.duration_s > 0:
-            m, s = divmod(int(ws.duration_s), 60)
-            dur_badge = QLabel(f"{m:02d}:{s:02d}")
+        dur_str = item_data.get("duration_str", "")
+        if dur_str:
+            dur_badge = QLabel(dur_str)
             dur_badge.setStyleSheet(
                 "background: rgba(0, 0, 0, 0.7); color: #E2E8F0; font-size: 8px; font-weight: 700; "
                 "border-radius: 2px; padding: 1px 3px; border: none;"
@@ -681,17 +895,63 @@ def _build_resource_media_card(gui):
         # Cột thông tin ở giữa
         info_layout = QVBoxLayout()
         info_layout.setContentsMargins(0, 0, 0, 0)
-        info_layout.setSpacing(2)
+        info_layout.setSpacing(3)
 
-        # Hàng 1: Tên video + nhãn đang sửa
+        # Hàng 1: Tên video + nhãn trạng thái hàng đợi / đang sửa / timeline
         name_row = QHBoxLayout()
         name_row.setSpacing(4)
-        disp_name = ws.video_name if len(ws.video_name) <= 18 else ws.video_name[:16] + "…"
+        disp_name = item_name if len(item_name) <= 18 else item_name[:16] + "…"
         name_lbl = QLabel(disp_name)
         name_lbl.setStyleSheet("color: #FFFFFF; font-size: 11px; font-weight: 700; border: none;")
         name_row.addWidget(name_lbl)
 
-        if is_active:
+        q_stat = getattr(gui, "_video_queue_status", {}).get(norm_item, "idle")
+        if q_stat == "running":
+            pct = getattr(gui, "_video_queue_percent", {}).get(norm_item, 0)
+            pct_str = f" ({pct}%)" if pct > 0 else ""
+            q_badge = QLabel(f"⏳ Đang tạo{pct_str}...")
+            q_badge.setStyleSheet(
+                "background: #FF8A00; color: #FFFFFF; font-size: 8px; font-weight: 800; "
+                "border-radius: 2px; padding: 0 4px; border: none;"
+            )
+            name_row.addWidget(q_badge)
+        elif q_stat == "waiting":
+            q_badge = QLabel("⏱ Hàng đợi")
+            q_badge.setStyleSheet(
+                "background: #0284C7; color: #FFFFFF; font-size: 8px; font-weight: 700; "
+                "border-radius: 2px; padding: 0 4px; border: none;"
+            )
+            name_row.addWidget(q_badge)
+        elif q_stat == "done":
+            dur = getattr(gui, "_video_durations", {}).get(norm_item)
+            dur_text = ""
+            dur_tip = "Đã xuất video hoàn tất"
+            if dur and dur > 0:
+                s_int = int(round(dur))
+                if s_int < 60:
+                    dur_text = f" ({s_int}s)"
+                    dur_tip = f"Hoàn thành trong {s_int} giây ({dur:.1f}s)"
+                else:
+                    m = s_int // 60
+                    rem = s_int % 60
+                    dur_text = f" ({m}m{rem:02d}s)"
+                    dur_tip = f"Hoàn thành trong {m} phút {rem} giây ({dur:.1f}s)"
+
+            q_badge = QLabel(f"✓ Hoàn thành{dur_text}")
+            q_badge.setStyleSheet(
+                "background: #059669; color: #FFFFFF; font-size: 8px; font-weight: 700; "
+                "border-radius: 2px; padding: 0 4px; border: none;"
+            )
+            q_badge.setToolTip(dur_tip)
+            name_row.addWidget(q_badge)
+        elif q_stat == "error":
+            q_badge = QLabel("✕ Lỗi")
+            q_badge.setStyleSheet(
+                "background: #DC2626; color: #FFFFFF; font-size: 8px; font-weight: 700; "
+                "border-radius: 2px; padding: 0 4px; border: none;"
+            )
+            name_row.addWidget(q_badge)
+        elif is_active:
             active_badge = QLabel("Đang sửa")
             active_badge.setStyleSheet(
                 "background: #FF8A00; color: #fff; font-size: 8px; font-weight: 800; "
@@ -709,67 +969,51 @@ def _build_resource_media_card(gui):
         name_row.addStretch(1)
         info_layout.addLayout(name_row)
 
-        # Hàng 2: Progress bar mỏng 5px
-        pbar = QProgressBar()
-        pbar.setObjectName(f"pbar_{ws.id}")
-        pbar.setRange(0, 100)
-        pbar.setValue(int(ws.progress * 100))
-        pbar.setFixedHeight(5)
-        pbar.setTextVisible(False)
-        pbar.setStyleSheet(
-            "QProgressBar { background: #1E293B; border-radius: 2px; border: none; }"
-            "QProgressBar::chunk { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #FF6B00, stop:1 #FF9500); border-radius: 2px; }"
-        )
-        info_layout.addWidget(pbar)
-
-        # Hàng 3: Trạng thái & bước hiện tại
+        # Hàng 2: Huy hiệu Cài đặt riêng (Giọng đọc & Khung OCR)
         status_row = QHBoxLayout()
         status_row.setSpacing(4)
 
-        status_display = {
-            "pending": ("⏸️", "Sẵn sàng", "#94A3B8"),
-            "queued": ("🔵", "Hàng đợi", "#60A5FA"),
-            "running": ("🔄", "Đang chạy", "#FF8A00"),
-            "done": ("✅", "Hoàn tất", "#4ADE80"),
-            "error": ("❌", "Lỗi", "#F87171"),
-            "cancelled": ("⛔", "Đã hủy", "#9CA3AF"),
-        }
-        s_icon, s_txt, s_col = status_display.get(ws.status, ("⏸️", ws.status, "#94A3B8"))
+        # 1. Huy hiệu Giọng đọc (Luôn là 1 Giọng)
+        v_cfg = getattr(gui, "_video_voice_configs", {}).get(norm_item, {})
+        v_label = v_cfg.get("label", "") or getattr(gui, "_queue_selected_voice_label", "Ngọc Huyền")
+        v_text = f"👤 {v_label}"
+        v_col = "#38BDF8"
+        v_tip = f"Giọng đọc: {v_label}\nNhấp để đổi giọng riêng cho video này"
 
-        step_names = {
-            "prepare": "Chuẩn bị",
-            "extract_audio": "Trích xuất",
-            "extraction": "Trích xuất",
-            "separation": "Tách giọng",
-            "diarization": "Nhận diện",
-            "transcription": "Chép lời",
-            "translation": "Dịch thuật",
-            "voiceover": "Lồng tiếng",
-            "preview": "Xem trước",
-            "done": "Hoàn tất",
-        }
-        step_str = step_names.get(ws.current_step, ws.current_step or "")
-        status_text = f"{s_icon} {step_str}" if (ws.status == "running" and step_str) else f"{s_icon} {s_txt}"
+        voice_badge = QLabel(v_text)
+        voice_badge.setCursor(Qt.PointingHandCursor)
+        voice_badge.setStyleSheet(
+            f"background: #141A24; color: {v_col}; font-size: 8px; font-weight: 700; "
+            f"border: 1px solid {v_col}66; border-radius: 2px; padding: 0 4px;"
+        )
+        voice_badge.setToolTip(v_tip)
 
-        status_lbl = QLabel(status_text)
-        status_lbl.setObjectName(f"status_{ws.id}")
-        status_lbl.setStyleSheet(f"color: {s_col}; font-size: 9px; font-weight: 600; border: none;")
-        status_row.addWidget(status_lbl)
+        def _on_voice_badge_click(ev):
+            from ui.dialogs.single_voice_setup_dialog import SingleVoiceSetupDialog
+            from PySide6.QtWidgets import QDialog
+            v_curr = getattr(gui, "_video_voice_configs", {}).get(norm_item, {}).get("voice_name", "")
+            init_orig = int(gui.audio_a1_volume_slider.value()) if hasattr(gui, "audio_a1_volume_slider") else 50
+            init_tts = int(gui.audio_a2_volume_slider.value()) if hasattr(gui, "audio_a2_volume_slider") else 100
+            dlg = SingleVoiceSetupDialog(
+                gui,
+                video_path=item_path,
+                blur_rect=getattr(gui, "_video_ocr_rects", {}).get(norm_item),
+                initial_orig_volume=init_orig,
+                initial_tts_volume=init_tts,
+                workspace_root=str(getattr(gui, "workspace_root", os.getcwd())),
+                initial_voice_id=v_curr or getattr(gui, "_last_single_voice_id", "adam1"),
+            )
+            if dlg.exec() == QDialog.Accepted:
+                v_sel = dlg.get_selected_voice()
+                v_short = v_sel.get("name", "").split("(")[0].replace("👩 ", "").replace("👨 ", "").replace("👑 ", "").strip()
+                _set_voice_for_paths([item_path], v_sel.get("id", ""), v_short)
+                gui._last_single_voice_id = v_sel.get("id", "adam1")
 
-        if ws.status == "error" and ws.error_message:
-            err_short = ws.error_message[:20] + "…" if len(ws.error_message) > 20 else ws.error_message
-            err_lbl = QLabel(err_short)
-            err_lbl.setStyleSheet("color: #F87171; font-size: 8px; border: none;")
-            err_lbl.setToolTip(ws.error_message)
-            status_row.addWidget(err_lbl)
+        voice_badge.mousePressEvent = _on_voice_badge_click
+        status_row.addWidget(voice_badge)
 
-        status_row.addStretch(1)
-
-        # Lấy OCR rect hiện tại của video này
-        norm_item = os.path.normpath(item_path) if item_path else ""
-        cur_ocr = getattr(ws, "ocr_rect", None)
-        if not cur_ocr and hasattr(gui, "_video_ocr_rects"):
-            cur_ocr = gui._video_ocr_rects.get(norm_item)
+        # 2. Huy hiệu OCR phụ đề (Setup riêng cho video này)
+        cur_ocr = getattr(gui, "_video_ocr_rects", {}).get(norm_item)
         if not cur_ocr and is_active:
             overlay = getattr(gui, "ocr_region_overlay", None)
             if overlay and hasattr(overlay, "get_norm_rect"):
@@ -777,16 +1021,16 @@ def _build_resource_media_card(gui):
 
         def _format_ocr_badge_info(r):
             if not r or len(r) != 4:
-                return ("OCR: Dưới", "#64748B", "Vùng nhận diện OCR: Mặc định dưới đáy\nNhấp để đổi vị trí nhanh")
+                return ("OCR: Đáy (65%)", "#64748B", "Vùng nhận diện OCR: Mặc định dưới đáy\nNhấp để đổi vị trí nhanh")
             ry = r[1]
             y_pct = int(ry * 100)
             h_pct = int(r[3] * 100)
             if ry < 0.28:
-                return ("OCR: Trên", "#06B6D4", f"Khung OCR: Trên đỉnh (y={y_pct}%, h={h_pct}%)\nNhấp để đổi nhanh")
+                return (f"OCR: Trên ({y_pct}%)", "#06B6D4", f"Khung OCR: Trên đỉnh (y={y_pct}%, h={h_pct}%)\nNhấp để đổi nhanh")
             elif ry <= 0.55:
-                return ("OCR: Giữa", "#A855F7", f"Khung OCR: Ở giữa (y={y_pct}%, h={h_pct}%)\nNhấp để đổi nhanh")
+                return (f"OCR: Giữa ({y_pct}%)", "#A855F7", f"Khung OCR: Ở giữa (y={y_pct}%, h={h_pct}%)\nNhấp để đổi nhanh")
             else:
-                return ("OCR: Dưới", "#64748B", f"Khung OCR: Dưới đáy (y={y_pct}%, h={h_pct}%)\nNhấp để đổi nhanh")
+                return (f"OCR: Đáy ({y_pct}%)", "#38BDF8", f"Khung OCR: Dưới đáy (y={y_pct}%, h={h_pct}%)\nNhấp để đổi nhanh")
 
         b_txt, b_col, b_tip = _format_ocr_badge_info(cur_ocr)
         ocr_badge = QLabel(b_txt)
@@ -797,53 +1041,93 @@ def _build_resource_media_card(gui):
         )
         ocr_badge.setToolTip(b_tip)
 
-        def _on_badge_click(ev):
+        def _on_ocr_badge_click(ev):
             b_menu = QMenu(ocr_badge)
             b_menu.setStyleSheet(
                 "QMenu { background: #161B24; color: #E5E7EB; border: 1px solid #2E384D; padding: 4px; font-size: 11px; } "
                 "QMenu::item:selected { background: #FF8A00; color: #fff; }"
             )
-            act_b = b_menu.addAction("👇 OCR Dưới đáy (Mặc định)")
-            act_m = b_menu.addAction("👉 OCR Ở giữa màn hình")
-            act_t = b_menu.addAction("👆 OCR Trên đỉnh màn hình")
+            act_save_curr = b_menu.addAction("💾 Ghi nhớ khung hiện tại cho video này")
+            b_menu.addSeparator()
+            act_b = b_menu.addAction("👇 OCR Dưới đáy (65%)")
+            act_m = b_menu.addAction("👉 OCR Ở giữa màn hình (40%)")
+            act_t = b_menu.addAction("👆 OCR Trên đỉnh màn hình (10%)")
             pos = ev.globalPosition().toPoint() if hasattr(ev, "globalPosition") else ev.globalPos()
             chosen = b_menu.exec(pos)
-            if chosen == act_b:
-                _apply_video_ocr(ws, (0.05, 0.65, 0.90, 0.16))
+            if chosen == act_save_curr:
+                overlay = getattr(gui, "ocr_region_overlay", None)
+                if overlay and hasattr(overlay, "get_norm_rect"):
+                    _set_ocr_for_paths([item_path], overlay.get_norm_rect())
+            elif chosen == act_b:
+                _set_ocr_for_paths([item_path], (0.05, 0.65, 0.90, 0.16))
             elif chosen == act_m:
-                _apply_video_ocr(ws, (0.05, 0.40, 0.90, 0.16))
+                _set_ocr_for_paths([item_path], (0.05, 0.40, 0.90, 0.16))
             elif chosen == act_t:
-                _apply_video_ocr(ws, (0.05, 0.10, 0.90, 0.16))
+                _set_ocr_for_paths([item_path], (0.05, 0.10, 0.90, 0.16))
 
-        ocr_badge.mousePressEvent = _on_badge_click
+        ocr_badge.mousePressEvent = _on_ocr_badge_click
         status_row.addWidget(ocr_badge)
+        status_row.addStretch(1)
 
         info_layout.addLayout(status_row)
         h_layout.addLayout(info_layout, 1)
 
-        # Cột nút thao tác bên phải: Nút xóa (✕)
+        # Cột nút thao tác bên phải: Nút xóa (✕) & Nút mở file video khi xong
+        right_actions_layout = QVBoxLayout()
+        right_actions_layout.setContentsMargins(0, 0, 0, 0)
+        right_actions_layout.setSpacing(4)
+        right_actions_layout.setAlignment(Qt.AlignTop | Qt.AlignRight)
+
         btn_del = QPushButton("✕")
-        btn_del.setFixedSize(20, 20)
+        btn_del.setFixedSize(18, 18)
         btn_del.setCursor(Qt.PointingHandCursor)
         btn_del.setStyleSheet(
-            "QPushButton { background: transparent; color: #64748B; font-size: 11px; font-weight: 700; border: none; border-radius: 10px; } "
+            "QPushButton { background: transparent; color: #64748B; font-size: 10px; font-weight: 700; border: none; border-radius: 9px; } "
             "QPushButton:hover { background: #7F1D1D; color: #F87171; }"
         )
         btn_del.setToolTip("Xóa video này khỏi danh sách")
-        btn_del.clicked.connect(lambda _c=False, wid=ws.id: _remove_workspace(wid))
-        h_layout.addWidget(btn_del, 0, Qt.AlignTop)
+        btn_del.clicked.connect(lambda _c=False, p=item_path: _remove_media_item(p))
+        right_actions_layout.addWidget(btn_del, 0, Qt.AlignRight)
+
+        # Kiểm tra đường dẫn video hoàn thành
+        out_target = getattr(gui, "_video_output_paths", {}).get(norm_item, "")
+        if not out_target or not os.path.isfile(out_target):
+            out_folder_test = (
+                gui.final_output_folder_edit.text().strip()
+                if hasattr(gui, "final_output_folder_edit") and gui.final_output_folder_edit.text().strip()
+                else os.path.join(str(getattr(gui, "workspace_root", os.getcwd())), "output")
+            )
+            cand_p = os.path.join(out_folder_test, f"{os.path.splitext(os.path.basename(item_path))[0]}_final_vi.mp4")
+            if os.path.isfile(cand_p):
+                out_target = cand_p
+
+        if q_stat == "done" or (out_target and os.path.isfile(out_target)):
+            btn_open_done = QPushButton("📁 Mở")
+            btn_open_done.setFixedHeight(22)
+            btn_open_done.setCursor(Qt.PointingHandCursor)
+            btn_open_done.setStyleSheet(
+                "QPushButton { background: #064E3B; color: #34D399; font-size: 10px; font-weight: 700; "
+                "border: 1px solid #059669; border-radius: 4px; padding: 1px 6px; } "
+                "QPushButton:hover { background: #059669; color: #FFFFFF; border-color: #10B981; }"
+            )
+            btn_open_done.setToolTip("Mở thư mục và chọn video đã hoàn thành trong Windows Explorer")
+            btn_open_done.clicked.connect(lambda _c=False, p=(out_target or item_path): _open_file_folder(p, select_file=True))
+            right_actions_layout.addWidget(btn_open_done, 0, Qt.AlignRight)
+
+        h_layout.addLayout(right_actions_layout)
 
         # Sự kiện Click & Double-click
         def _on_card_click(event):
             if event.button() == Qt.LeftButton:
-                # Nạp video vào Workspace chính (Player + Timeline + Subtitle)
                 browse_video(gui, file_path=item_path)
+                _sync_subtitles_for_video(norm_item, item_path)
                 _render_media_pool()
             super(QFrame, card_w).mousePressEvent(event)
 
         def _on_card_dbl_click(event):
             if event.button() == Qt.LeftButton:
                 append_video_to_timeline(gui, item_path)
+                _sync_subtitles_for_video(norm_item, item_path)
                 _render_media_pool()
             super(QFrame, card_w).mouseDoubleClickEvent(event)
 
@@ -860,18 +1144,22 @@ def _build_resource_media_card(gui):
             )
             act_edit = menu.addAction("✏️ Mở chỉnh sửa video này")
             act_add = menu.addAction("➕ Nối vào cuối timeline")
-            act_cfg = menu.addAction("⚙️ Cấu hình riêng (Engine)")
+            menu.addSeparator()
+
+            act_set_voice = menu.addAction("🎙️ Cài đặt lồng tiếng (1 giọng)...")
 
             ocr_menu = menu.addMenu("🎯 Đặt khung OCR phụ đề")
-            act_ocr_bottom = ocr_menu.addAction("👇 Dưới đáy (Mặc định)")
-            act_ocr_mid = ocr_menu.addAction("👉 Ở giữa màn hình")
-            act_ocr_top = ocr_menu.addAction("👆 Trên đỉnh màn hình")
+            act_save_curr = ocr_menu.addAction("💾 Ghi nhớ khung hiện tại cho video này")
+            ocr_menu.addSeparator()
+            act_ocr_bottom = ocr_menu.addAction("👇 Dưới đáy (65%)")
+            act_ocr_mid = ocr_menu.addAction("👉 Ở giữa màn hình (40%)")
+            act_ocr_top = ocr_menu.addAction("👆 Trên đỉnh màn hình (10%)")
 
-            if ws.status == "error":
-                act_retry = menu.addAction("⟳ Retry video này")
-            else:
-                act_retry = None
-            act_open_dir = menu.addAction("📁 Mở thư mục chứa file")
+            menu.addSeparator()
+            act_open_out = None
+            if out_target and os.path.isfile(out_target):
+                act_open_out = menu.addAction("📁 Mở video đã xuất (Explorer)")
+            act_open_dir = menu.addAction("📂 Mở thư mục video gốc")
             act_del = menu.addAction("🗑️ Xóa khỏi danh sách")
 
             action = menu.exec(card_w.mapToGlobal(pos))
@@ -881,23 +1169,42 @@ def _build_resource_media_card(gui):
             elif action == act_add:
                 append_video_to_timeline(gui, item_path)
                 _render_media_pool()
-            elif action == act_cfg:
-                _show_workspace_config(ws.id)
+            elif action == act_set_voice:
+                from ui.dialogs.single_voice_setup_dialog import SingleVoiceSetupDialog
+                from PySide6.QtWidgets import QDialog
+                v_curr = getattr(gui, "_video_voice_configs", {}).get(norm_item, {}).get("voice_name", "")
+                init_orig = int(gui.audio_a1_volume_slider.value()) if hasattr(gui, "audio_a1_volume_slider") else 50
+                init_tts = int(gui.audio_a2_volume_slider.value()) if hasattr(gui, "audio_a2_volume_slider") else 100
+                dlg = SingleVoiceSetupDialog(
+                    gui,
+                    video_path=item_path,
+                    blur_rect=getattr(gui, "_video_ocr_rects", {}).get(norm_item),
+                    initial_orig_volume=init_orig,
+                    initial_tts_volume=init_tts,
+                    workspace_root=str(getattr(gui, "workspace_root", os.getcwd())),
+                    initial_voice_id=v_curr or getattr(gui, "_last_single_voice_id", "adam1"),
+                )
+                if dlg.exec() == QDialog.Accepted:
+                    v_sel = dlg.get_selected_voice()
+                    v_short = v_sel.get("name", "").split("(")[0].replace("👩 ", "").replace("👨 ", "").replace("👑 ", "").strip()
+                    _set_voice_for_paths([item_path], v_sel.get("id", ""), v_short)
+                    gui._last_single_voice_id = v_sel.get("id", "adam1")
+            elif action == act_save_curr:
+                overlay = getattr(gui, "ocr_region_overlay", None)
+                if overlay and hasattr(overlay, "get_norm_rect"):
+                    _set_ocr_for_paths([item_path], overlay.get_norm_rect())
             elif action == act_ocr_bottom:
-                _apply_video_ocr(ws, (0.05, 0.65, 0.90, 0.16))
+                _set_ocr_for_paths([item_path], (0.05, 0.65, 0.90, 0.16))
             elif action == act_ocr_mid:
-                _apply_video_ocr(ws, (0.05, 0.40, 0.90, 0.16))
+                _set_ocr_for_paths([item_path], (0.05, 0.40, 0.90, 0.16))
             elif action == act_ocr_top:
-                _apply_video_ocr(ws, (0.05, 0.10, 0.90, 0.16))
-            elif action == act_retry and act_retry:
-                c = _ensure_batch_controller()
-                if c:
-                    c.retry_single(ws.id)
-                    _render_media_pool()
+                _set_ocr_for_paths([item_path], (0.05, 0.10, 0.90, 0.16))
+            elif act_open_out and action == act_open_out:
+                _open_file_folder(out_target, select_file=True)
             elif action == act_open_dir:
-                _open_file_folder(item_path)
+                _open_file_folder(item_path, select_file=True)
             elif action == act_del:
-                _remove_workspace(ws.id)
+                _remove_media_item(item_path)
 
         card_w.customContextMenuRequested.connect(_show_card_menu)
         return card_w
@@ -934,162 +1241,84 @@ def _build_resource_media_card(gui):
         ai_box.mousePressEvent = _on_ai_click
         return ai_box
 
-    # ═══════════════════════════════════════════════════════════════════
-    # 7. Batch Actions Logic
-    # ═══════════════════════════════════════════════════════════════════
-    def _on_start_batch():
-        c = _ensure_batch_controller()
-        if not c:
-            return
-        if hasattr(gui, "_batch_concurrent_spin"):
-            c.set_max_concurrent(gui._batch_concurrent_spin.value())
-        c.set_defaults_from_gui(gui)
-        c.start_all()
+    def _render_media_pool():
+        thumb_dir = os.path.join(workspace_root(), "temp", "launcher_thumbs")
+        os.makedirs(thumb_dir, exist_ok=True)
 
-    def _on_stop_batch():
-        c = _ensure_batch_controller()
-        if c:
-            c.stop_all()
-            _render_media_pool()
+        if not hasattr(gui, "project_media_pool"):
+            gui.project_media_pool = []
 
-    def _on_retry_batch():
-        c = _ensure_batch_controller()
-        if c:
-            c.retry_failed()
-            _render_media_pool()
+        cur_v = getattr(gui, "_current_video_path", "")
+        if cur_v and os.path.exists(cur_v):
+            if not any(os.path.normpath(it.get("path", "")) == os.path.normpath(cur_v) for it in gui.project_media_pool):
+                try:
+                    dur_s, th = probe_video_duration_and_thumb(cur_v, thumb_dir)
+                except Exception:
+                    dur_s, th = 0.0, ""
+                total_s = int(dur_s)
+                gui.project_media_pool.append({
+                    "id": str(int(time.time() * 1000)),
+                    "path": cur_v,
+                    "name": os.path.basename(cur_v),
+                    "duration": dur_s,
+                    "duration_str": f"{total_s // 60:02d}:{total_s % 60:02d}",
+                    "thumb_path": th,
+                })
 
-    def _remove_workspace(ws_id):
-        c = _ensure_batch_controller()
-        if c:
-            ws = c.get_workspace(ws_id)
-            c.remove_workspace(ws_id)
-            if ws and hasattr(gui, "project_media_pool"):
-                gui.project_media_pool = [it for it in gui.project_media_pool if os.path.normpath(it.get("path", "")) != os.path.normpath(ws.video_path)]
-            _render_media_pool()
+        if not hasattr(gui, "_seen_media_paths"):
+            gui._seen_media_paths = set()
+        if not hasattr(gui, "_selected_media_paths"):
+            gui._selected_media_paths = set()
+        for it in gui.project_media_pool:
+            p = os.path.normpath(it.get("path", ""))
+            if p and p not in gui._seen_media_paths:
+                gui._seen_media_paths.add(p)
+                gui._selected_media_paths.add(p)
 
-    def _show_workspace_config(ws_id):
-        c = _ensure_batch_controller()
-        if not c:
-            return
-        ws = c.get_workspace(ws_id)
-        if not ws:
-            return
-        engines = ["(Mặc định)", "ocr", "whisper", "sensevoice"]
-        cur_idx = 0
-        if ws.transcription_engine in engines:
-            cur_idx = engines.index(ws.transcription_engine)
-        choice, ok = QInputDialog.getItem(
-            gui, f"Cấu hình — {ws.video_name}",
-            "Chọn engine nhận diện:", engines, cur_idx, False
-        )
-        if ok:
-            ws.transcription_engine = "" if choice == "(Mặc định)" else choice
-            _render_media_pool()
+        timeline_video_paths = set()
+        try:
+            tl = getattr(gui, "timeline", None)
+            if tl and hasattr(tl, "_timeline") and tl._timeline:
+                for track in tl._timeline.tracks:
+                    if str(getattr(track, "name", "")).startswith("V1") or getattr(track, "type", None) == LayerType.VIDEO:
+                        for layer in getattr(track, "layers", []):
+                            src = getattr(layer, "source", "")
+                            if src:
+                                timeline_video_paths.add(os.path.normpath(src))
+        except Exception:
+            pass
 
-    def _update_batch_summary():
-        c = _ensure_batch_controller()
-        if not c:
-            return
-        s = c.get_summary()
-        parts = []
-        if s["done"] > 0:
-            parts.append(f"✅{s['done']}")
-        if s["running"] > 0:
-            parts.append(f"🔄{s['running']}")
-        if s["pending"] > 0:
-            parts.append(f"⏸{s['pending']}")
-        if s["error"] > 0:
-            parts.append(f"❌{s['error']}")
-        txt = " │ ".join(parts) if parts else ""
-        if s["is_running"]:
-            el = s.get("elapsed", "")
-            el_str = f" ⏱{el}" if el else ""
-            txt = f"Đang chạy (×{s['max_concurrent']}){el_str} • {txt}"
-        gui._batch_summary_label.setText(txt)
+        for wid, widget in list(gui._media_card_widgets.items()):
+            pool_layout.removeWidget(widget)
+            widget.deleteLater()
+        gui._media_card_widgets.clear()
 
-    def _open_file_folder(file_path):
-        import subprocess as sp
-        folder = os.path.dirname(os.path.abspath(file_path))
-        if os.path.isdir(folder):
-            if os.name == "nt":
-                os.startfile(folder)
-            else:
-                sp.Popen(["xdg-open", folder])
+        for i in range(pool_layout.count() - 1, -1, -1):
+            item = pool_layout.itemAt(i)
+            w = item.widget() if item else None
+            if w and w != drop_zone and w not in gui._media_card_widgets.values():
+                pool_layout.removeWidget(w)
+                w.deleteLater()
 
-    # ═══════════════════════════════════════════════════════════════════
-    # 8. Batch Signal Handlers
-    # ═══════════════════════════════════════════════════════════════════
-    def _on_batch_started():
-        gui._batch_start_btn.setEnabled(False)
-        gui._batch_start_btn.setText("⏳ Đang chạy...")
-        gui._batch_stop_btn.setEnabled(True)
-        gui._batch_retry_btn.setEnabled(False)
-        if not hasattr(gui, "_batch_elapsed_timer"):
-            gui._batch_elapsed_timer = QTimer()
-            gui._batch_elapsed_timer.timeout.connect(lambda: _update_batch_summary())
-        gui._batch_elapsed_timer.start(1000)
+        fk = current_filter[0]
+        pool = gui.project_media_pool
+        visible_count = 0
+        for itm in pool:
+            if fk not in ("all", itm.get("type", "video")):
+                continue
+            card_w = _build_media_item_card(itm, timeline_video_paths)
+            card_key = itm.get("path", "") or itm.get("id", "")
+            gui._media_card_widgets[card_key] = card_w
+            pool_layout.insertWidget(pool_layout.count() - 1, card_w)
+            visible_count += 1
 
-    def _on_batch_completed(ok_count, fail_count):
-        if hasattr(gui, "_batch_elapsed_timer"):
-            gui._batch_elapsed_timer.stop()
-        gui._batch_start_btn.setEnabled(True)
-        gui._batch_start_btn.setText("▶  Xử lý tất cả")
-        gui._batch_stop_btn.setEnabled(False)
-        gui._batch_retry_btn.setEnabled(fail_count > 0)
-        _render_media_pool()
+        ai_card = _build_ai_generate_card()
+        pool_layout.insertWidget(pool_layout.count() - 1, ai_card)
 
-        c = getattr(gui, "_batch_controller", None)
-        elapsed = c.elapsed_str if c else ""
-        msg_box = QMessageBox(gui)
-        msg_box.setWindowTitle("Xử Lý Hoàn Tất")
-        msg_box.setIcon(QMessageBox.Information if fail_count == 0 else QMessageBox.Warning)
-        msg_box.setText(
-            f"Đã xử lý xong danh sách video!\n\n"
-            f"✅ Thành công: {ok_count}\n"
-            f"❌ Thất bại: {fail_count}\n"
-            f"⏱ Thời gian: {elapsed or 'N/A'}"
-        )
-        btn_open = msg_box.addButton("Mở thư mục output", QMessageBox.ActionRole)
-        msg_box.addButton(QMessageBox.Ok)
-        msg_box.exec()
-        if msg_box.clickedButton() == btn_open:
-            out_folder = os.path.join(str(getattr(gui, "workspace_root", os.getcwd())), "output")
-            if os.path.isdir(out_folder):
-                os.startfile(out_folder)
-
-    def _on_batch_status_changed(ws_id, status):
-        _render_media_pool()
-
-    def _on_batch_progress_changed(ws_id, progress):
-        widget = gui._batch_card_widgets.get(ws_id)
-        if widget:
-            pbar = widget.findChild(QProgressBar, f"pbar_{ws_id}")
-            if pbar:
-                pbar.setValue(int(progress * 100))
-
-    def _on_batch_step_changed(ws_id, step):
-        widget = gui._batch_card_widgets.get(ws_id)
-        if widget:
-            status_lbl = widget.findChild(QLabel, f"status_{ws_id}")
-            if status_lbl:
-                step_names = {
-                    "prepare": "Chuẩn bị",
-                    "extract_audio": "Trích xuất",
-                    "extraction": "Trích xuất",
-                    "separation": "Tách giọng",
-                    "diarization": "Nhận diện",
-                    "transcription": "Chép lời",
-                    "translation": "Dịch thuật",
-                    "voiceover": "Lồng tiếng",
-                    "preview": "Xem trước",
-                    "done": "Hoàn tất",
-                }
-                s_name = step_names.get(step, step)
-                status_lbl.setText(f"🔄 {s_name}")
-                status_lbl.setStyleSheet("color: #FF8A00; font-size: 9px; font-weight: 600; border: none;")
-
-    def _on_batch_log(msg):
-        pass
+        total_items = len(pool)
+        gui._batch_count_badge.setText(f"{total_items} tệp")
+        drop_zone.setVisible(total_items == 0)
+        _update_queue_ui_state()
 
     gui._refresh_media_pool_ui = _render_media_pool
     gui.video_path_edit.textChanged.connect(lambda _t: _render_media_pool())
