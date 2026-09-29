@@ -56,6 +56,35 @@ def _set_preview_icon_button(button: QPushButton, icon_path: str, tooltip: str):
     button.setStyleSheet("QPushButton { padding: 0; }")
 
 
+def get_video_is_vertical(video_path: str = "", main_window=None) -> bool:
+    """Kiểm tra video có phải là khung dọc (9:16) hay không."""
+    if main_window and hasattr(main_window, "current_video_width") and hasattr(main_window, "current_video_height"):
+        vw = getattr(main_window, "current_video_width", 0) or 0
+        vh = getattr(main_window, "current_video_height", 0) or 0
+        if vw > 0 and vh > 0:
+            return vh > vw
+    if video_path and os.path.isfile(video_path):
+        try:
+            import cv2
+            cap = cv2.VideoCapture(video_path)
+            if cap.isOpened():
+                w = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+                h = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+                cap.release()
+                if w > 0 and h > 0:
+                    return h > w
+        except Exception:
+            pass
+    return True
+
+
+def get_default_ocr_rect_for_video(video_path: str = "", main_window=None) -> tuple:
+    """Trả về (x, y, w, h) mặc định cho video: đáy màn hình 0.65 (dọc) hoặc 0.74 (ngang)."""
+    if get_video_is_vertical(video_path, main_window):
+        return (0.05, 0.65, 0.90, 0.16)
+    return (0.08, 0.74, 0.84, 0.18)
+
+
 class OcrRegionOverlay(QWidget):
     _HANDLE_SIZE = 10
     _MIN_W = 40
@@ -87,19 +116,147 @@ class OcrRegionOverlay(QWidget):
         self._press_pos = QRectF()
         self.hide()
 
-    def _load_rect(self):
-        v = os.getenv("OCR_SUBTITLE_RECT", "")
-        try:
-            parts = [float(x) for x in v.split(",")]
-            if len(parts) == 4:
-                self._norm = QRectF(*parts)
-        except Exception:
-            pass
+    def get_norm_rect(self) -> tuple:
+        return (float(self._norm.x()), float(self._norm.y()), float(self._norm.width()), float(self._norm.height()))
+
+    def set_norm_rect(self, x: float, y: float, w: float, h: float):
+        self._norm = QRectF(x, y, w, h)
+        self._save_rect()
+        self.update()
+
+    def _load_rect(self, video_path: str = None):
+        import hashlib, json, re
+        target_path = video_path
+        w = self._main_window
+        if w is None and self._target_view is not None:
+            w = self._target_view.window()
+        if not target_path and w:
+            target_path = getattr(w, "_current_video_path", "")
+
+        rect_tuple = None
+        if target_path:
+            norm_p = os.path.normpath(target_path)
+            # 1. Tra trong _video_ocr_rects của main window
+            if w and hasattr(w, "_video_ocr_rects") and norm_p in w._video_ocr_rects:
+                rect_tuple = w._video_ocr_rects[norm_p]
+
+            # 2. Tra trong Batch Controller workspaces
+            if not rect_tuple and w:
+                ctrl = getattr(w, "_batch_controller", None)
+                if ctrl:
+                    for ws in ctrl.workspaces:
+                        if os.path.normpath(ws.video_path) == norm_p:
+                            r = getattr(ws, "ocr_rect", None)
+                            if r and len(r) == 4:
+                                rect_tuple = tuple(float(x) for x in r)
+                            break
+
+            # 3. Tra trong project_state
+            if not rect_tuple and w:
+                ps = getattr(w, "current_project_state", None)
+                if ps and hasattr(ps, "settings"):
+                    s = ps.settings.get("ocr_subtitle_rect", "")
+                    if s:
+                        try:
+                            parts = [float(x) for x in s.split(",")]
+                            if len(parts) == 4:
+                                rect_tuple = tuple(parts)
+                        except Exception:
+                            pass
+
+            # 4. Tra trực tiếp trong file project.json đã lưu nếu có
+            if not rect_tuple:
+                try:
+                    from runtime_paths import workspace_root
+                    v_name = os.path.splitext(os.path.basename(target_path))[0] or "project"
+                    slug = re.sub(r"[^a-zA-Z0-9]+", "_", v_name).strip("_").lower() or "project"
+                    digest = hashlib.sha1(norm_p.encode("utf-8")).hexdigest()[:8]
+                    p_json = os.path.join(workspace_root(), "projects", f"{slug}_{digest}", "project.json")
+                    if os.path.isfile(p_json):
+                        with open(p_json, "r", encoding="utf-8") as f:
+                            pj_data = json.load(f)
+                            s = pj_data.get("settings", {}).get("ocr_subtitle_rect", "")
+                            if s:
+                                parts = [float(x) for x in s.split(",")]
+                                if len(parts) == 4:
+                                    rect_tuple = tuple(parts)
+                except Exception:
+                    pass
+
+        if rect_tuple and len(rect_tuple) == 4:
+            self._norm = QRectF(*rect_tuple)
+            r = self._norm
+            os.environ["OCR_SUBTITLE_RECT"] = f"{r.x():.4f},{r.y():.4f},{r.width():.4f},{r.height():.4f}"
+            os.environ["OCR_CROP_RATIO"] = f"{r.height():.4f}"
+            return
+
+        # Nếu không có video cụ thể (khởi động app), đọc từ env nếu có
+        if not target_path:
+            v = os.getenv("OCR_SUBTITLE_RECT", "")
+            try:
+                parts = [float(x) for x in v.split(",")]
+                if len(parts) == 4:
+                    self._norm = QRectF(*parts)
+                    return
+            except Exception:
+                pass
+
+        # Mặc định theo tỉ lệ riêng của video này (tuyệt đối không dùng ké vị trí video trước!)
+        default_rect = get_default_ocr_rect_for_video(target_path, w)
+        self._norm = QRectF(*default_rect)
+        r = self._norm
+        r_str = f"{r.x():.4f},{r.y():.4f},{r.width():.4f},{r.height():.4f}"
+        os.environ["OCR_SUBTITLE_RECT"] = r_str
+        os.environ["OCR_CROP_RATIO"] = f"{r.height():.4f}"
+        if target_path and w:
+            norm_p = os.path.normpath(target_path)
+            if not hasattr(w, "_video_ocr_rects"):
+                w._video_ocr_rects = {}
+            w._video_ocr_rects[norm_p] = default_rect
+
+    def restore_for_video(self, video_path: str):
+        """Khôi phục khung OCR riêng của video được chỉ định."""
+        self._load_rect(video_path)
+        self.update()
 
     def _save_rect(self):
         r = self._norm
-        os.environ["OCR_SUBTITLE_RECT"] = f"{r.x():.4f},{r.y():.4f},{r.width():.4f},{r.height():.4f}"
+        r_tuple = (float(r.x()), float(r.y()), float(r.width()), float(r.height()))
+        r_str = f"{r.x():.4f},{r.y():.4f},{r.width():.4f},{r.height():.4f}"
+        os.environ["OCR_SUBTITLE_RECT"] = r_str
         os.environ["OCR_CROP_RATIO"] = f"{r.height():.4f}"
+
+        # Lưu lại cho video hiện tại
+        w = self._main_window
+        if w is None and self._target_view is not None:
+            w = self._target_view.window()
+        if w:
+            cur_video = getattr(w, "_current_video_path", "")
+            if cur_video:
+                norm_p = os.path.normpath(cur_video)
+                if not hasattr(w, "_video_ocr_rects"):
+                    w._video_ocr_rects = {}
+                w._video_ocr_rects[norm_p] = r_tuple
+
+                # Cập nhật sang Batch Controller
+                ctrl = getattr(w, "_batch_controller", None)
+                if ctrl:
+                    for ws in ctrl.workspaces:
+                        if os.path.normpath(ws.video_path) == norm_p:
+                            ws.ocr_rect = r_tuple
+                            ws.blur_rect = r_tuple
+                            break
+
+                # Cập nhật sang current_project_state và lưu project file
+                ps = getattr(w, "current_project_state", None)
+                if ps and hasattr(ps, "settings"):
+                    ps.settings["ocr_subtitle_rect"] = r_str
+                    project_service = getattr(w, "project_service", None)
+                    if project_service and hasattr(project_service, "save_project"):
+                        try:
+                            project_service.save_project(ps)
+                        except Exception:
+                            pass
 
     def attach_to_view(self, view):
         self._target_view = view
@@ -343,6 +500,10 @@ class OcrRegionOverlay(QWidget):
         self._drag_mode = ""
         if self._editable:
             self.setCursor(Qt.OpenHandCursor)
+        self._save_rect()
+        w = self._main_window
+        if w and hasattr(w, "_refresh_media_pool_ui") and callable(w._refresh_media_pool_ui):
+            w._refresh_media_pool_ui()
         event.accept()
 
     def paintEvent(self, event):

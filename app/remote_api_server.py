@@ -324,6 +324,24 @@ class CapCapRemoteHandler(BaseHTTPRequestHandler):
         runtime = WorkflowRuntime(workspace_root)
         _set_status("prepare", "Preparing project")
 
+        # Đặt OCR_SUBTITLE_RECT riêng cho video này trong worker process
+        ocr_rect_str = str(payload.get("ocr_subtitle_rect", "") or "").strip()
+        if not ocr_rect_str:
+            try:
+                from views.preview_panel import get_default_ocr_rect_for_video
+                def_r = get_default_ocr_rect_for_video(video_path)
+                ocr_rect_str = f"{def_r[0]:.4f},{def_r[1]:.4f},{def_r[2]:.4f},{def_r[3]:.4f}"
+            except Exception:
+                pass
+        if ocr_rect_str:
+            os.environ["OCR_SUBTITLE_RECT"] = ocr_rect_str
+            try:
+                parts = [float(x) for x in ocr_rect_str.split(",")]
+                if len(parts) == 4:
+                    os.environ["OCR_CROP_RATIO"] = f"{parts[3]:.4f}"
+            except Exception:
+                pass
+
         def step_callback(step_id):
             labels = {
                 "prepare": "Preparing project",

@@ -62,6 +62,7 @@ class PipelineContext:
 
     # === Blur/OCR region ===
     blur_rect: Optional[tuple] = None       # (x, y, w, h) normalized
+    ocr_rect: Optional[tuple] = None        # (x, y, w, h) normalized
 
     @classmethod
     def from_gui(cls, gui) -> "PipelineContext":
@@ -165,6 +166,7 @@ class PipelineContext:
                 if hasattr(gui, "_parse_voice_speed_value") else 1.0
             ),
             blur_rect=blur_rect,
+            ocr_rect=blur_rect,
         )
 
     @classmethod
@@ -175,6 +177,14 @@ class PipelineContext:
         Nếu không, dùng defaults (thường là PipelineContext.from_gui).
         """
         base = defaults or cls()
+        # Cấu hình OCR rect riêng của workspace:
+        # 1. Nếu workspace có ocr_rect riêng -> dùng nó.
+        # 2. Nếu base thuộc cùng video_path đang mở -> kế thừa từ base.
+        # 3. Nếu là video khác -> để None để worker tự tính default theo kích thước video đó.
+        ws_ocr = getattr(workspace, "ocr_rect", None) or getattr(workspace, "blur_rect", None)
+        if not ws_ocr and base.video_path and os.path.normpath(base.video_path) == os.path.normpath(workspace.video_path):
+            ws_ocr = getattr(base, "ocr_rect", None) or base.blur_rect
+
         return cls(
             workspace_root=base.workspace_root,
             video_path=workspace.video_path,
@@ -192,7 +202,8 @@ class PipelineContext:
             voice_name=workspace.voice_name or base.voice_name,
             voice_speed=workspace.voice_speed if workspace.voice_speed != 1.0 else base.voice_speed,
             target_stage=base.target_stage,
-            blur_rect=workspace.blur_rect or base.blur_rect,
+            blur_rect=ws_ocr,
+            ocr_rect=ws_ocr,
         )
 
     def validate(self) -> str:
@@ -228,6 +239,7 @@ class VideoWorkspace:
     voice_name: str = ""
     voice_speed: float = 1.0
     blur_rect: Optional[tuple] = None
+    ocr_rect: Optional[tuple] = None        # (x, y, w, h) normalized riêng từng video
 
     # === Trạng thái xử lý ===
     status: str = "pending"                 # pending | queued | running | done | error | cancelled
@@ -264,11 +276,34 @@ class VideoWorkspace:
             except Exception:
                 pass
 
+        # Thử đọc ocr_rect từ project state đã lưu nếu có
+        ocr_rect = None
+        try:
+            import hashlib, json, re
+            from runtime_paths import workspace_root
+            proj_root = os.path.join(workspace_root(), "projects")
+            video_stem = os.path.splitext(video_name)[0] or "project"
+            slug = re.sub(r"[^a-zA-Z0-9]+", "_", video_stem).strip("_").lower() or "project"
+            digest = hashlib.sha1(os.path.abspath(video_path).encode("utf-8")).hexdigest()[:8]
+            state_file = os.path.join(proj_root, f"{slug}_{digest}", "project.json")
+            if os.path.isfile(state_file):
+                with open(state_file, "r", encoding="utf-8") as f:
+                    s_data = json.load(f)
+                    s_rect = s_data.get("settings", {}).get("ocr_subtitle_rect", "")
+                    if s_rect:
+                        parts = [float(x) for x in s_rect.split(",")]
+                        if len(parts) == 4:
+                            ocr_rect = tuple(parts)
+        except Exception:
+            pass
+
         return cls(
             video_path=video_path,
             video_name=video_name,
             thumb_path=thumb,
             duration_s=dur_s,
+            ocr_rect=ocr_rect,
+            blur_rect=ocr_rect,
         )
 
     def mark_queued(self):
@@ -328,6 +363,8 @@ class VideoWorkspace:
             "output_mode": self.output_mode,
             "voice_name": self.voice_name,
             "voice_speed": self.voice_speed,
+            "blur_rect": self.blur_rect,
+            "ocr_rect": self.ocr_rect,
             "status": self.status,
             "progress": self.progress,
             "current_step": self.current_step,

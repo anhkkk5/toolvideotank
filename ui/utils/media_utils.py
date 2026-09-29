@@ -523,6 +523,35 @@ def browse_video(gui, file_path=None):
     if not file_path:
         return
 
+    # 1. Lưu lại khung OCR của video cũ trước khi switch
+    old_video = getattr(gui, "_current_video_path", "")
+    overlay = getattr(gui, "ocr_region_overlay", None)
+    if old_video and overlay and hasattr(overlay, "get_norm_rect"):
+        try:
+            old_rect = overlay.get_norm_rect()
+            if not hasattr(gui, "_video_ocr_rects"):
+                gui._video_ocr_rects = {}
+            norm_old = os.path.normpath(old_video)
+            gui._video_ocr_rects[norm_old] = old_rect
+            ctrl = getattr(gui, "_batch_controller", None)
+            if ctrl:
+                for ws in ctrl.workspaces:
+                    if os.path.normpath(ws.video_path) == norm_old:
+                        ws.ocr_rect = old_rect
+                        ws.blur_rect = old_rect
+                        break
+            ps = getattr(gui, "current_project_state", None)
+            if ps and hasattr(ps, "settings"):
+                ps.settings["ocr_subtitle_rect"] = f"{old_rect[0]:.4f},{old_rect[1]:.4f},{old_rect[2]:.4f},{old_rect[3]:.4f}"
+                project_service = getattr(gui, "project_service", None)
+                if project_service and hasattr(project_service, "save_project"):
+                    try:
+                        project_service.save_project(ps)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
     if hasattr(gui, "ensure_media_backend_ready"):
         gui.ensure_media_backend_ready()
     gui.video_path_edit.setText(file_path)
@@ -543,6 +572,14 @@ def browse_video(gui, file_path=None):
 
     gui.current_project_state = gui.ensure_current_project()
     gui.load_project_context(gui.current_project_state)
+
+    # 2. Khôi phục khung OCR riêng của video mới vừa chọn
+    if overlay and hasattr(overlay, "restore_for_video"):
+        overlay.restore_for_video(file_path)
+    if hasattr(gui, "_sync_ocr_overlay"):
+        gui._sync_ocr_overlay()
+    if hasattr(gui, "_refresh_media_pool_ui") and callable(gui._refresh_media_pool_ui):
+        gui._refresh_media_pool_ui()
 
     try:
         gui.media_player.pause()

@@ -104,6 +104,15 @@ class PipelineWorker(QThread):
                 and self.ctx.output_mode in ("voice", "both")
             )
 
+            ocr_rect = getattr(self.ws, "ocr_rect", None) or getattr(self.ctx, "ocr_rect", None)
+            if not ocr_rect or len(ocr_rect) != 4:
+                try:
+                    from views.preview_panel import get_default_ocr_rect_for_video
+                    ocr_rect = get_default_ocr_rect_for_video(self.ws.video_path)
+                except Exception:
+                    ocr_rect = (0.05, 0.65, 0.90, 0.16)
+            ocr_rect_str = f"{ocr_rect[0]:.4f},{ocr_rect[1]:.4f},{ocr_rect[2]:.4f},{ocr_rect[3]:.4f}" if (ocr_rect and len(ocr_rect) == 4) else ""
+
             payload = {
                 "workspace_root": self.ctx.workspace_root,
                 "video_path": self.ctx.video_path,
@@ -121,6 +130,8 @@ class PipelineWorker(QThread):
                 "skip_translation": skip_translation,
                 "prefetch_voice_name": self.ctx.voice_name if prefetch_tts else "",
                 "prefetch_voice_speed": self.ctx.voice_speed if prefetch_tts else 1.0,
+                "ocr_subtitle_rect": ocr_rect_str,
+                "blur_rect": ocr_rect,
             }
 
             # Send async request (long timeout — pipeline có thể chạy rất lâu)
@@ -178,6 +189,16 @@ class PipelineWorker(QThread):
         env["PYTHONUTF8"] = "1"
         env["PYTHONIOENCODING"] = "utf-8"
         env["CAPCAP_DEVICE"] = os.getenv("CAPCAP_DEVICE", "cpu").strip().lower()
+        ocr_rect = getattr(self.ws, "ocr_rect", None) or getattr(self.ctx, "ocr_rect", None)
+        if not ocr_rect or len(ocr_rect) != 4:
+            try:
+                from views.preview_panel import get_default_ocr_rect_for_video
+                ocr_rect = get_default_ocr_rect_for_video(self.ws.video_path)
+            except Exception:
+                ocr_rect = (0.05, 0.65, 0.90, 0.16)
+        if ocr_rect and len(ocr_rect) == 4:
+            env["OCR_SUBTITLE_RECT"] = f"{ocr_rect[0]:.4f},{ocr_rect[1]:.4f},{ocr_rect[2]:.4f},{ocr_rect[3]:.4f}"
+            env["OCR_CROP_RATIO"] = f"{ocr_rect[3]:.4f}"
 
         from runtime_paths import subprocess_hidden_kwargs
         process_kwargs = subprocess_hidden_kwargs()

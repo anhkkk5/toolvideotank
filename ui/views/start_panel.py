@@ -580,6 +580,33 @@ def _build_resource_media_card(gui):
         drop_zone.setVisible(total_items == 0)
         _update_batch_summary()
 
+    def _apply_video_ocr(target_ws, rect_tuple):
+        target_ws.ocr_rect = rect_tuple
+        target_ws.blur_rect = rect_tuple
+        norm_p = os.path.normpath(target_ws.video_path) if target_ws.video_path else ""
+        if not hasattr(gui, "_video_ocr_rects"):
+            gui._video_ocr_rects = {}
+        if norm_p:
+            gui._video_ocr_rects[norm_p] = rect_tuple
+        cur_p = getattr(gui, "_current_video_path", "")
+        if cur_p and norm_p and os.path.normpath(cur_p) == norm_p:
+            overlay = getattr(gui, "ocr_region_overlay", None)
+            if overlay and hasattr(overlay, "set_norm_rect"):
+                overlay.set_norm_rect(*rect_tuple)
+            if hasattr(gui, "_sync_ocr_overlay"):
+                gui._sync_ocr_overlay()
+        ps = getattr(gui, "current_project_state", None)
+        if ps and hasattr(ps, "settings") and cur_p and norm_p and os.path.normpath(cur_p) == norm_p:
+            r_str = f"{rect_tuple[0]:.4f},{rect_tuple[1]:.4f},{rect_tuple[2]:.4f},{rect_tuple[3]:.4f}"
+            ps.settings["ocr_subtitle_rect"] = r_str
+            project_service = getattr(gui, "project_service", None)
+            if project_service and hasattr(project_service, "save_project"):
+                try:
+                    project_service.save_project(ps)
+                except Exception:
+                    pass
+        _render_media_pool()
+
     def _build_video_card(ws, timeline_video_paths):
         item_path = ws.video_path
         cur_active = getattr(gui, "_current_video_path", "")
@@ -737,6 +764,60 @@ def _build_resource_media_card(gui):
             status_row.addWidget(err_lbl)
 
         status_row.addStretch(1)
+
+        # Lấy OCR rect hiện tại của video này
+        norm_item = os.path.normpath(item_path) if item_path else ""
+        cur_ocr = getattr(ws, "ocr_rect", None)
+        if not cur_ocr and hasattr(gui, "_video_ocr_rects"):
+            cur_ocr = gui._video_ocr_rects.get(norm_item)
+        if not cur_ocr and is_active:
+            overlay = getattr(gui, "ocr_region_overlay", None)
+            if overlay and hasattr(overlay, "get_norm_rect"):
+                cur_ocr = overlay.get_norm_rect()
+
+        def _format_ocr_badge_info(r):
+            if not r or len(r) != 4:
+                return ("OCR: Dưới", "#64748B", "Vùng nhận diện OCR: Mặc định dưới đáy\nNhấp để đổi vị trí nhanh")
+            ry = r[1]
+            y_pct = int(ry * 100)
+            h_pct = int(r[3] * 100)
+            if ry < 0.28:
+                return ("OCR: Trên", "#06B6D4", f"Khung OCR: Trên đỉnh (y={y_pct}%, h={h_pct}%)\nNhấp để đổi nhanh")
+            elif ry <= 0.55:
+                return ("OCR: Giữa", "#A855F7", f"Khung OCR: Ở giữa (y={y_pct}%, h={h_pct}%)\nNhấp để đổi nhanh")
+            else:
+                return ("OCR: Dưới", "#64748B", f"Khung OCR: Dưới đáy (y={y_pct}%, h={h_pct}%)\nNhấp để đổi nhanh")
+
+        b_txt, b_col, b_tip = _format_ocr_badge_info(cur_ocr)
+        ocr_badge = QLabel(b_txt)
+        ocr_badge.setCursor(Qt.PointingHandCursor)
+        ocr_badge.setStyleSheet(
+            f"background: #141A24; color: {b_col}; font-size: 8px; font-weight: 700; "
+            f"border: 1px solid {b_col}66; border-radius: 2px; padding: 0 4px;"
+        )
+        ocr_badge.setToolTip(b_tip)
+
+        def _on_badge_click(ev):
+            b_menu = QMenu(ocr_badge)
+            b_menu.setStyleSheet(
+                "QMenu { background: #161B24; color: #E5E7EB; border: 1px solid #2E384D; padding: 4px; font-size: 11px; } "
+                "QMenu::item:selected { background: #FF8A00; color: #fff; }"
+            )
+            act_b = b_menu.addAction("👇 OCR Dưới đáy (Mặc định)")
+            act_m = b_menu.addAction("👉 OCR Ở giữa màn hình")
+            act_t = b_menu.addAction("👆 OCR Trên đỉnh màn hình")
+            pos = ev.globalPosition().toPoint() if hasattr(ev, "globalPosition") else ev.globalPos()
+            chosen = b_menu.exec(pos)
+            if chosen == act_b:
+                _apply_video_ocr(ws, (0.05, 0.65, 0.90, 0.16))
+            elif chosen == act_m:
+                _apply_video_ocr(ws, (0.05, 0.40, 0.90, 0.16))
+            elif chosen == act_t:
+                _apply_video_ocr(ws, (0.05, 0.10, 0.90, 0.16))
+
+        ocr_badge.mousePressEvent = _on_badge_click
+        status_row.addWidget(ocr_badge)
+
         info_layout.addLayout(status_row)
         h_layout.addLayout(info_layout, 1)
 
@@ -780,6 +861,12 @@ def _build_resource_media_card(gui):
             act_edit = menu.addAction("✏️ Mở chỉnh sửa video này")
             act_add = menu.addAction("➕ Nối vào cuối timeline")
             act_cfg = menu.addAction("⚙️ Cấu hình riêng (Engine)")
+
+            ocr_menu = menu.addMenu("🎯 Đặt khung OCR phụ đề")
+            act_ocr_bottom = ocr_menu.addAction("👇 Dưới đáy (Mặc định)")
+            act_ocr_mid = ocr_menu.addAction("👉 Ở giữa màn hình")
+            act_ocr_top = ocr_menu.addAction("👆 Trên đỉnh màn hình")
+
             if ws.status == "error":
                 act_retry = menu.addAction("⟳ Retry video này")
             else:
@@ -796,6 +883,12 @@ def _build_resource_media_card(gui):
                 _render_media_pool()
             elif action == act_cfg:
                 _show_workspace_config(ws.id)
+            elif action == act_ocr_bottom:
+                _apply_video_ocr(ws, (0.05, 0.65, 0.90, 0.16))
+            elif action == act_ocr_mid:
+                _apply_video_ocr(ws, (0.05, 0.40, 0.90, 0.16))
+            elif action == act_ocr_top:
+                _apply_video_ocr(ws, (0.05, 0.10, 0.90, 0.16))
             elif action == act_retry and act_retry:
                 c = _ensure_batch_controller()
                 if c:
