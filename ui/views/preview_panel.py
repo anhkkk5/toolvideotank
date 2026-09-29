@@ -103,9 +103,6 @@ class OcrRegionOverlay(QWidget):
         self.setAttribute(Qt.WA_DeleteOnClose, True)
         self.setWindowFlag(Qt.WindowDoesNotAcceptFocus, True)
         self.setStyleSheet("background: transparent;")
-        self.setMouseTracking(True)
-        self._norm = QRectF(0.0, 0.75, 1.0, 0.25)
-        self._load_rect()
         self._target_view = None
         self._main_window = None
         self._requested_visible = True
@@ -114,6 +111,8 @@ class OcrRegionOverlay(QWidget):
         self._drag_offset = QRectF()
         self._rect_on_press = QRectF()
         self._press_pos = QRectF()
+        self._norm = QRectF(0.0, 0.75, 1.0, 0.25)
+        self._load_rect()
         self.hide()
 
     def get_norm_rect(self) -> tuple:
@@ -127,9 +126,10 @@ class OcrRegionOverlay(QWidget):
     def _load_rect(self, video_path: str = None):
         import hashlib, json, re
         target_path = video_path
-        w = self._main_window
-        if w is None and self._target_view is not None:
-            w = self._target_view.window()
+        w = getattr(self, "_main_window", None)
+        target_view = getattr(self, "_target_view", None)
+        if w is None and target_view is not None:
+            w = target_view.window()
         if not target_path and w:
             target_path = getattr(w, "_current_video_path", "")
 
@@ -227,9 +227,10 @@ class OcrRegionOverlay(QWidget):
         os.environ["OCR_CROP_RATIO"] = f"{r.height():.4f}"
 
         # Lưu lại cho video hiện tại
-        w = self._main_window
-        if w is None and self._target_view is not None:
-            w = self._target_view.window()
+        w = getattr(self, "_main_window", None)
+        target_view = getattr(self, "_target_view", None)
+        if w is None and target_view is not None:
+            w = target_view.window()
         if w:
             cur_video = getattr(w, "_current_video_path", "")
             if cur_video:
