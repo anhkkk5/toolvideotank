@@ -69,10 +69,11 @@ class VoiceGenderCheckWorker(QThread):
     completed = Signal(object, str)
     progress = Signal(str)
 
-    def __init__(self, video_path, existing_cues=None):
+    def __init__(self, video_path, existing_cues=None, ocr_rect=None):
         super().__init__()
         self.video_path = video_path
         self.existing_cues = existing_cues
+        self.ocr_rect = ocr_rect
 
     def run(self):
         try:
@@ -82,6 +83,7 @@ class VoiceGenderCheckWorker(QThread):
                 self.video_path,
                 existing_cues=self.existing_cues,
                 progress=self.progress.emit,
+                ocr_rect=self.ocr_rect,
             )
             self.completed.emit(result, "")
         except Exception as exc:
@@ -425,40 +427,60 @@ class TimelineWaveformWorker(QThread):
         self.video_path = str(video_path or "").strip()
         self.audio_path = str(audio_path or "").strip()
         self.temp_audio_path = str(temp_audio_path or "").strip()
+        self._is_cancelled = False
+        self._proc = None
+
+    def cancel(self):
+        self._is_cancelled = True
+        proc = self._proc
+        if proc is not None:
+            try:
+                proc.kill()
+            except Exception:
+                pass
 
     def run(self):
         try:
+            if self._is_cancelled:
+                return
             audio_path = self.audio_path if self.audio_path and os.path.exists(self.audio_path) else ""
             if not audio_path and self.video_path and os.path.exists(self.video_path):
                 temp_audio = self.temp_audio_path
                 if temp_audio and not os.path.exists(temp_audio):
                     os.makedirs(os.path.dirname(temp_audio), exist_ok=True)
                     ffmpeg = os.path.join(bin_path("ffmpeg"), "ffmpeg.exe")
-                    subprocess.run(
-                        [
-                            ffmpeg,
-                            "-y",
-                            "-loglevel",
-                            "error",
-                            "-i",
-                            self.video_path,
-                            "-vn",
-                            "-acodec",
-                            "pcm_s16le",
-                            "-ar",
-                            "16000",
-                            "-ac",
-                            "1",
-                            temp_audio,
-                        ],
-                        check=True,
-                        timeout=60,
-                        **subprocess_hidden_kwargs(),
-                    )
+                    try:
+                        self._proc = subprocess.Popen(
+                            [
+                                ffmpeg,
+                                "-y",
+                                "-loglevel",
+                                "error",
+                                "-i",
+                                self.video_path,
+                                "-vn",
+                                "-acodec",
+                                "pcm_s16le",
+                                "-ar",
+                                "16000",
+                                "-ac",
+                                "1",
+                                temp_audio,
+                            ],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            **subprocess_hidden_kwargs(),
+                        )
+                        self._proc.wait(timeout=60)
+                    finally:
+                        self._proc = None
+
+                if self._is_cancelled:
+                    return
                 if temp_audio and os.path.exists(temp_audio):
                     audio_path = temp_audio
 
-            if not audio_path or not os.path.exists(audio_path):
+            if not audio_path or not os.path.exists(audio_path) or self._is_cancelled:
                 self.finished.emit(self.request_signature, [], 0.0, "")
                 return
 
@@ -468,11 +490,14 @@ class TimelineWaveformWorker(QThread):
             from pydub import AudioSegment
             import numpy as np
 
+            if self._is_cancelled:
+                return
+
             audio = AudioSegment.from_file(audio_path).set_channels(1)
             samples = np.array(audio.get_array_of_samples(), dtype=np.float32)
             duration_s = max(0.0, len(audio) / 1000.0)
 
-            if not samples.size:
+            if not samples.size or self._is_cancelled:
                 self.finished.emit(self.request_signature, [], duration_s, "")
                 return
 
@@ -493,6 +518,8 @@ class TimelineWaveformWorker(QThread):
             chunk_size = max(256, int(np.ceil(samples.size / max(1, bucket_count))))
             waveform = []
             for start in range(0, samples.size, chunk_size):
+                if self._is_cancelled:
+                    return
                 chunk = samples[start:start + chunk_size]
                 if not chunk.size:
                     waveform.append(0.0)
@@ -503,10 +530,13 @@ class TimelineWaveformWorker(QThread):
                 value = max(peak_value, rms_value * 1.15)
                 waveform.append(min(1.0, max(0.03, value ** 0.85)))
 
+            if self._is_cancelled:
+                return
             self.finished.emit(self.request_signature, waveform, duration_s, "")
         except Exception as exc:
-            details = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)).strip()
-            self.finished.emit(self.request_signature, [], 0.0, details or str(exc))
+            if not self._is_cancelled:
+                details = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)).strip()
+                self.finished.emit(self.request_signature, [], 0.0, details or str(exc))
 
 
 class TimelineThumbnailWorker(QThread):
@@ -518,10 +548,21 @@ class TimelineThumbnailWorker(QThread):
         self.video_path = str(video_path or "").strip()
         self.duration_s = max(0.0, float(duration_s or 0.0))
         self.thumb_dir = str(thumb_dir or "").strip()
+        self._is_cancelled = False
+        self._proc = None
+
+    def cancel(self):
+        self._is_cancelled = True
+        proc = self._proc
+        if proc is not None:
+            try:
+                proc.kill()
+            except Exception:
+                pass
 
     def run(self):
         try:
-            if not self.video_path or not os.path.exists(self.video_path) or self.duration_s <= 0.0:
+            if not self.video_path or not os.path.exists(self.video_path) or self.duration_s <= 0.0 or self._is_cancelled:
                 self.finished.emit(self.request_signature, [], "")
                 return
 
@@ -541,15 +582,9 @@ class TimelineThumbnailWorker(QThread):
                 self.finished.emit(self.request_signature, [], "")
                 return
 
-            # Adapt density to media length: short clips need frequent visual
-            # landmarks, while long videos stay bounded for fast preparation.
-            if self.duration_s <= 60.0:
-                interval_s = max(2.0, self.duration_s / 12.0)
-            elif self.duration_s <= 300.0:
-                interval_s = max(5.0, self.duration_s / 30.0)
-            else:
-                interval_s = max(20.0, self.duration_s / 90.0)
-            thumb_count = max(1, min(120, int(math.ceil(self.duration_s / interval_s))))
+            # Keep thumbnail count bounded (10-14 thumbs max) for instant timeline rendering
+            thumb_count = min(14, max(4, int(math.ceil(self.duration_s / 25.0))))
+            interval_s = self.duration_s / max(1, thumb_count)
             if self.duration_s <= 1.0:
                 timestamps = [0.0]
             else:
@@ -572,6 +607,8 @@ class TimelineThumbnailWorker(QThread):
 
             thumbnails = []
             for idx, timestamp_s in enumerate(timestamps):
+                if self._is_cancelled:
+                    return
                 output_path = os.path.join(self.thumb_dir, f"{digest}_{idx:02d}.jpg")
                 if not os.path.exists(output_path):
                     cmd = [
@@ -584,30 +621,37 @@ class TimelineThumbnailWorker(QThread):
                         "-frames:v",
                         "1",
                         "-q:v",
-                        "4",
+                        "5",
                         "-vf",
                         "scale=180:-1:force_original_aspect_ratio=decrease",
                         output_path,
                     ]
                     try:
-                        subprocess.run(
+                        self._proc = subprocess.Popen(
                             cmd,
                             stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL,
-                            check=False,
-                            timeout=20,
                             startupinfo=startupinfo,
                             creationflags=creationflags,
                         )
+                        self._proc.wait(timeout=10)
                     except Exception:
                         continue
+                    finally:
+                        self._proc = None
+
+                if self._is_cancelled:
+                    return
                 if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
                     thumbnails.append((float(timestamp_s), output_path))
 
+            if self._is_cancelled:
+                return
             self.finished.emit(self.request_signature, thumbnails, "")
         except Exception as exc:
-            details = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)).strip()
-            self.finished.emit(self.request_signature, [], details or str(exc))
+            if not self._is_cancelled:
+                details = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)).strip()
+                self.finished.emit(self.request_signature, [], details or str(exc))
 
 
 class PrepareWorkflowWorker(QThread):

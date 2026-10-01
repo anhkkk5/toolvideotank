@@ -222,11 +222,44 @@ def classify_ocr_segments_multimodal(
         is_noise = False
         gender = item.get("gender", "unknown")
 
+        # Kiểm tra dấu hiệu chữ rác trên màn hình điện thoại / app giải toán / tài liệu học tập
+        STRONG_SCREEN_NOISE = (
+            "题目解答", "去搜书", "参考答案", "答案来源", "关键考查点",
+            "日期跨度的计算", "日两图时计算", "讲解中 月从月日到", "秒出解题步骤", "加错题本",
+            "平均每天花餐饮费", "平均商的色用", "解颐核心思路", "求平均每天的餐饮费",
+        )
+        PHONE_UI_KEYWORDS = (
+            "题目解答", "去搜书", "参考答案", "答案来源", "解析", "关键考查点", "考查点",
+            "解题步骤", "核心思路", "加错题本", "相关解答", "单元测试", "试卷",
+            "日期跨度", "分段计算", "讲解中", "秒出解题步骤", "平均商", "餐饮费", "日两图",
+            "图时计算", "日日示购", "总费用除", "求平均", "除以总天数",
+        )
+        cjk_chars = re.findall(r"[\u3400-\u9fff]", text)
+        cjk_len = len(cjk_chars)
+        dur = max(0.2, end - start)
+        rate = cjk_len / dur
+
+        is_strong_noise = any(kw in text for kw in STRONG_SCREEN_NOISE)
+        ui_kw_count = sum(1 for kw in PHONE_UI_KEYWORDS if kw in text)
+        is_screen_doc_noise = (
+            is_strong_noise
+            or ui_kw_count >= 2
+            or (ui_kw_count >= 1 and (cjk_len >= 18 or rate >= 10.0))
+        )
+
         # LUẬT 1: Chữ dẫn chuyện / địa danh (Narrative Cue) ➔ Tuyệt đối KHÔNG REJECT
         if is_narrative:
             status = "review"
             reason = "narrative_context_no_speech" if speech_cov < 0.20 else "narrative_cue_with_speech"
             is_noise = False
+
+        # LUẬT 1.5: Rác màn hình điện thoại / app giải toán / tài liệu không khớp ASR ➔ REJECT
+        elif is_screen_doc_noise and best_asr_align < 0.25:
+            status = "static_text"
+            reason = "screen_document_ui_noise"
+            is_noise = True
+            gender = "none"
+            item["skip_tts"] = True
 
         # LUẬT 2: Bằng chứng giọng nói vững chắc ➔ CONFIRMED (Đủ bằng chứng tự động)
         elif speech_cov >= 0.50 or (speech_cov >= 0.25 and best_asr_align >= 0.35):
@@ -410,3 +443,195 @@ def fill_ocr_gaps_with_speech(
     combined = _normalize_timeline(_merge_near_duplicate_ocr(combined))
     print(f"[Multimodal Fusion] Gap fill added {additions} missing speech turn(s).")
     return combined
+
+
+def align_cues_with_asr_and_vad(
+    cues: List[Dict[str, Any]],
+    asr_segments: Optional[List[Dict[str, Any]]] = None,
+    vad_intervals: Optional[List[Any]] = None,
+) -> List[Dict[str, Any]]:
+    """Căn chỉnh ranh giới thời gian (start & end) của từng phụ đề bằng SenseVoice ASR & Silero VAD.
+    
+    Giải quyết triệt để:
+    1. Cắt âm thanh đúng từng câu, loại bỏ hiện tượng câu trước bị kéo dài nuốt sang câu sau (chữ lưu trên màn hình).
+    2. Bảo toàn trọn vẹn câu sau không bị mất đoạn đầu.
+    3. Giúp mô hình Gender AI nhận diện chuẩn 100% âm học của từng nhân vật mà không bị lọt giọng đối phương.
+    4. Giúp chức năng Nghe và Tải MP3 phát đúng trọn vẹn câu thoại.
+    """
+    if not cues:
+        return []
+
+    # 1. Chuẩn hóa VAD speech intervals
+    raw_intervals = vad_intervals or []
+    norm_vad: List[Tuple[float, float]] = []
+    for v in raw_intervals:
+        if isinstance(v, dict):
+            vs, ve = float(v.get("start", 0.0)), float(v.get("end", 0.0))
+        elif isinstance(v, (tuple, list)) and len(v) >= 2:
+            vs, ve = float(v[0]), float(v[1])
+        else:
+            continue
+        if ve > vs:
+            norm_vad.append((vs, ve))
+    norm_vad.sort(key=lambda x: x[0])
+
+    # 2. Chuẩn hóa ASR segments
+    norm_asr: List[Dict[str, Any]] = []
+    for asr in (asr_segments or []):
+        if not isinstance(asr, dict):
+            continue
+        txt = str(asr.get("text", "")).strip()
+        as_s = float(asr.get("start", 0.0))
+        as_e = float(asr.get("end", as_s))
+        if as_e > as_s and txt:
+            norm_asr.append({
+                "start": as_s,
+                "end": as_e,
+                "text": txt,
+                "cjk": "".join(_CJK_RE.findall(txt)),
+            })
+    norm_asr.sort(key=lambda x: x["start"])
+
+    aligned_cues: List[Dict[str, Any]] = []
+
+    for idx, cue in enumerate(cues):
+        item = dict(cue)
+        c_start = float(item.get("start", 0.0))
+        c_end = float(item.get("end", c_start + 0.1))
+        t_raw = str(item.get("text", "") or item.get("original_text", "")).strip()
+        t_cjk = "".join(_CJK_RE.findall(t_raw))
+        num_cjk = len(t_cjk) if t_cjk else len(t_raw)
+
+        # Thời lượng nói ước tính dựa trên số lượng chữ tiếng Trung (trung bình 3 - 4 chữ Hán / giây)
+        est_dur = max(0.8, num_cjk * 0.32 + 0.35)
+
+        best_asr = None
+        best_asr_score = 0.0
+
+        # --- A. TÌM KIẾM ASR KHỚP TỐT NHẤT ---
+        for asr in norm_asr:
+            as_s, as_e = asr["start"], asr["end"]
+            # Khoảng thời gian trong phạm vi +/- 2.5s
+            if as_e < c_start - 2.5 or as_s > c_end + 2.5:
+                continue
+
+            as_cjk = asr["cjk"]
+            if not as_cjk:
+                continue
+
+            # Độ tương đồng ký tự Hán
+            sim = SequenceMatcher(None, t_cjk, as_cjk).ratio()
+
+            # Substring match (Một bên chứa bên kia)
+            is_sub = (t_cjk in as_cjk) or (as_cjk in t_cjk)
+            sub_bonus = 0.35 if is_sub and min(len(t_cjk), len(as_cjk)) >= 2 else 0.0
+
+            # Điểm thời gian giao thoa
+            time_overlap = max(0.0, min(c_end, as_e) - max(c_start, as_s))
+            time_score = min(0.3, time_overlap / max(0.1, min(c_end - c_start, as_e - as_s)))
+
+            total_score = sim + sub_bonus + time_score
+
+            if total_score > best_asr_score and (sim >= 0.50 or is_sub):
+                best_asr_score = total_score
+                best_asr = asr
+
+        new_start = c_start
+        new_end = c_end
+
+        if best_asr and best_asr_score >= 0.70:
+            as_s = float(best_asr["start"])
+            as_e = float(best_asr["end"])
+            as_cjk = best_asr["cjk"]
+            total_dur = max(0.4, as_e - as_s)
+            total_chars = max(1, len(as_cjk))
+
+            # Tìm vị trí xuất hiện của t_cjk trong as_cjk
+            pos = as_cjk.find(t_cjk)
+            matched_len = len(t_cjk)
+
+            # Nếu không tìm thấy exact substring, tìm chuỗi con chung dài nhất (LCS)
+            if pos == -1:
+                matcher = SequenceMatcher(None, t_cjk, as_cjk)
+                match = matcher.find_longest_match(0, len(t_cjk), 0, len(as_cjk))
+                if match.size >= 2:
+                    pos = match.b
+                    matched_len = match.size
+
+            # Chỉ áp dụng nội suy vị trí nếu chunk ASR ngắn (<= 6.0s).
+            # Với các chunk dài do nhạc nền, nội suy ký tự tuyến tính có thể gây lệch hàng chục giây!
+            if pos != -1 and total_chars > 0 and total_dur <= 6.0:
+                start_ratio = max(0.0, pos / total_chars)
+                end_ratio = min(1.0, (pos + num_cjk) / total_chars)
+
+                sub_s = as_s + total_dur * start_ratio
+                sub_e = as_s + total_dur * end_ratio
+
+                if (sub_e - sub_s) < est_dur * 0.75:
+                    sub_e = sub_s + est_dur
+
+                if abs(sub_s - c_start) <= 0.85:
+                    new_start = sub_s
+                new_end = sub_e
+            else:
+                # Với chunk ASR dài, snap nhẹ vào VAD interval gần nhất nếu có
+                close_vad = [v for v in norm_vad if abs(v[0] - c_start) <= 0.60]
+                if close_vad:
+                    new_start = close_vad[0][0]
+
+            item["aligned_source"] = "asr"
+            item["asr_matched"] = best_asr["text"]
+        else:
+            # --- B. CĂN CHỈNH BẰNG VAD INTERVALS ---
+            slot_vad = [v for v in norm_vad if max(c_start - 0.2, v[0]) < min(c_end + 0.2, v[1])]
+            if slot_vad:
+                first_vs = min(v[0] for v in slot_vad)
+                last_ve = max(v[1] for v in slot_vad)
+
+                if abs(first_vs - c_start) <= 0.60:
+                    new_start = max(0.0, first_vs - 0.05)
+
+                if (c_end - c_start) > est_dur + 0.9:
+                    suitable_ve = c_end
+                    for v in slot_vad:
+                        if v[1] <= c_start + est_dur + 0.6:
+                            suitable_ve = v[1]
+                    new_end = max(new_start + 0.6, suitable_ve + 0.1)
+                else:
+                    new_end = min(c_end, last_ve + 0.1)
+
+                item["aligned_source"] = "vad"
+
+        # RÀNG BUỘC BẤT BIẾN (Hard Anchor Invariant):
+        # Mốc OCR xuất hiện trên video là sự thật thị giác, tuyệt đối không cho phép
+        # bất kỳ phép tính nào kéo trôi start lệch quá 0.8s so với c_start gốc!
+        if abs(new_start - c_start) > 0.80:
+            new_start = c_start
+
+        # Giới hạn thời lượng tối đa an toàn theo số chữ Hán (tránh chữ rác bìa sách kéo dài 10-15s)
+        max_dur = max(1.0, min(4.5, num_cjk * 0.38 + 0.50))
+        new_end = min(max(new_start + 0.45, new_end), new_start + max_dur)
+
+        item["start"] = round(new_start, 2)
+        item["end"] = round(new_end, 2)
+        aligned_cues.append(item)
+
+    # --- C. CHỐNG CHỒNG LẤN AN TOÀN - TUYỆT ĐỐI KHÔNG GÂY HIỆU ỨNG THÁC LỆCH THỜI GIAN ---
+    # Nguyên tắc: start của câu sau (next_s) được neo bởi frame xuất hiện trên video.
+    # Khi câu trước bị chồng lấn, chỉ cắt bớt phần đuôi của câu trước,
+    # TUYỆT ĐỐI KHÔNG đẩy lùi next_s về tương lai (tránh domino xô lệch 40-50s).
+    aligned_cues.sort(key=lambda x: float(x.get("start", 0.0)))
+    for i in range(len(aligned_cues) - 1):
+        cur_c = aligned_cues[i]
+        next_c = aligned_cues[i + 1]
+
+        cur_s = float(cur_c.get("start", 0.0))
+        cur_e = float(cur_c.get("end", 0.0))
+        next_s = float(next_c.get("start", 0.0))
+
+        if cur_e >= next_s:
+            safe_cur_e = max(cur_s + 0.35, next_s - 0.04)
+            cur_c["end"] = round(safe_cur_e, 2)
+
+    return aligned_cues
+

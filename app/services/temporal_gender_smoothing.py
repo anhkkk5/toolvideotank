@@ -74,8 +74,8 @@ class TemporalGenderSmoothingService:
                 trust = str(c.get("raw_confidence_trust", "LOW")).upper()
                 qual = str(c.get("audio_quality", "low")).lower()
 
-                # Anchor mạnh: BẮT BUỘC phải là âm thanh sạch (clean) và trust HIGH
-                is_anchor = (qual == "clean" and trust == "HIGH" and raw_c >= 0.85)
+                # Anchor mạnh: Độ tự tin cao (>= 0.85) và chất lượng âm thanh tốt hoặc chưa bị đánh dấu degraded
+                is_anchor = (raw_c >= 0.85 and qual != "low")
                 if is_anchor:
                     if raw_g == "male":
                         male_anchors.append((idx, raw_c))
@@ -107,11 +107,11 @@ class TemporalGenderSmoothingService:
                 trust = str(c.get("raw_confidence_trust", "LOW")).upper()
                 cid = c.get("id")
 
-                # Bằng chứng chống smoothing: nếu câu có audio sạch và tự tin cao khác với target_gender
-                if c.get("audio_quality") == "clean" and raw_g != target_gender and raw_c >= 0.85:
+                # Bằng chứng chống smoothing: nếu câu có độ tự tin cao (>= 0.80) khác với target_gender, giữ nguyên!
+                if raw_c >= 0.80 and raw_g in {"male", "female"} and raw_g != target_gender:
                     continue
 
-                is_weak = (trust in {"LOW", "MEDIUM"} or float(c.get("speech_duration", 0.0)) < 1.1)
+                is_weak = (raw_c < 0.80 or trust in {"LOW", "MEDIUM"} or float(c.get("speech_duration", 0.0)) < 1.1)
 
                 if is_weak and raw_g != target_gender:
                     c["final_gender"] = target_gender

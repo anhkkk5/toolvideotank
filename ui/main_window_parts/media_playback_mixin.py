@@ -402,12 +402,25 @@ class MediaPlaybackMixin:
             self._timeline_waveform_duration_s = 0.0
             self.timeline.set_waveform_data([], 0.0)
             return
+
+        if not hasattr(self, "_timeline_waveform_dict_cache"):
+            self._timeline_waveform_dict_cache = {}
+        if request_signature in self._timeline_waveform_dict_cache:
+            samples, dur_s = self._timeline_waveform_dict_cache[request_signature]
+            self._desired_timeline_waveform_request = request_signature
+            self._timeline_waveform_cache_key = request_signature
+            self._timeline_waveform_samples = samples
+            self._timeline_waveform_duration_s = dur_s
+            self.timeline.set_waveform_data(samples, dur_s)
+            return
+
         launcher_cache = self._load_launcher_timeline_visual_cache()
         if launcher_cache and launcher_cache.get("waveform"):
             self._desired_timeline_waveform_request = request_signature
             self._timeline_waveform_cache_key = request_signature
             self._timeline_waveform_samples = list(launcher_cache.get("waveform") or [])
             self._timeline_waveform_duration_s = max(0.0, float(launcher_cache.get("duration_s") or 0.0))
+            self._timeline_waveform_dict_cache[request_signature] = (self._timeline_waveform_samples, self._timeline_waveform_duration_s)
             self.timeline.set_waveform_data(
                 self._timeline_waveform_samples, self._timeline_waveform_duration_s
             )
@@ -420,7 +433,13 @@ class MediaPlaybackMixin:
             return
         worker = self._timeline_waveform_worker
         if worker is not None and worker.isRunning():
-            return
+            if getattr(worker, "request_signature", None) == request_signature:
+                return
+            try:
+                worker.cancel()
+            except Exception:
+                pass
+            self._timeline_waveform_worker = None
         video_path = self._normalize_local_file_path(
             self.video_path_edit.text().strip() if hasattr(self, "video_path_edit") else ""
         )
@@ -437,6 +456,8 @@ class MediaPlaybackMixin:
         if request_signature != self._desired_timeline_waveform_request:
             self.refresh_timeline_waveform()
             return
+        if not hasattr(self, "_timeline_waveform_dict_cache"):
+            self._timeline_waveform_dict_cache = {}
         if error:
             print(f"[Timeline] waveform generation failed: {error}")
             self._timeline_waveform_cache_key = request_signature
@@ -446,6 +467,10 @@ class MediaPlaybackMixin:
             self._timeline_waveform_cache_key = request_signature
             self._timeline_waveform_samples = list(waveform or [])
             self._timeline_waveform_duration_s = max(0.0, float(duration_s or 0.0))
+            self._timeline_waveform_dict_cache[request_signature] = (
+                self._timeline_waveform_samples,
+                self._timeline_waveform_duration_s,
+            )
             print(
                 f"[Timeline] waveform generated: samples={len(self._timeline_waveform_samples)} "
                 f"duration={self._timeline_waveform_duration_s:.1f}s"
@@ -454,7 +479,7 @@ class MediaPlaybackMixin:
             self.timeline.set_waveform_data(self._timeline_waveform_samples, self._timeline_waveform_duration_s)
 
 
-    def schedule_timeline_visual_refresh(self, *, waveform: bool = True, thumbnails: bool = True, delay_ms: int = 40):
+    def schedule_timeline_visual_refresh(self, *, waveform: bool = True, thumbnails: bool = True, delay_ms: int = 250):
         # V1/A1 visuals are tied only to the source media, not to a pipeline
         # stage. They are static cached assets and may be prepared as soon as
         # a video is opened.
@@ -490,6 +515,17 @@ class MediaPlaybackMixin:
             self._desired_timeline_thumbnail_request = None
             self.timeline.set_video_thumbnails([])
             return
+
+        if not hasattr(self, "_timeline_thumbnail_dict_cache"):
+            self._timeline_thumbnail_dict_cache = {}
+        if request_signature in self._timeline_thumbnail_dict_cache:
+            pixmaps = self._timeline_thumbnail_dict_cache[request_signature]
+            self._desired_timeline_thumbnail_request = request_signature
+            self._timeline_video_thumb_cache_key = request_signature
+            self._timeline_video_thumbnails = pixmaps
+            self.timeline.set_video_thumbnails(pixmaps)
+            return
+
         launcher_cache = self._load_launcher_timeline_visual_cache()
         if launcher_cache and launcher_cache.get("thumbnails"):
             pixmaps = []
@@ -501,6 +537,7 @@ class MediaPlaybackMixin:
                 self._desired_timeline_thumbnail_request = request_signature
                 self._timeline_video_thumb_cache_key = request_signature
                 self._timeline_video_thumbnails = pixmaps
+                self._timeline_thumbnail_dict_cache[request_signature] = pixmaps
                 self.timeline.set_video_thumbnails(pixmaps)
                 return
         self._desired_timeline_thumbnail_request = request_signature
@@ -509,7 +546,13 @@ class MediaPlaybackMixin:
             return
         worker = self._timeline_thumbnail_worker
         if worker is not None and worker.isRunning():
-            return
+            if getattr(worker, "request_signature", None) == request_signature:
+                return
+            try:
+                worker.cancel()
+            except Exception:
+                pass
+            self._timeline_thumbnail_worker = None
         video_path = self._normalize_local_file_path(self.video_path_edit.text().strip())
         duration_s = max(0.0, float(self.timeline.duration or 0) / 1000.0)
         thumb_dir = os.path.join(self.get_workspace_temp_root(create=True), "timeline_thumbnails")
@@ -524,6 +567,8 @@ class MediaPlaybackMixin:
         if request_signature != self._desired_timeline_thumbnail_request:
             self.refresh_timeline_video_thumbnails()
             return
+        if not hasattr(self, "_timeline_thumbnail_dict_cache"):
+            self._timeline_thumbnail_dict_cache = {}
         if error:
             print(f"[Timeline] thumbnail generation failed: {error}")
             self._timeline_video_thumb_cache_key = request_signature
@@ -536,6 +581,7 @@ class MediaPlaybackMixin:
                     pixmaps.append((float(timestamp_s), pixmap))
             self._timeline_video_thumb_cache_key = request_signature
             self._timeline_video_thumbnails = pixmaps
+            self._timeline_thumbnail_dict_cache[request_signature] = pixmaps
         if hasattr(self, "timeline"):
             self.timeline.set_video_thumbnails(self._timeline_video_thumbnails)
 
@@ -2112,11 +2158,15 @@ class MediaPlaybackMixin:
     def apply_segments_to_timeline(self):
         segs = self.get_active_segments()
         if segs:
-            settings = getattr(self.current_project_state, "settings", {}) or {}
-            predict_speed_ratios(
-                segs,
-                normalizer_dictionary=dict(settings.get("normalizer_dictionary", {}) or {}),
-            )
+            try:
+                from workflows.voice_workflow import predict_speed_ratios
+                settings = getattr(self.current_project_state, "settings", {}) or {}
+                predict_speed_ratios(
+                    segs,
+                    normalizer_dictionary=dict(settings.get("normalizer_dictionary", {}) or {}),
+                )
+            except Exception:
+                pass
         self.timeline.set_segments(segs if segs else [])
         self.schedule_timeline_visual_refresh(waveform=True, thumbnails=True)
         # Configure the Qt subtitle overlay before showing its drag target.

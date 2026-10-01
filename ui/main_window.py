@@ -543,7 +543,7 @@ class VideoTranslatorGUI(QMainWindow, VoiceGenderMixin, ProjectSettingsMixin, Vi
         self._filter_preview_blur_was_checked = False
         self._filter_preview_ocr_was_editable = False
         self._suspend_ocr_overlay = False
-        self._ocr_overlay_visible = True
+        self._ocr_overlay_visible = False
         self._ocr_translator_active = False
         self._ocr_translator_rect = (0.2, 0.2, 0.6, 0.25)
         self._ocr_translator_capture_worker = None
@@ -987,11 +987,8 @@ class VideoTranslatorGUI(QMainWindow, VoiceGenderMixin, ProjectSettingsMixin, Vi
             state.set_setting("transcription_engine", engine)
             self.project_service.save_project(state)
         if engine != previous:
-            # A new OCR project needs the crop editor immediately. Existing
-            # projects with completed OCR remain unobstructed until the user
-            # explicitly reopens the region tool.
-            if engine == "ocr" and not self.current_segments and not self.transcript_text.toPlainText().strip():
-                self._ocr_overlay_visible = True
+            # OCR overlay stays hidden until user explicitly clicks the OCR button
+            self._ocr_overlay_visible = False
             timeline = getattr(self, "timeline", None)
             if timeline is not None:
                 timeline.clear_selection_range()
@@ -1400,8 +1397,8 @@ class VideoTranslatorGUI(QMainWindow, VoiceGenderMixin, ProjectSettingsMixin, Vi
         # the new per-track volume controls.
         if not music_tracks and not voice_path:
             for candidate in (
-                self.processed_artifacts.get("mixed_vi"),
-                self.last_mixed_vi_path,
+                getattr(self, "processed_artifacts", {}).get("mixed_vi") if hasattr(self, "processed_artifacts") else None,
+                getattr(self, "last_mixed_vi_path", None),
             ):
                 normalized = self._normalize_local_file_path(candidate)
                 if normalized and os.path.exists(normalized):
@@ -2231,7 +2228,7 @@ class VideoTranslatorGUI(QMainWindow, VoiceGenderMixin, ProjectSettingsMixin, Vi
             video_path=self.video_path_edit.text(),
             transcript_text=self.transcript_text.toPlainText(),
             translated_text=self.translated_text.toPlainText(),
-            translated_srt_path=self.last_translated_srt_path,
+            translated_srt_path=getattr(self, "last_translated_srt_path", ""),
             selected_audio_path=self.resolve_selected_audio_path(),
             mode=self.get_output_mode_key(),
             pipeline_active=getattr(self, "_pipeline_active", False),
@@ -2338,7 +2335,7 @@ class VideoTranslatorGUI(QMainWindow, VoiceGenderMixin, ProjectSettingsMixin, Vi
         artifacts = getattr(state, "artifacts", {}) or {}
         steps = getattr(state, "steps", {}) or {}
         has_video = bool(video_path and os.path.exists(video_path))
-        transcript = bool(self.current_segments) or bool(artifacts.get("transcript_segments"))
+        transcript = bool(getattr(self, "current_segments", None)) or bool(artifacts.get("transcript_segments"))
         # PrepareWorkflow writes a compatibility SRT even when translation is
         # intentionally skipped. Only a completed translation artifact/step
         # unlocks the next Step-by-Step action.
@@ -2352,7 +2349,7 @@ class VideoTranslatorGUI(QMainWindow, VoiceGenderMixin, ProjectSettingsMixin, Vi
         )
         tts_skipped = bool(state and state.settings.get("tts_skipped", False))
         voice = not tts_skipped and bool(
-            artifacts.get("voice_vi") or artifacts.get("mixed_vi") or self.last_voice_vi_path or self.last_mixed_vi_path
+            artifacts.get("voice_vi") or artifacts.get("mixed_vi") or getattr(self, "last_voice_vi_path", None) or getattr(self, "last_mixed_vi_path", None)
         )
         exported = bool(artifacts.get("final_video"))
         running = str(getattr(self, "_pipeline_step", "") or "") if getattr(self, "_pipeline_active", False) else ""
@@ -2405,7 +2402,7 @@ class VideoTranslatorGUI(QMainWindow, VoiceGenderMixin, ProjectSettingsMixin, Vi
             self._generate_tts_skip_action.setEnabled(translated and not self._pipeline_active)
 
     def update_preview_context_label(self, has_subtitles: bool, has_voice_audio: bool):
-        subtitle_source = "Vietnamese review track" if self.current_translated_segments else ("original subtitle track" if self.current_segments else "no subtitle track yet")
+        subtitle_source = "Vietnamese review track" if getattr(self, "current_translated_segments", None) else ("original subtitle track" if getattr(self, "current_segments", None) else "no subtitle track yet")
         # Audio is composed from independent timeline tracks now; do not
         # surface the removed "Use generated..." / "Use existing..." source
         # selector terminology in the preview context text.
@@ -3820,7 +3817,7 @@ class VideoTranslatorGUI(QMainWindow, VoiceGenderMixin, ProjectSettingsMixin, Vi
     # Subtitle source handling
     # -----------------------------
     def get_active_segments(self):
-        base = self.current_translated_segments or self.current_segments or []
+        base = getattr(self, "current_translated_segments", None) or getattr(self, "current_segments", None) or []
         if base and bool(getattr(self, "subtitle_single_line_cb", None) and self.subtitle_single_line_cb.isChecked()):
             split = getattr(self, "_single_line_split_cache", None)
             if split is not None:
@@ -4145,7 +4142,7 @@ class VideoTranslatorGUI(QMainWindow, VoiceGenderMixin, ProjectSettingsMixin, Vi
         translation_ready = self._translation_phase_complete()
         selected_audio_path = self.resolve_selected_audio_path()
         has_voice_audio = bool(selected_audio_path and os.path.exists(selected_audio_path))
-        has_subtitle_track = bool(self.last_translated_srt_path and os.path.exists(self.last_translated_srt_path))
+        has_subtitle_track = bool(getattr(self, "last_translated_srt_path", None) and os.path.exists(getattr(self, "last_translated_srt_path", "")))
         mode = self.get_output_mode_key()
         steps = getattr(getattr(self, "current_project_state", None), "steps", {}) or {}
         voice_running = steps.get("generate_tts") == "running" or steps.get("mix_audio") == "running"
@@ -4252,7 +4249,7 @@ class VideoTranslatorGUI(QMainWindow, VoiceGenderMixin, ProjectSettingsMixin, Vi
         # available. Keep the shared + Layer menu usable for manual fixes
         # without unlocking the unrelated overlay-layer actions early.
         if hasattr(self, "add_layer_btn"):
-            has_subtitle_segments = bool(self.current_segments or self.current_translated_segments)
+            has_subtitle_segments = bool(getattr(self, "current_segments", None) or getattr(self, "current_translated_segments", None))
             self.add_layer_btn.setEnabled((self._optional_layer_controls_ready or has_subtitle_segments) and not review_mode)
         if hasattr(self, "blur_add_btn"):
             self.blur_add_btn.setEnabled(
@@ -4726,9 +4723,38 @@ class VideoTranslatorGUI(QMainWindow, VoiceGenderMixin, ProjectSettingsMixin, Vi
             QMessageBox.warning(self, "Chạy toàn bộ quy trình", "Vui lòng chọn hoặc kéo thả một tệp video trước.")
             return
 
-        # 1. Tự động lấy khung che chữ Trung từ vùng OCR / Blur Region người dùng đã vẽ
+        # 1. Tự động lấy khung che chữ Trung từ vùng OCR người dùng đã quét trên video
         blur_rect = None
-        if hasattr(self, "video_view") and hasattr(self.video_view, "get_blur_region_normalized"):
+        # ƯU TIÊN SỐ 1: Khung OCR trực tiếp trên giao diện Preview
+        for attr in ("ocr_region_overlay", "ocr_overlay"):
+            ov = getattr(self, attr, None)
+            if not ov and hasattr(self, "preview_panel"):
+                ov = getattr(self.preview_panel, attr, None)
+            if ov and hasattr(ov, "get_norm_rect"):
+                r = ov.get_norm_rect()
+                if r and len(r) == 4 and r[2] > 0.01 and r[3] > 0.01:
+                    blur_rect = tuple(r)
+                    break
+        
+        # ƯU TIÊN SỐ 2: Tra trong từ điển lưu vết OCR của video
+        if not blur_rect and hasattr(self, "_video_ocr_rects"):
+            norm_v = os.path.normpath(video_path) if video_path else ""
+            if norm_v in self._video_ocr_rects:
+                blur_rect = self._video_ocr_rects[norm_v]
+
+        # ƯU TIÊN SỐ 3: Biến môi trường OCR_SUBTITLE_RECT
+        if not blur_rect:
+            rect_env = os.getenv("OCR_SUBTITLE_RECT", "").strip()
+            if rect_env:
+                try:
+                    parts = [float(p) for p in rect_env.split(",")]
+                    if len(parts) == 4 and parts[2] > 0 and parts[3] > 0:
+                        blur_rect = (parts[0], parts[1], parts[2], parts[3])
+                except Exception:
+                    pass
+
+        # ƯU TIÊN SỐ 4: Vùng blur_overlay nếu người dùng chủ động vẽ
+        if not blur_rect and hasattr(self, "video_view") and hasattr(self.video_view, "get_blur_region_normalized"):
             try:
                 norm_blur = self.video_view.get_blur_region_normalized()
                 if isinstance(norm_blur, dict):
@@ -4748,16 +4774,6 @@ class VideoTranslatorGUI(QMainWindow, VoiceGenderMixin, ProjectSettingsMixin, Vi
                     )
             except Exception:
                 blur_rect = None
-
-        if not blur_rect:
-            rect_env = os.getenv("OCR_SUBTITLE_RECT", "").strip()
-            if rect_env:
-                try:
-                    parts = [float(p) for p in rect_env.split(",")]
-                    if len(parts) == 4 and parts[2] > 0 and parts[3] > 0:
-                        blur_rect = (parts[0], parts[1], parts[2], parts[3])
-                except Exception:
-                    blur_rect = None
 
         # 2. Mở bảng Setup âm thanh & chọn 1 giọng lồng tiếng
         from ui.dialogs.single_voice_setup_dialog import SingleVoiceSetupDialog
@@ -4781,6 +4797,7 @@ class VideoTranslatorGUI(QMainWindow, VoiceGenderMixin, ProjectSettingsMixin, Vi
         sub_cfg = dialog.get_subtitle_config()
         brand_logo_settings = dialog.get_brand_logo_settings()
         watermark_settings = dialog.get_watermark_settings()
+        delogo_settings = dialog.get_delogo_settings()
 
         # 3. Kiểm tra bản quyền VIP nếu chọn giọng VieNeu
         v_id = selected_voice.get("id", "")
@@ -4816,6 +4833,30 @@ class VideoTranslatorGUI(QMainWindow, VoiceGenderMixin, ProjectSettingsMixin, Vi
             if hasattr(self, "audio_a2_volume_label"):
                 self.audio_a2_volume_label.setText(f"{int(round(tts_vol * 100))}%")
 
+        if getattr(dialog, "save_only", False) or not getattr(dialog, "start_now", False):
+            # Người dùng chọn "💾 Lưu giọng nói", lưu cấu hình vào Media Pool và dừng (không xuất video)
+            norm_v = os.path.normpath(video_path) if video_path else ""
+            if norm_v:
+                v_short = selected_voice.get("name", "").split("(")[0].replace("👩 ", "").replace("👨 ", "").replace("👑 ", "").strip()
+                if not hasattr(self, "_video_voice_configs"):
+                    self._video_voice_configs = {}
+                if norm_v not in self._video_voice_configs:
+                    self._video_voice_configs[norm_v] = {}
+                self._video_voice_configs[norm_v].update({
+                    "voice_mode": "single",
+                    "voice_name": selected_voice.get("id", ""),
+                    "label": v_short,
+                    "orig_volume": int(round(orig_vol * 100)),
+                    "tts_volume": int(round(tts_vol * 100)),
+                    "selected_voice": selected_voice,
+                    "sub_cfg": sub_cfg,
+                    "delogo_settings": delogo_settings,
+                })
+                self._last_single_voice_id = selected_voice.get("id", "adam1")
+                if hasattr(self, "_refresh_media_pool_ui") and callable(self._refresh_media_pool_ui):
+                    self._refresh_media_pool_ui()
+            return
+
         # 5. Đường dẫn file video xuất ra
         output_folder = (
             self.final_output_folder_edit.text().strip()
@@ -4847,13 +4888,15 @@ class VideoTranslatorGUI(QMainWindow, VoiceGenderMixin, ProjectSettingsMixin, Vi
             selected_voice=selected_voice,
             audio_mix_settings=audio_mix,
             enable_blur_mask=enable_blur,
-            blur_rect=blur_rect,
+            mask_mode=dialog.get_mask_mode(),
+            blur_rect=dialog.get_blur_rect() or blur_rect,
             burn_subtitles=burn_subs,
             existing_cues=existing_cues if existing_cues else None,
             output_video_path=output_video_path,
             subtitle_config=sub_cfg,
             brand_logo_settings=brand_logo_settings,
             watermark_settings=watermark_settings,
+            delogo_settings=delogo_settings,
         )
         progress_dlg.exec()
 

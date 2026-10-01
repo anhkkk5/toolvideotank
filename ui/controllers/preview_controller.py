@@ -1319,6 +1319,8 @@ class PreviewController:
             self.gui.update_workflow_stage_badges()
             self.gui.log(f"[Export] Final video exported successfully: {output_path}")
             self.gui.log("[Export] Kept current preview/subtitle state so you can continue editing after export.")
+            if hasattr(self.gui, "toggle_ocr_overlay_visibility"):
+                self.gui.toggle_ocr_overlay_visibility(False)
 
     def on_quick_preview_ready(self, output_path, error):
         if hasattr(self.gui, "ensure_media_backend_ready"):

@@ -44,15 +44,86 @@ class DeepSeekService:
     MAX_RETRIES = 2
     BATCH_SIZE = 35
 
+    @classmethod
+    def resolve_provider_config(cls) -> tuple[str, str, str, str]:
+        """Tự động phân giải provider, display_name, api_key, model_name, base_url theo cài đặt AI.
+        
+        Hỗ trợ:
+        - google_ai_studio (Gemini: gemini-2.5-flash / gemini-1.5-flash)
+        - openai (ChatGPT: gpt-4o-mini / gpt-4o)
+        - deepseek (deepseek-chat)
+        - ollama (gemma / llama cục bộ)
+        """
+        try:
+            from dotenv import load_dotenv
+            load_dotenv(override=False)
+        except Exception:
+            pass
+
+        provider = str(os.getenv("OPENAI_PROVIDER") or os.getenv("AI_POLISHER_PROVIDER") or "deepseek").strip().lower()
+        if provider == "gemini":
+            provider = "google_ai_studio"
+
+        definitions = {
+            "google_ai_studio": (
+                "Google AI Studio (Gemini)",
+                os.getenv("GOOGLE_AI_STUDIO_API_KEY") or os.getenv("OPENAI_API_KEY") or "",
+                os.getenv("GOOGLE_AI_STUDIO_MODEL") or "gemini-2.5-flash",
+                os.getenv("GOOGLE_AI_STUDIO_BASE_URL") or "https://generativelanguage.googleapis.com/v1beta/openai/",
+            ),
+            "deepseek": (
+                "DeepSeek",
+                os.getenv("DEEPSEEK_API_KEY") or "",
+                os.getenv("DEEPSEEK_MODEL") or "deepseek-chat",
+                os.getenv("DEEPSEEK_BASE_URL") or "https://api.deepseek.com",
+            ),
+            "openai": (
+                "OpenAI (ChatGPT)",
+                os.getenv("OPENAI_API_KEY") or "",
+                os.getenv("OPENAI_MODEL") or "gpt-4o-mini",
+                os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1",
+            ),
+            "ollama": (
+                "Ollama (Local LLM)",
+                os.getenv("OPENAI_API_KEY") or "ollama",
+                os.getenv("OPENAI_MODEL") or "gemma4:31b-cloud",
+                os.getenv("OPENAI_BASE_URL") or "http://localhost:11434/v1",
+            ),
+        }
+
+        # 1. Lấy theo cấu hình đã chọn
+        if provider in definitions:
+            disp, key, mdl, url = definitions[provider]
+            if key or provider == "ollama":
+                return disp, key, mdl, url
+
+        # 2. Fallback: Nếu provider cấu hình chưa có key, tìm bất kỳ provider nào đang có key
+        for p_name, (disp, key, mdl, url) in definitions.items():
+            if key and p_name != "ollama":
+                return disp, key, mdl, url
+
+        # 3. Mặc định DeepSeek
+        disp, key, mdl, url = definitions["deepseek"]
+        return disp, key, mdl, url
+
     def __init__(
         self,
         api_key: str = "",
         model_name: str = "",
         base_url: str = "",
+        display_name: str = "",
     ):
-        self.api_key = str(api_key or os.getenv("DEEPSEEK_API_KEY", "")).strip()
-        self.model_name = str(model_name or os.getenv("DEEPSEEK_MODEL", self.DEFAULT_MODEL)).strip()
-        self.base_url = str(base_url or os.getenv("DEEPSEEK_BASE_URL", self.DEFAULT_BASE_URL)).strip()
+        if not api_key:
+            disp, resolved_key, resolved_model, resolved_url = self.resolve_provider_config()
+            self.display_name = display_name or disp
+            self.api_key = str(resolved_key).strip()
+            self.model_name = str(model_name or resolved_model).strip()
+            self.base_url = str(base_url or resolved_url).strip()
+        else:
+            self.display_name = display_name or "AI Model"
+            self.api_key = str(api_key).strip()
+            self.model_name = str(model_name or self.DEFAULT_MODEL).strip()
+            self.base_url = str(base_url or self.DEFAULT_BASE_URL).strip()
         self._client: Any = None
 
     def is_configured(self) -> bool:
@@ -63,7 +134,9 @@ class DeepSeekService:
         if OpenAI is None:
             raise DeepSeekTranslationError("Thư viện 'openai' chưa được cài đặt trong môi trường Python.")
         if not self.api_key:
-            raise DeepSeekTranslationError("Chưa có DEEPSEEK_API_KEY. Vui lòng cấu hình khóa API trong Cài đặt.")
+            raise DeepSeekTranslationError(
+                f"Chưa cấu hình API Key cho {self.display_name}. Vui lòng cấu hình khóa API trong Cài đặt AI."
+            )
         if self._client is None:
             self._client = OpenAI(
                 api_key=self.api_key,
@@ -169,11 +242,28 @@ BỘ NHỚ NHÂN VẬT ĐÃ KHÓA (GLOBAL CHARACTER MEMORY):
      Đặt "is_noise": true và "translated_text": "".
    - Lời thoại nhân vật bình thường: Đặt "is_noise": false và "translated_text": "<nội dung dịch tiếng Việt>".
 
-5. PHÂN VAI GIỚI TÍNH NHÂN VẬT THEO NGỮ CẢNH (BẮT BUỘC):
-   - Dựa vào cốt truyện, cách xưng hô, hành động và diễn biến phim để xác định giới tính người nói:
-     + "male": Nhân vật Nam nói
-     + "female": Nhân vật Nữ nói
-   - RẤT QUAN TRỌNG: Nếu một nhân vật nói liền mạch nhiều câu (ví dụ tỏ tình "Tiểu Đình... Chúng ta... Ở bên nhau đi" hoặc tâm sự dài), BẮT BUỘC toàn bộ các câu trong chuỗi đó phải mang cùng một giới tính!
+5. PHÂN VAI GIỚI TÍNH NHÂN VẬT & ĐỐI THOẠI ĐA NHÂN VẬT (MULTI-SPEAKER):
+   - Video có thể có nhiều nhân vật (2 Nam, 2 Nữ, 4 người, hoặc nhiều hơn).
+     Xác định đúng giới tính thực tế ("male" hoặc "female") cho từng câu thoại dựa vào ngữ cảnh và từ vựng xưng hô.
+   - QUY TẮC NHIỀU NHÂN VẬT CÙNG GIỚI TÍNH (MULTI-SPEAKER CÙNG GIỚI TÍNH):
+     Khi 2 người đàn ông trò chuyện (ví dụ bạn bè khuyên bảo nhau, đồng nghiệp trao đổi), CẢ HAI ĐỀU LÀ "male".
+     Tuyệt đối không được tự ý gán 1 người thành "female" chỉ để ép buộc luân phiên nam-nữ!
+   - QUY TẮC TỪ VỰNG XƯNG HÔ TUYỆT ĐỐI:
+     + "老婆", "老婆大人", "媳妇", "太太" (gọi vợ) -> Người nói BẮT BUỘC 100% là "male".
+     + "老公", "相公" (gọi chồng) -> Người nói BẮT BUỘC 100% là "female".
+   - QUY TẮC ĐẶC BIỆT KHI CÓ TRANH CÃI / TRÁCH MÓC / ĐỐI ĐÁP:
+     Khi một nhân vật đang trách móc hoặc mắng người khác (ví dụ Nam: "你有没有常识呀", "显示屏受潮会坏的"),
+     thì câu ngay sau đó mang tính chất nhận lỗi, xin lỗi hoặc giải thích (như "对不起啊", "我不太懂")
+     BẮT BUỘC là lời của đối phương (người bị mắng - Nữ), TUYỆT ĐỐI KHÔNG để một người vừa mắng người khác xong lại tự nói "Xin lỗi em, anh không hiểu lắm"!
+     Dịch xưng hô đối ứng chuẩn: Nữ nói với Nam: "Xin lỗi anh", "Em không hiểu lắm".
+   - TẬN DỤNG CỤM GIỌNG NÓI ÂM HỌC (voice_cluster) VÀ MỨC ĐỘ TIN CẬY (acoustic_hint, cluster_hint):
+     + Các câu thoại trong đầu vào có thể có trường "voice_cluster" (ví dụ "SPEAKER_00", "SPEAKER_01"). Các câu có cùng "voice_cluster" mang cùng đặc trưng sóng âm (cùng một người nói).
+     + TRƯỜNG "acoustic_hint": Cho biết nhãn âm học và mức tin cậy (trust level):
+       * "HIGH trust" (conf >= 85%, dur >= 1.2s): Tín hiệu âm học rất rõ ràng, ưu tiên kết hợp với ngữ cảnh.
+       * "MEDIUM trust" (conf 72-84%): Tín hiệu âm học ở mức khá, tham khảo nhưng không tin tuyệt đối.
+       * "LOW trust" (conf < 72% hoặc câu quá ngắn < 1.5s): Nhãn âm học có độ nhiễu cao, dễ đoán sai -> BỎ QUA nhãn âm học, hãy tự phán đoán giới tính dựa trên ngữ cảnh kịch bản, đại từ xưng hô, và voice_cluster!
+     + TRƯỜNG "cluster_hint": Tỉ lệ Nam/Nữ thống kê trong cụm 3D-Speaker (ví dụ "SPEAKER_01 (82.5% Nữ)"). Khi acoustic_hint là LOW trust, hãy dựa vào cluster_hint và ngữ cảnh đối thoại để suy luận giới tính.
+   - Nếu một nhân vật nói liền mạch nhiều câu (độc thoại, giãi bày hoặc khuyên can dài), toàn bộ các câu trong chuỗi đó mang cùng một giới tính.
 
 6. ĐỊNH DẠNG ĐẦU RA (BẮT BUỘC JSON DUY NHẤT):
    Trả về DUY NHẤT một JSON Object không kèm giải thích:
@@ -209,12 +299,47 @@ BỘ NHỚ NHÂN VẬT ĐÃ KHÓA (GLOBAL CHARACTER MEMORY):
         batch_list = []
         for s in current_batch:
             speaker = s.speaker_label or ("Nam" if s.gender == "male" else ("Nữ" if s.gender == "female" else "Không rõ"))
-            batch_list.append({
+            voice_cl = getattr(s, "cluster_id", "") or getattr(s, "voice_cluster", "")
+            item_dict: dict[str, Any] = {
                 "id": s.id,
                 "speaker": speaker,
                 "gender": s.gender,
                 "text": s.text,
-            })
+            }
+            if voice_cl:
+                item_dict["voice_cluster"] = str(voice_cl)
+
+            # FIX THUẬT TOÁN: Gửi acoustic_hint + cluster_hint cho DeepSeek
+            # Để DeepSeek biết mức tin cậy thực tế của âm học, không bị dẫn dắt sai bởi nhãn "đoán mò"
+            acoustic_hint = getattr(s, "acoustic_hint", "") or ""
+            if not acoustic_hint:
+                # Tự tạo acoustic_hint từ raw fields nếu chưa có
+                raw_g = s.raw_gender or "unknown"
+                raw_c = s.raw_gender_confidence
+                if raw_c > 1.0:
+                    raw_c = raw_c / 100.0
+                seg_dur = round(s.end - s.start, 2)
+                if raw_c >= 0.85 and seg_dur >= 1.2:
+                    trust = "HIGH"
+                elif raw_c >= 0.72:
+                    trust = "MEDIUM"
+                else:
+                    trust = "LOW"
+                if raw_g in {"male", "female"}:
+                    acoustic_hint = f"{raw_g} {raw_c*100:.1f}% ({seg_dur:.2f}s, {trust} trust)"
+                else:
+                    acoustic_hint = f"unknown ({seg_dur:.2f}s, không đủ tín hiệu)"
+            item_dict["acoustic_hint"] = acoustic_hint
+
+            # Gửi cluster_hint: Tỉ lệ Nam/Nữ trong cụm 3D-Speaker
+            cl_f = float(getattr(s, "cluster_female_ratio", 0.5) or 0.5)
+            cl_m = float(getattr(s, "cluster_male_ratio", 0.5) or 0.5)
+            if voice_cl and abs(cl_f - cl_m) >= 0.15:
+                fav = "Nữ" if cl_f > cl_m else "Nam"
+                fav_pct = max(cl_f, cl_m) * 100.0
+                item_dict["cluster_hint"] = f"{voice_cl} ({fav_pct:.1f}% {fav})"
+
+            batch_list.append(item_dict)
 
         payload = {
             "previous_context": prev_list,
@@ -326,16 +451,20 @@ BỘ NHỚ NHÂN VẬT ĐÃ KHÓA (GLOBAL CHARACTER MEMORY):
 
         for attempt in range(1, self.MAX_RETRIES + 2):
             try:
-                response = client.chat.completions.create(
-                    model=self.model_name,
-                    messages=[
+                req_kwargs: dict[str, Any] = {
+                    "model": self.model_name,
+                    "messages": [
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_message},
                     ],
-                    response_format={"type": "json_object"},
-                    extra_body={"thinking": {"type": "disabled"}},
-                    temperature=0.3,
-                )
+                    "response_format": {"type": "json_object"},
+                    "temperature": 0.3,
+                }
+                # Chỉ thêm thinking disabled cho DeepSeek để tránh lỗi với Gemini / OpenAI
+                if "deepseek" in self.base_url.lower() or "deepseek" in self.model_name.lower():
+                    req_kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+
+                response = client.chat.completions.create(**req_kwargs)
 
                 raw_content = response.choices[0].message.content or ""
                 result_map, char_updates = self._parse_and_validate_response(raw_content, expected_ids)
@@ -411,3 +540,8 @@ BỘ NHỚ NHÂN VẬT ĐÃ KHÓA (GLOBAL CHARACTER MEMORY):
             result = re.sub(r"\bchỗ đó\b", "chỗ này", result, flags=re.IGNORECASE)
 
         return result
+
+
+# Aliases for Universal Multi-Model Support (Gemini, ChatGPT, DeepSeek, Ollama)
+UniversalLLMService = DeepSeekService
+ContextualLLMService = DeepSeekService

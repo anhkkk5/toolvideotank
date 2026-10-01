@@ -170,6 +170,21 @@ class EditorTimeline(QGraphicsView):
 
     # ---- Legacy API (drop-in replacement for existing TimelineWidget) ----
 
+    def clear(self) -> None:
+        """Xóa toàn bộ các lớp trên timeline và reset trạng thái khi chuyển video."""
+        self._selected_layer_id = ""
+        self._segment_indices.clear()
+        if hasattr(self, "_overlap_layout_cache"):
+            self._overlap_layout_cache.clear()
+        if hasattr(self, "_overlap_row_assignments"):
+            self._overlap_row_assignments.clear()
+        if self._timeline:
+            for track in self._timeline.tracks:
+                track.layers.clear()
+        self._waveform_samples = []
+        self._video_thumbnails = []
+        self._redraw()
+
     def set_segments(self, segments: list) -> None:
         from app.layers.sync_bridge import sync_segments_to_dub_subtitle_layers
         if not self._timeline:
@@ -189,6 +204,10 @@ class EditorTimeline(QGraphicsView):
                 self._track_heights[t.id] = self._compute_track_height(t)
 
         self._segment_indices.clear()
+        if hasattr(self, "_overlap_layout_cache"):
+            self._overlap_layout_cache.clear()
+        if hasattr(self, "_overlap_row_assignments"):
+            self._overlap_row_assignments.clear()
         for t in self._timeline.tracks:
             # Older/restored projects can keep TS1 as a regular Subtitle
             # track. Both subtitle track types use the same segment metadata.
@@ -406,8 +425,15 @@ class EditorTimeline(QGraphicsView):
             QTimer.singleShot(50, self.fit_timeline)
         self._redraw()
 
-    @staticmethod
-    def _probe_video_duration(path: str) -> float:
+    _VIDEO_DURATION_CACHE = {}
+
+    @classmethod
+    def _probe_video_duration(cls, path: str) -> float:
+        if not path:
+            return 0.0
+        norm = os.path.normpath(str(path))
+        if norm in cls._VIDEO_DURATION_CACHE:
+            return cls._VIDEO_DURATION_CACHE[norm]
         try:
             import subprocess
             from app.video_processor import _ffprobe_path
@@ -421,7 +447,9 @@ class EditorTimeline(QGraphicsView):
                 **subprocess_hidden_kwargs(),
             )
             if result.returncode == 0:
-                return float(result.stdout.strip() or 0)
+                dur = float(result.stdout.strip() or 0)
+                cls._VIDEO_DURATION_CACHE[norm] = dur
+                return dur
         except Exception:
             pass
         return 0.0

@@ -15,7 +15,17 @@ YÊU CẦU BẮT BUỘC:
        * VÍ DỤ: "来这里" / "过来" -> "lại đây", "qua đây" (CẤM dịch thành "qua đấy").
      + `那` / `那里` / `那儿` biểu thị vị trí xa người nói -> dịch là "đấy", "đó", "ở đó", "chỗ đó", "kia".
    - CHUẨN CHÍNH TẢ TIẾNG VIỆT: Viết hoa đúng danh từ riêng (Tiểu Mỹ, Cố tổng, Bắc Kinh), không viết hoa tùy tiện giữa câu, đúng chuẩn thanh điệu tiếng Việt.
-4. Xưng hô NHẤT QUÁN & PHÂN VAI: Mỗi câu có thể kèm trường "speaker" (ví dụ SPEAKER_00, SPEAKER_01...). Đây là định danh cố định của nhân vật từ âm thanh. Sử dụng thông tin này để nhận biết các lượt đối thoại qua lại giữa các nhân vật và giữ nguyên cách xưng hô đối ứng (anh - em, tôi - cô, cậu - tớ, bố - con, mày - tao...) xuyên suốt toàn bộ phân cảnh. Tuyệt đối không nhảy ngôi xưng lộn xộn giữa các câu.
+4. Xưng hô NHẤT QUÁN & PHÂN VAI (ÁP DỤNG CHO MỌI MODEL AI: GEMINI, CHATGPT, DEEPSEEK, OLLAMA):
+   - Mỗi câu có thể kèm trường "speaker" (SPEAKER_00, SPEAKER_01...) và thông tin gợi ý âm học "acoustic_hint", "cluster_hint".
+   - QUY TẮC NHIỀU NHÂN VẬT CÙNG GIỚI TÍNH: Khi 2 người đàn ông trò chuyện (đồng nghiệp, bạn bè khuyên can), CẢ HAI ĐỀU LÀ NAM (xưng hô anh - tôi, cậu - tớ). TUYỆT ĐỐI KHÔNG tự ý ép một người thành Nữ chỉ để tạo luân phiên nam-nữ!
+   - QUY TẮC TỪ VỰNG XƯNG HÔ TUYỆT ĐỐI:
+     + "老婆", "老婆大人", "媳妇", "太太" (gọi vợ) -> Người nói 100% là Nam (dịch xưng hô: anh - em).
+     + "老公", "相公" (gọi chồng) -> Người nói 100% là Nữ (dịch xưng hô: em - anh).
+   - QUY TẮC ĐỐI ĐÁP TRANH CÃI / TRÁCH MÓC / NHẬN LỖI:
+     Khi một nhân vật đang trách móc hoặc mắng người khác (ví dụ Nam: "你有没有常识呀"), câu ngay sau đó mang tính chất nhận lỗi hoặc xin lỗi/giải thích ("对不起啊", "我不太懂") BẮT BUỘC là lời của đối phương (người bị mắng - Nữ). TUYỆT ĐỐI KHÔNG để một người vừa mắng xong lại tự xin lỗi! Phải dịch chuẩn đối ứng: Nữ nói với Nam: "Xin lỗi anh", "Em không hiểu lắm".
+   - XỬ LÝ MỨC ĐỘ TIN CẬY ÂM HỌC (acoustic_hint, cluster_hint):
+     + "HIGH trust": Tín hiệu âm học chuẩn xác -> kết hợp chặt chẽ với ngữ cảnh kịch bản.
+     + "LOW trust" (confidence < 72% hoặc câu quá ngắn < 1.5s): Nhãn âm học có độ nhiễu cao, dễ đoán sai -> BỎ QUA nhãn âm học, hãy tự phân tích ngữ cảnh đối đáp kịch bản, đại từ xưng hô và cluster_hint để xưng hô chuẩn xác!
 5. Lời thoại TỰ NHIÊN: Diễn đạt như khẩu ngữ đời thường của người bản xứ. Giữ nguyên sắc thái (mỉa mai, tức giận, giận dỗi, ngọt ngào...).
    - Ví dụ: "你还知道回来啊" -> dịch mỉa mai tự nhiên: "Còn biết đường về cơ à?" (thay vì "Bạn vẫn biết quay lại à?").
    - Ví dụ: "别来烦我" -> "Đừng có làm phiền tôi!".

@@ -37,6 +37,18 @@ from app.services.video_export_service import (
 )
 
 PRESETS_DATA = {
+    "blur_mask": {
+        "name": "🌫️ Mặt nạ làm mờ ngang (Ảnh 1 - Khuyên dùng)",
+        "font_name": "Arial",
+        "font_size": 36,
+        "text_color": "#FFFFFF",
+        "bg_color": "#000000",
+        "has_box": False,
+        "bold": True,
+        "animation": "Bật lên (Pop In)",
+        "hint": "Dải làm mờ ngang che sạch chữ gốc video, chữ trắng viền đen dày nổi bật như Ảnh 1.",
+        "mask_mode": "blur",
+    },
     "pastel_box": {
         "name": "🌸 Hộp hồng Pastel (Bám sát chữ - Che video gốc)",
         "font_name": "Arial",
@@ -49,7 +61,7 @@ PRESETS_DATA = {
         "hint": "Khung hồng pastel ôm sát chữ, che sạch chữ gốc, phong cách hiện đại khuyên dùng.",
     },
     "youtube_box": {
-        "name": "🖤 Hộp đen YouTube (Phụ đề chuẩn nét)",
+        "name": "🖤 Hộp đen YouTube (Phụ đề chuẩn nét - Ảnh 2)",
         "font_name": "Roboto",
         "font_size": 34,
         "text_color": "#FFFFFF",
@@ -275,8 +287,14 @@ class SubtitleStyleGroupBox(QGroupBox):
         font_weight = "bold" if self.chk_bold.isChecked() else "normal"
         text_color = self.current_text_color
         has_box = self.chk_box.isChecked()
-        bg_color = self.current_bg_color if has_box else "transparent"
-        border_css = "border: none;" if has_box else "border: 1px solid #334455;"
+        p_key = self.combo_preset.currentData() or "custom"
+
+        if p_key == "blur_mask":
+            bg_color = "rgba(255, 255, 255, 0.18)"
+            border_css = "border: 1px dashed rgba(255, 255, 255, 0.45);"
+        else:
+            bg_color = self.current_bg_color if has_box else "transparent"
+            border_css = "border: none;" if has_box else "border: 1px solid #334455;"
 
         # Render preview pill with snug padding
         self.lbl_preview_badge.setStyleSheet(f"""
@@ -426,6 +444,9 @@ class SubtitleStyleGroupBox(QGroupBox):
         text_ass = hex_to_ass_color(self.current_text_color, alpha=1.0)
         bg_ass = hex_to_ass_color(self.current_bg_color, alpha=1.0)
 
+        # Xác định mask_mode
+        mask_mode = "blur" if p_key == "blur_mask" else ("box" if has_box else "none")
+
         cfg = SubtitleRenderConfig(
             font_name=font_name,
             font_size=font_size,
@@ -434,6 +455,7 @@ class SubtitleStyleGroupBox(QGroupBox):
             outline_width=4 if not has_box else 0,
             bold=is_bold,
             enable_blur_mask=True,
+            mask_mode=mask_mode,
             background_box=has_box,
             badge_bg_color=bg_ass,
             badge_text_color=text_ass,

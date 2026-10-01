@@ -342,10 +342,12 @@ class PipelineBProgressDialog(QDialog):
             self.lbl_status.setText(f"🎉 ĐÃ TẠO VIDEO THÀNH CÔNG trong {dur_str}!")
             self.lbl_status.setStyleSheet("color: #3fb950; font-weight: bold; font-size: 13px;")
 
-            if self.original_video_path and hasattr(self, "parent") and self.parent():
+            if hasattr(self, "parent") and self.parent():
                 p_gui = self.parent()
-                if hasattr(p_gui, "_video_durations"):
+                if self.original_video_path and hasattr(p_gui, "_video_durations"):
                     p_gui._video_durations[os.path.normpath(self.original_video_path)] = elapsed
+                if hasattr(p_gui, "toggle_ocr_overlay_visibility"):
+                    p_gui.toggle_ocr_overlay_visibility(False)
 
             self.lbl_step2.setText("2. 🎙️ Lồng tiếng AI\n[✅ Đã xong]")
             self.lbl_step2.setStyleSheet("color: #3fb950; font-weight: bold; font-size: 11px;")

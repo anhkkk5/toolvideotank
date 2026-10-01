@@ -101,8 +101,8 @@ def _extract_thumbnail(video_path: str, output_path: str) -> str:
     import subprocess
     try:
         subprocess.run(
-            [_ffmpeg_path(), "-y", "-i", video_path, "-vframes", "1", "-q:v", "3",
-             "-vf", "scale=320:180:force_original_aspect_ratio=decrease,pad=320:180:(ow-iw)/2:(oh-ih)/2",
+            [_ffmpeg_path(), "-y", "-i", video_path, "-vframes", "1", "-q:v", "2",
+             "-vf", "scale=640:360:force_original_aspect_ratio=increase,crop=640:360",
              output_path],
             capture_output=True, timeout=30, **subprocess_hidden_kwargs(),
         )
@@ -143,13 +143,67 @@ MSG_STYLE = """
 """
 
 
+def _group_recent_projects(projects: list[dict]) -> list[dict]:
+    """Nhóm các video thuộc cùng 1 phiên làm việc / Media Pool thành đúng 1 dự án duy nhất."""
+    from runtime_paths import workspace_root
+    sessions_file = os.path.join(workspace_root(), "projects", "media_pool_sessions.json")
+    all_sessions = {}
+    if os.path.exists(sessions_file):
+        try:
+            with open(sessions_file, "r", encoding="utf-8") as f:
+                all_sessions = json.load(f)
+        except Exception:
+            all_sessions = {}
+
+    grouped = []
+    seen_paths = set()
+
+    for p in projects:
+        v_path = os.path.normpath(p.get("video_path", ""))
+        if not v_path or v_path in seen_paths:
+            continue
+
+        session_info = all_sessions.get(v_path)
+        if not session_info:
+            for k, sdata in all_sessions.items():
+                if os.path.normpath(k) == v_path:
+                    session_info = sdata
+                    break
+
+        pool = session_info.get("media_pool", []) if session_info else []
+        pool_paths = [os.path.normpath(it.get("path", "")) for it in pool if it.get("path")]
+
+        if pool_paths and v_path in pool_paths:
+            for m in pool_paths:
+                seen_paths.add(m)
+
+            primary_path = v_path
+            for it in pool:
+                if it.get("is_on_timeline") and it.get("path") and os.path.exists(it["path"]):
+                    primary_path = os.path.normpath(it["path"])
+                    break
+
+            item_copy = dict(p)
+            item_copy["video_path"] = primary_path
+            item_copy["session_pool_count"] = len(pool_paths)
+            item_copy["session_pool_paths"] = pool_paths
+            grouped.append(item_copy)
+        else:
+            seen_paths.add(v_path)
+            grouped.append(dict(p))
+
+    return grouped
+
+
 class ProjectCard(QFrame):
-    def __init__(self, video_path: str, thumbnail_cache_dir: str, parent=None):
+    def __init__(self, video_path: str, thumbnail_cache_dir: str, parent=None, session_pool_paths=None, session_pool_count=1):
         super().__init__(parent)
         self.video_path = video_path
+        self.session_pool_paths = session_pool_paths or [video_path]
+        self.session_pool_count = session_pool_count
         self._orig_pixmap = None
         self.setObjectName("projectCard")
-        self.setMinimumSize(210, 205)
+        self.setMinimumSize(220, 215)
         self.setMaximumWidth(320)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.setCursor(Qt.PointingHandCursor)
@@ -158,15 +212,16 @@ class ProjectCard(QFrame):
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(8)
 
-        # Khung chứa hình thu nhỏ
+        # Khung chứa hình thu nhỏ - Cố định chiều cao 120px chống vỡ/tràn ảnh
         self.thumb_container = QWidget(self)
-        self.thumb_container.setMinimumHeight(115)
+        self.thumb_container.setFixedHeight(120)
         self.thumb_container.setStyleSheet("background-color: #060911; border-radius: 8px;")
         thumb_box = QVBoxLayout(self.thumb_container)
         thumb_box.setContentsMargins(0, 0, 0, 0)
 
         self.thumb_label = QLabel(self.thumb_container)
         self.thumb_label.setAlignment(Qt.AlignCenter)
+        self.thumb_label.setFixedHeight(120)
         self.thumb_label.setStyleSheet("border-radius: 8px; background: transparent;")
         thumb_box.addWidget(self.thumb_label)
         layout.addWidget(self.thumb_container)
@@ -211,6 +266,13 @@ class ProjectCard(QFrame):
             f"color: {stage_color}; font-size: 11px; font-weight: 700; background: transparent;"
         )
         meta_row.addWidget(self.stage_badge)
+
+        # Huy hiệu hiển thị số lượng video nếu là dự án nhiều video
+        if self.session_pool_count > 1:
+            pool_badge = QLabel(f"🎬 {self.session_pool_count} video")
+            pool_badge.setStyleSheet("color: #38bdf8; font-size: 10px; font-weight: 700; background: #0c4a6e; border: 1px solid #0284c7; border-radius: 4px; padding: 1px 5px;")
+            meta_row.addWidget(pool_badge)
+
         meta_row.addStretch()
 
         if dur_str:
@@ -224,8 +286,9 @@ class ProjectCard(QFrame):
 
     def _on_remove_clicked(self):
         projects = _load_recent_projects()
-        norm_current = os.path.normpath(self.video_path)
-        filtered = [p for p in projects if os.path.normpath(p.get("video_path", "")) != norm_current]
+        to_remove = {os.path.normpath(p) for p in self.session_pool_paths}
+        to_remove.add(os.path.normpath(self.video_path))
+        filtered = [p for p in projects if os.path.normpath(p.get("video_path", "")) not in to_remove]
         _save_recent_projects(None, filtered)
         if self.window() and hasattr(self.window(), "_load_recent"):
             self.window()._load_recent()
@@ -245,7 +308,13 @@ class ProjectCard(QFrame):
         if self._orig_pixmap is None or self._orig_pixmap.isNull():
             return
         w = max(160, self.thumb_container.width())
-        self.thumb_label.setPixmap(self._orig_pixmap.scaled(w, 115, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation))
+        h = 120
+        # Cắt cúp trung tâm chuẩn 120px chiều cao chống tràn phình thẻ dự án
+        scaled = self._orig_pixmap.scaled(w, h, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+        crop_x = max(0, (scaled.width() - w) // 2)
+        crop_y = max(0, (scaled.height() - h) // 2)
+        cropped = scaled.copy(crop_x, crop_y, w, h)
+        self.thumb_label.setPixmap(cropped)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -539,6 +608,11 @@ class LauncherWindow(QDialog):
             self.setWindowIcon(QIcon(logo))
 
         self.setWindowTitle("TankVideo Studio - Xưởng dịch thuật & Lồng tiếng video AI")
+        self.setWindowFlags(
+            Qt.Window
+            | Qt.WindowMinMaxButtonsHint
+            | Qt.WindowCloseButtonHint
+        )
         self.setMinimumSize(940, 620)
         self.resize(980, 650)
         self.setStyleSheet("""
@@ -1171,11 +1245,13 @@ class LauncherWindow(QDialog):
         if existing != projects:
             _save_recent_projects(None, existing)
 
-        count = len(existing)
+        grouped_existing = _group_recent_projects(existing)
+
+        count = len(grouped_existing)
         if hasattr(self, "count_badge"):
             self.count_badge.setText(f"({count} dự án)")
 
-        if not existing:
+        if not grouped_existing:
             if hasattr(self, "scroll"):
                 self.scroll.hide()
             if hasattr(self, "empty_widget"):
@@ -1189,8 +1265,14 @@ class LauncherWindow(QDialog):
 
         container_w = self.recent_container.width() if hasattr(self, "recent_container") else self.grid_widget.width()
         columns = min(4, max(2, (container_w - 40) // 250))
-        for i, proj in enumerate(existing):
-            card = ProjectCard(proj["video_path"], self._thumbnail_dir, self)
+        for i, proj in enumerate(grouped_existing):
+            card = ProjectCard(
+                proj["video_path"],
+                self._thumbnail_dir,
+                self,
+                session_pool_paths=proj.get("session_pool_paths"),
+                session_pool_count=proj.get("session_pool_count", 1)
+            )
             row, col = divmod(i, max(1, columns))
             self.grid.addWidget(card, row, col)
             self.grid.setColumnStretch(col, 1)
@@ -1498,9 +1580,31 @@ class LauncherWindow(QDialog):
         video_path = os.path.normpath(video_path)
         projects = _load_recent_projects()
         projects = [p for p in projects if os.path.exists(p.get("video_path", ""))]
-        existing = [p for p in projects if os.path.normpath(p.get("video_path", "")) == video_path]
-        if existing:
-            projects.remove(existing[0])
+
+        # Tìm các video anh em trong cùng session media pool (nếu có)
+        from runtime_paths import workspace_root
+        sessions_file = os.path.join(workspace_root(), "projects", "media_pool_sessions.json")
+        sibling_paths = {video_path}
+        if os.path.exists(sessions_file):
+            try:
+                with open(sessions_file, "r", encoding="utf-8") as f:
+                    all_sessions = json.load(f)
+                session_info = all_sessions.get(video_path)
+                if not session_info:
+                    for k, sdata in all_sessions.items():
+                        if os.path.normpath(k) == video_path:
+                            session_info = sdata
+                            break
+                if session_info and session_info.get("media_pool"):
+                    for it in session_info["media_pool"]:
+                        if it.get("path"):
+                            sibling_paths.add(os.path.normpath(it["path"]))
+            except Exception:
+                pass
+
+        # Loại bỏ các video anh em cùng session đã có trong recent_projects để không bị phình ra nhiều dự án
+        projects = [p for p in projects if os.path.normpath(p.get("video_path", "")) not in sibling_paths]
+
         projects.insert(0, {
             "video_path": video_path,
             "opened_at": int(time.time()),

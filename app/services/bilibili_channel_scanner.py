@@ -185,7 +185,8 @@ def _extract_via_playwright(
             }''')
 
             # Scroll down to load videos
-            scroll_count = min(10, max(3, max_videos // 15))
+            is_unlimited = (max_videos <= 0 or max_videos >= 99999)
+            scroll_count = 200 if is_unlimited else min(60, max(3, max_videos // 15))
             for s in range(scroll_count):
                 if is_cancelled_cb and is_cancelled_cb():
                     break
@@ -291,7 +292,7 @@ def _extract_via_playwright(
 
 def scan_bilibili(
     url: str,
-    max_videos: int = 200,
+    max_videos: int = 0,  # 0: Không giới hạn (quét sạch toàn bộ kênh)
     browser_id: str = "chrome",
     profile_id: Optional[str] = None,
     browser_exe_path: Optional[str] = None,
@@ -388,7 +389,8 @@ def scan_bilibili(
     if progress_cb:
         progress_cb(f"Đã tìm thấy {len(raw_bvids)} video, đang tải thông tin chi tiết...", len(raw_bvids))
 
-    target_bvids = raw_bvids[:max_videos]
+    is_unlimited = (max_videos <= 0 or max_videos >= 99999)
+    target_bvids = raw_bvids if is_unlimited else raw_bvids[:max_videos]
 
     def _fetch_one(bvid: str):
         if is_cancelled_cb and is_cancelled_cb():

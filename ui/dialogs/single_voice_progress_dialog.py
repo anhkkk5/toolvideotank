@@ -61,6 +61,7 @@ class SingleVoicePipelineWorker(QThread):
         selected_voice: dict[str, str],
         audio_mix_settings: dict[str, float],
         enable_blur_mask: bool,
+        mask_mode: str = "box",
         blur_rect: tuple[float, float, float, float] | None,
         burn_subtitles: bool,
         existing_cues: list[dict[str, Any]] | None,
@@ -68,6 +69,9 @@ class SingleVoicePipelineWorker(QThread):
         subtitle_config: SubtitleRenderConfig | None = None,
         brand_logo_settings: dict[str, Any] | None = None,
         watermark_settings: dict[str, Any] | None = None,
+        delogo_settings: dict[str, Any] | None = None,
+        dual_voice_config: dict[str, Any] | None = None,
+        approved_cues: list[dict[str, Any]] | None = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -76,13 +80,17 @@ class SingleVoicePipelineWorker(QThread):
         self.selected_voice = selected_voice
         self.audio_mix_settings = audio_mix_settings
         self.enable_blur_mask = enable_blur_mask
+        self.subtitle_config = subtitle_config or SubtitleRenderConfig()
+        self.mask_mode = str(mask_mode or getattr(self.subtitle_config, "mask_mode", "box") or "box").strip().lower()
         self.blur_rect = blur_rect
         self.burn_subtitles = burn_subtitles
         self.existing_cues = existing_cues
         self.output_video_path = output_video_path
-        self.subtitle_config = subtitle_config or SubtitleRenderConfig()
         self.brand_logo_settings = brand_logo_settings or {}
         self.watermark_settings = watermark_settings or {}
+        self.delogo_settings = delogo_settings or {}
+        self.dual_voice_config = dual_voice_config
+        self.approved_cues = approved_cues
 
         self._cancel_event = threading.Event()
 
@@ -98,128 +106,203 @@ class SingleVoicePipelineWorker(QThread):
             self.pipeline_error.emit(str(exc))
 
     def _execute_pipeline(self):
-        # --- BƯỚC 1: QUÉT OCR PHỤ ĐỀ (0% -> 25%) ---
-        self.stage_changed.emit("ocr", "Đang quét phụ đề video (OCR)...")
-        self.progress_updated.emit(5.0, "Đang quét phụ đề video...")
-
-        cues: list[dict[str, Any]] = []
-        if self.existing_cues and len(self.existing_cues) > 0 and any(str(c.get("text", "")).strip() for c in self.existing_cues):
-            cues = [dict(c) for c in self.existing_cues if str(c.get("text", "")).strip()]
-            self.log_emitted.emit(f"[OCR] Tái sử dụng {len(cues)} câu phụ đề đã nhận diện trên giao diện.")
-        else:
-            self.log_emitted.emit(f"[OCR] Bắt đầu quét OCR từ video: {os.path.basename(self.video_path)}")
-            from services.engine_runtime import EngineRuntime
-            from services.subtitle_merge_service import SubtitleMergeService
-
-            engine = EngineRuntime()
-            region = str(os.getenv("OCR_SUBTITLE_REGION", "bottom") or "bottom")
-            raw_cues = list(engine.transcribe_video_ocr(self.video_path, region=region) or [])
-            self.log_emitted.emit(f"[OCR] Quét thô hoàn tất, tìm thấy {len(raw_cues)} đoạn text.")
-            cues = SubtitleMergeService.merge_cues([dict(c) for c in raw_cues if str(c.get("text", "")).strip()])
-
-        if self._cancel_event.is_set():
-            return
-
-        if not cues:
-            raise RuntimeError(
-                "Không đọc được phụ đề từ video. Vui lòng kiểm tra lại khung OCR trên màn hình xem video."
-            )
-
-        self.log_emitted.emit(f"[OCR] Đã chuẩn hóa {len(cues)} câu thoại hợp lệ.")
-        self.progress_updated.emit(25.0, f"Đã quét xong {len(cues)} câu phụ đề.")
-
-        # --- BƯỚC 2: DỊCH PHỤ ĐỀ BẰNG DEEPSEEK AI (25% -> 45%) ---
-        self.stage_changed.emit("translate", "Đang dịch kịch bản chuẩn ngữ cảnh (DeepSeek AI)...")
-        deepseek_key = str(os.getenv("DEEPSEEK_API_KEY", "")).strip()
-        from services.subtitle_translation_service import SubtitleTranslationService
-
-        # Đánh số ID cho các câu
-        indexed_cues = [
-            {**cue, "id": cue.get("id", idx)}
-            for idx, cue in enumerate(cues, start=1)
-        ]
-
         translated_cues: list[dict[str, Any]] = []
-        if deepseek_key:
-            try:
-                from services.deepseek_service import DeepSeekService
-                ds_svc = DeepSeekService(api_key=deepseek_key)
-                sub_trans_svc = SubtitleTranslationService(ds_svc)
-                self.log_emitted.emit("[Dịch thuật] Đang kết nối DeepSeek AI API để dịch theo văn cảnh...")
 
-                def _on_ds_progress(msg, cur, tot):
-                    if tot > 0:
-                        pct = 25.0 + (cur / tot) * 20.0
-                        self.progress_updated.emit(pct, f"DeepSeek AI đang dịch ({cur}/{tot})...")
-                    self.log_emitted.emit(f"[DeepSeek] {msg}")
+        # NẾU ĐÃ CÓ KỊCH BẢN ĐÃ DUYỆT TỪ BẢNG LỊCH SỬ PHÂN VAI AI:
+        if self.approved_cues and len(self.approved_cues) > 0:
+            self.stage_changed.emit("render", "Nạp kịch bản phân vai đã duyệt và tạo video...")
+            self.progress_updated.emit(35.0, f"Đã nạp {len(self.approved_cues)} câu thoại đã kiểm duyệt.")
+            self.log_emitted.emit(f"[Phân vai AI] Đã nạp thành công {len(self.approved_cues)} câu thoại đã kiểm duyệt từ Lịch sử.")
+            translated_cues = list(self.approved_cues)
+        else:
+            # --- BƯỚC 1: QUÉT OCR PHỤ ĐỀ (0% -> 25%) ---
+            self.stage_changed.emit("ocr", "Đang quét phụ đề video (OCR)...")
+            self.progress_updated.emit(5.0, "Đang quét phụ đề video...")
 
-                translated_cues, _ = sub_trans_svc.translate_with_deepseek(
-                    indexed_cues,
-                    overwrite_manual=True,
-                    progress=_on_ds_progress,
+            cues: list[dict[str, Any]] = []
+            if self.existing_cues and len(self.existing_cues) > 0 and any(str(c.get("text", "")).strip() for c in self.existing_cues):
+                cues = [dict(c) for c in self.existing_cues if str(c.get("text", "")).strip()]
+                self.log_emitted.emit(f"[OCR] Tái sử dụng {len(cues)} câu phụ đề đã nhận diện trên giao diện.")
+            else:
+                self.log_emitted.emit(f"[OCR] Bắt đầu quét OCR từ video: {os.path.basename(self.video_path)}")
+                from services.engine_runtime import EngineRuntime
+                from services.subtitle_merge_service import SubtitleMergeService
+
+                engine = EngineRuntime()
+                region = str(os.getenv("OCR_SUBTITLE_REGION", "bottom") or "bottom")
+                raw_cues = list(engine.transcribe_video_ocr(self.video_path, region=region) or [])
+                self.log_emitted.emit(f"[OCR] Quét thô hoàn tất, tìm thấy {len(raw_cues)} đoạn text.")
+                cues = SubtitleMergeService.merge_cues([dict(c) for c in raw_cues if str(c.get("text", "")).strip()])
+
+            if self._cancel_event.is_set():
+                return
+
+            if not cues:
+                raise RuntimeError(
+                    "Không đọc được phụ đề từ video. Vui lòng kiểm tra lại khung OCR trên màn hình xem video."
                 )
-                self.log_emitted.emit(f"[Dịch thuật] DeepSeek AI đã dịch thành công {len(translated_cues)} câu.")
-            except Exception as ds_err:
-                self.log_emitted.emit(f"[Dịch thuật] DeepSeek AI thông báo: {ds_err}. Chuyển sang bộ dịch dự phòng...")
-                translated_cues = []
 
-        if self._cancel_event.is_set():
-            return
+            self.log_emitted.emit(f"[OCR] Đã chuẩn hóa {len(cues)} câu thoại hợp lệ.")
+            self.progress_updated.emit(25.0, f"Đã quét xong {len(cues)} câu phụ đề.")
 
-        if not translated_cues:
-            self.log_emitted.emit("[Dịch thuật] Đang dịch bằng bộ dịch dự phòng...")
-            translated_cues = SubtitleTranslationService().translate_cues(
-                indexed_cues,
-                target_lang="vi",
-                progress=lambda msg: self.log_emitted.emit(f"[Dịch thuật] {msg}"),
-            )
+            if self.dual_voice_config:
+                # --- BƯỚC 2 (DUAL VOICE): NHẬN DIỆN GIỌNG NÓI & PHÂN VAI NAM/NỮ AI (25% -> 45%) ---
+                self.stage_changed.emit("gender", "Đang nhận diện giọng nói & phân vai Nam/Nữ AI...")
+                self.progress_updated.emit(28.0, "Đang nhận diện âm học và phân vai nhân vật...")
+                self.log_emitted.emit("[Phân vai AI] Bắt đầu phân tích âm học và kịch bản phân vai Nam/Nữ chuẩn (ASR + VAD + OCR)...")
+                from services.voice_gender_check_service import VoiceGenderCheckService
+                gender_svc = VoiceGenderCheckService()
+                gender_res = gender_svc.run(
+                    self.video_path,
+                    existing_cues=None,
+                    progress=lambda msg: self.log_emitted.emit(f"[Phân vai AI] {msg}"),
+                )
+                translated_cues = gender_res.get("rows", [])
+                self.progress_updated.emit(45.0, f"Phân vai hoàn tất: {len(translated_cues)} câu thoại.")
+            else:
+                # --- BƯỚC 2 (SINGLE VOICE): DỊCH PHỤ ĐỀ BẰNG DEEPSEEK AI (25% -> 45%) ---
+                self.stage_changed.emit("translate", "Đang dịch kịch bản chuẩn ngữ cảnh (DeepSeek AI)...")
+                deepseek_key = str(os.getenv("DEEPSEEK_API_KEY", "")).strip()
+                from services.subtitle_translation_service import SubtitleTranslationService
 
-        self.progress_updated.emit(45.0, "Dịch thuật kịch bản hoàn tất.")
+                cues = SubtitleMergeService.merge_incomplete_split_dialogues(cues)
+                # Đánh số ID cho các câu
+                indexed_cues = [
+                    {**cue, "id": cue.get("id", idx)}
+                    for idx, cue in enumerate(cues, start=1)
+                ]
+
+                if deepseek_key:
+                    try:
+                        from services.deepseek_service import DeepSeekService
+                        ds_svc = DeepSeekService(api_key=deepseek_key)
+                        sub_trans_svc = SubtitleTranslationService(ds_svc)
+                        self.log_emitted.emit("[Dịch thuật] Đang kết nối DeepSeek AI API để dịch theo văn cảnh...")
+
+                        def _on_ds_progress(msg, cur, tot):
+                            if tot > 0:
+                                pct = 25.0 + (cur / tot) * 20.0
+                                self.progress_updated.emit(pct, f"DeepSeek AI đang dịch ({cur}/{tot})...")
+                            self.log_emitted.emit(f"[DeepSeek] {msg}")
+
+                        translated_cues, _ = sub_trans_svc.translate_with_deepseek(
+                            indexed_cues,
+                            overwrite_manual=True,
+                            progress=_on_ds_progress,
+                        )
+                        self.log_emitted.emit(f"[Dịch thuật] DeepSeek AI đã dịch thành công {len(translated_cues)} câu.")
+                    except Exception as ds_err:
+                        self.log_emitted.emit(f"[Dịch thuật] DeepSeek AI thông báo: {ds_err}. Chuyển sang bộ dịch dự phòng...")
+                        translated_cues = []
+
+                if self._cancel_event.is_set():
+                    return
+
+                if not translated_cues:
+                    self.log_emitted.emit("[Dịch thuật] Đang dịch bằng bộ dịch dự phòng...")
+                    translated_cues = SubtitleTranslationService().translate_cues(
+                        indexed_cues,
+                        target_lang="vi",
+                        progress=lambda msg: self.log_emitted.emit(f"[Dịch thuật] {msg}"),
+                    )
+
+                self.progress_updated.emit(45.0, "Dịch thuật kịch bản hoàn tất.")
 
         # --- BƯỚC 3 & 4: TẠO GIỌNG ĐỌC AI & XUẤT VIDEO (45% -> 100%) ---
         self.stage_changed.emit("render", "Đang lồng tiếng AI, che chữ Trung và xuất video MP4...")
-        voice_id = str(self.selected_voice.get("id", "adam1")).strip()
-        voice_name = str(self.selected_voice.get("name", voice_id)).strip()
-        self.log_emitted.emit(f"[Lồng tiếng] Áp dụng giọng thuyết minh: {voice_name} (ID: {voice_id})")
 
         CHINESE_CHAR_RE = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]")
         AD_NOISE_KEYWORDS = ("闲置", "二手", "转卖", "私信", "关注", "点击", "下载", "优惠", "进群", "看简介", "主页")
 
         segments: list[SubtitleSegment] = []
-        for idx, cue in enumerate(translated_cues, start=1):
-            start_s = float(cue.get("start", 0.0) or 0.0)
-            end_s = float(cue.get("end", 0.0) or 0.0)
-            orig_txt = str(cue.get("text", "") or cue.get("original_text", "") or cue.get("source_text", "")).strip()
-            trans_txt = str(cue.get("translated_text", "") or cue.get("translated", "")).strip()
 
-            is_noise = bool(cue.get("is_noise", False))
-            if any(kw in orig_txt for kw in AD_NOISE_KEYWORDS) and (not trans_txt or bool(CHINESE_CHAR_RE.search(trans_txt))):
-                is_noise = True
+        if self.dual_voice_config:
+            m_cfg = self.dual_voice_config.get("male_voice") or {}
+            f_cfg = self.dual_voice_config.get("female_voice") or {}
+            male_id = str(m_cfg.get("id", "vi-VN-NamMinhNeural")).strip()
+            male_name = str(m_cfg.get("name", "Nam")).strip()
+            male_provider = str(m_cfg.get("provider", "edge_tts")).strip()
+            female_id = str(f_cfg.get("id", "vi-VN-HoaiMyNeural")).strip()
+            female_name = str(f_cfg.get("name", "Nữ")).strip()
+            female_provider = str(f_cfg.get("provider", "edge_tts")).strip()
+            self.log_emitted.emit(f"[Lồng tiếng Phân vai] Giọng Nam: {male_name} | Giọng Nữ: {female_name}")
 
-            # Kiểm tra nếu bản dịch rỗng HOẶC bản dịch vẫn chứa chữ Hán (chưa được dịch sang tiếng Việt)
-            has_chinese_in_trans = bool(CHINESE_CHAR_RE.search(trans_txt))
-            skip_tts = is_noise or (not trans_txt) or has_chinese_in_trans
+            for idx, cue in enumerate(translated_cues, start=1):
+                start_s = float(cue.get("start", 0.0) or 0.0)
+                end_s = float(cue.get("end", 0.0) or 0.0)
+                orig_txt = str(cue.get("original_text", "") or cue.get("text", "")).strip()
+                trans_txt = str(cue.get("translated_text", "") or cue.get("text", "")).strip()
+                final_g = str(cue.get("final_gender", "") or cue.get("gender", "unknown")).lower()
+                is_noise = bool(cue.get("is_noise", False))
+                if any(kw in orig_txt for kw in AD_NOISE_KEYWORDS) and (not trans_txt or bool(CHINESE_CHAR_RE.search(trans_txt))):
+                    is_noise = True
+                has_chinese = bool(CHINESE_CHAR_RE.search(trans_txt))
+                skip_tts = bool(cue.get("skip_tts", False)) or is_noise or (not trans_txt) or has_chinese or (final_g == "none")
+                effective_trans = "" if skip_tts else trans_txt
 
-            # Nếu skip_tts vì rỗng hoặc còn chữ Hán/quảng cáo, để trống effective_trans để TTS không đọc nhầm tiếng Trung
-            effective_trans = "" if skip_tts else trans_txt
+                if final_g == "female":
+                    v_id, v_nm = female_id, female_name
+                elif final_g == "male":
+                    v_id, v_nm = male_id, male_name
+                else:
+                    v_id, v_nm = (female_id, female_name) if "nữ" in female_name.lower() else (male_id, male_name)
 
-            seg = SubtitleSegment(
-                id=idx,
-                start=start_s,
-                end=end_s,
-                text=orig_txt,
-                translated_text=effective_trans,
-                voice_id=voice_id,
-                voice_name=voice_name,
-                gender="male",
-                final_gender="male",
-                is_noise=is_noise,
-                skip_tts=skip_tts,
-            )
-            segments.append(seg)
+                seg = SubtitleSegment(
+                    id=idx,
+                    start=start_s,
+                    end=end_s,
+                    text=orig_txt,
+                    translated_text=effective_trans,
+                    voice_id=v_id,
+                    voice_name=v_nm,
+                    gender=final_g if final_g in ("male", "female") else "male",
+                    final_gender=final_g if final_g in ("male", "female") else "male",
+                    is_noise=is_noise,
+                    skip_tts=skip_tts,
+                    bbox=cue.get("bbox", []) or [],
+                )
+                segments.append(seg)
+        else:
+            voice_id = str(self.selected_voice.get("id", "adam1")).strip()
+            voice_name = str(self.selected_voice.get("name", voice_id)).strip()
+            self.log_emitted.emit(f"[Lồng tiếng] Áp dụng giọng thuyết minh: {voice_name} (ID: {voice_id})")
+
+            for idx, cue in enumerate(translated_cues, start=1):
+                start_s = float(cue.get("start", 0.0) or 0.0)
+                end_s = float(cue.get("end", 0.0) or 0.0)
+                orig_txt = str(cue.get("text", "") or cue.get("original_text", "") or cue.get("source_text", "")).strip()
+                trans_txt = str(cue.get("translated_text", "") or cue.get("translated", "")).strip()
+
+                is_noise = bool(cue.get("is_noise", False))
+                if any(kw in orig_txt for kw in AD_NOISE_KEYWORDS) and (not trans_txt or bool(CHINESE_CHAR_RE.search(trans_txt))):
+                    is_noise = True
+
+                # Kiểm tra nếu bản dịch rỗng HOẶC bản dịch vẫn chứa chữ Hán (chưa được dịch sang tiếng Việt)
+                has_chinese_in_trans = bool(CHINESE_CHAR_RE.search(trans_txt))
+                skip_tts = is_noise or (not trans_txt) or has_chinese_in_trans
+
+                # Nếu skip_tts vì rỗng hoặc còn chữ Hán/quảng cáo, để trống effective_trans để TTS không đọc nhầm tiếng Trung
+                effective_trans = "" if skip_tts else trans_txt
+
+                seg = SubtitleSegment(
+                    id=idx,
+                    start=start_s,
+                    end=end_s,
+                    text=orig_txt,
+                    translated_text=effective_trans,
+                    voice_id=voice_id,
+                    voice_name=voice_name,
+                    gender="male",
+                    final_gender="male",
+                    is_noise=is_noise,
+                    skip_tts=skip_tts,
+                    bbox=cue.get("bbox", []) or [],
+                )
+                segments.append(seg)
 
         creator_config = VideoCreatorConfig()
         creator_config.enable_blur_mask = self.enable_blur_mask
+        creator_config.mask_mode = self.mask_mode
         creator_config.blur_rect = self.blur_rect
         creator_config.burn_subtitles = self.burn_subtitles
         creator_config.subtitle_config = self.subtitle_config
@@ -244,21 +327,53 @@ class SingleVoicePipelineWorker(QThread):
             creator_config.watermark_opacity = float(self.watermark_settings.get("opacity", 0.35))
             creator_config.watermark_color = str(self.watermark_settings.get("color", "#FFFFFF"))
 
-        # Khóa cứng toàn bộ các vai về đúng 1 giọng đã chọn
+        # Cấu hình Xóa Logo & Watermark video gốc (Delogo AI)
+        if self.delogo_settings and isinstance(self.delogo_settings, dict):
+            creator_config.delogo_bilibili = bool(self.delogo_settings.get("delogo_bilibili", False))
+            creator_config.delogo_watermark = bool(self.delogo_settings.get("delogo_watermark", False))
+            creator_config.delogo_watermark_rect = self.delogo_settings.get("delogo_watermark_rect")
+            creator_config.delogo_watermark_mode = str(self.delogo_settings.get("delogo_watermark_mode", "delogo"))
+            if self.delogo_settings.get("delogo_custom"):
+                creator_config.delogo_custom_rect = self.delogo_settings.get("delogo_custom_rect")
+                creator_config.delogo_custom_mode = str(self.delogo_settings.get("delogo_custom_mode", "boxblur"))
+
+        # Khởi tạo voice mapping config tương ứng với chế độ 2 giọng hoặc 1 giọng
         from app.services.voice_mapping_service import VoiceAssignment, VoiceMappingConfig
-        single_va = VoiceAssignment(
-            voice_id=voice_id,
-            name=voice_name,
-            provider=str(self.selected_voice.get("provider", "piper")),
-            gender="male",
-            speed=1.0,
-        )
-        vm_config = VoiceMappingConfig(
-            default_male_voice=single_va,
-            default_female_voice=single_va,
-            fallback_voice=single_va,
-        )
-        creator_config.voice_config = vm_config
+        if self.dual_voice_config:
+            m_va = VoiceAssignment(
+                voice_id=male_id,
+                name=male_name,
+                provider=male_provider,
+                gender="male",
+                speed=1.0,
+            )
+            f_va = VoiceAssignment(
+                voice_id=female_id,
+                name=female_name,
+                provider=female_provider,
+                gender="female",
+                speed=1.0,
+            )
+            vm_config = VoiceMappingConfig(
+                default_male_voice=m_va,
+                default_female_voice=f_va,
+                fallback_voice=f_va,
+            )
+            creator_config.voice_config = vm_config
+        else:
+            single_va = VoiceAssignment(
+                voice_id=voice_id,
+                name=voice_name,
+                provider=str(self.selected_voice.get("provider", "piper")),
+                gender="male",
+                speed=1.0,
+            )
+            vm_config = VoiceMappingConfig(
+                default_male_voice=single_va,
+                default_female_voice=single_va,
+                fallback_voice=single_va,
+            )
+            creator_config.voice_config = vm_config
 
 
         def _on_creator_progress(raw_pct: float, message: str):
@@ -310,6 +425,7 @@ class SingleVoiceProgressDialog(QDialog):
         selected_voice: dict[str, str],
         audio_mix_settings: dict[str, float],
         enable_blur_mask: bool = True,
+        mask_mode: str = "box",
         blur_rect: tuple[float, float, float, float] | None = None,
         burn_subtitles: bool = True,
         existing_cues: list[dict[str, Any]] | None = None,
@@ -317,6 +433,7 @@ class SingleVoiceProgressDialog(QDialog):
         subtitle_config: SubtitleRenderConfig | None = None,
         brand_logo_settings: dict[str, Any] | None = None,
         watermark_settings: dict[str, Any] | None = None,
+        delogo_settings: dict[str, Any] | None = None,
     ):
         super().__init__(parent)
         self.workspace_root = workspace_root
@@ -324,13 +441,15 @@ class SingleVoiceProgressDialog(QDialog):
         self.selected_voice = selected_voice
         self.audio_mix_settings = audio_mix_settings
         self.enable_blur_mask = enable_blur_mask
+        self.subtitle_config = subtitle_config or SubtitleRenderConfig()
+        self.mask_mode = str(mask_mode or getattr(self.subtitle_config, "mask_mode", "box") or "box").strip().lower()
         self.blur_rect = blur_rect
         self.burn_subtitles = burn_subtitles
         self.existing_cues = existing_cues
         self.output_video_path = output_video_path
-        self.subtitle_config = subtitle_config or SubtitleRenderConfig()
         self.brand_logo_settings = brand_logo_settings or {}
         self.watermark_settings = watermark_settings or {}
+        self.delogo_settings = delogo_settings or {}
 
         self._worker: SingleVoicePipelineWorker | None = None
         self._last_result: VideoCreatorResult | None = None
@@ -471,6 +590,7 @@ class SingleVoiceProgressDialog(QDialog):
             selected_voice=self.selected_voice,
             audio_mix_settings=self.audio_mix_settings,
             enable_blur_mask=self.enable_blur_mask,
+            mask_mode=self.mask_mode,
             blur_rect=self.blur_rect,
             burn_subtitles=self.burn_subtitles,
             existing_cues=self.existing_cues,
@@ -478,6 +598,7 @@ class SingleVoiceProgressDialog(QDialog):
             subtitle_config=self.subtitle_config,
             brand_logo_settings=self.brand_logo_settings,
             watermark_settings=self.watermark_settings,
+            delogo_settings=self.delogo_settings,
             parent=self,
         )
 
@@ -636,5 +757,8 @@ class SingleVoiceProgressDialog(QDialog):
 
             if hasattr(parent_gui, "subtitle_list_view") and hasattr(parent_gui.subtitle_list_view, "refresh_segments"):
                 parent_gui.subtitle_list_view.refresh_segments()
+
+            if hasattr(parent_gui, "toggle_ocr_overlay_visibility"):
+                parent_gui.toggle_ocr_overlay_visibility(False)
         except Exception:
             pass

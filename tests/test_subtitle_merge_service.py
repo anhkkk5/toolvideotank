@@ -60,3 +60,42 @@ def test_adaptive_max_gap_respects_interval():
     merged = SubtitleMergeService.merge_cues(cues, sample_interval=1.0)
     assert len(merged) == 1
     assert merged[0]["merged_from"] == [1, 2]
+
+
+def test_merge_incomplete_split_dialogues_audio_35():
+    """Kiểm tra trường hợp câu 35 của người dùng: 既然这么累 + 为什么要生我呢 -> Ghép thành 1 câu."""
+    cues = [
+        {"id": 35, "start": 53.25, "end": 54.25, "text": "既然这么累", "gender": "female", "raw_gender": "female", "raw_gender_confidence": 0.99},
+        {"id": 36, "start": 54.25, "end": 55.75, "text": "为什么要生我呢", "gender": "female", "raw_gender": "female", "raw_gender_confidence": 0.95},
+        {"id": 37, "start": 55.75, "end": 57.25, "text": "你说什么呢", "gender": "female", "raw_gender": "female", "raw_gender_confidence": 0.90},
+    ]
+    res = SubtitleMergeService.merge_incomplete_split_dialogues(cues)
+    # Câu 35 và 36 phải được ghép vì 既然这么累 là vế liên kết dở dang cùng người nói
+    # Câu 37 '你说什么呢' là câu đối đáp của mẹ -> TUYỆT ĐỐI KHÔNG GHÉP
+    assert len(res) == 2
+    assert res[0]["text"] == "既然这么累 为什么要生我呢"
+    assert res[0]["start"] == 53.25
+    assert res[0]["end"] == 55.75
+    assert res[1]["text"] == "你说什么呢"
+    assert res[1]["start"] == 55.75
+
+
+def test_merge_incomplete_split_dialogues_turn_taking_not_merged():
+    """Kiểm tra câu đối đáp xin lỗi/quát không bị ghép nhầm dù gap = 0."""
+    cues = [
+        {"id": 1, "start": 10.0, "end": 11.0, "text": "别生气了", "gender": "female", "raw_gender": "female"},
+        {"id": 2, "start": 11.05, "end": 12.0, "text": "对不起啊倩倩", "gender": "female", "raw_gender": "female"},
+    ]
+    res = SubtitleMergeService.merge_incomplete_split_dialogues(cues)
+    assert len(res) == 2
+
+
+def test_merge_incomplete_split_dialogues_gender_mismatch_not_merged():
+    """Kiểm tra khác giới tính âm học không bao giờ bị ghép dù gap = 0."""
+    cues = [
+        {"id": 1, "start": 20.0, "end": 21.0, "text": "这日子还过不过了", "raw_gender": "female", "raw_gender_confidence": 0.95},
+        {"id": 2, "start": 21.05, "end": 22.0, "text": "我愿意吗", "raw_gender": "male", "raw_gender_confidence": 0.95},
+    ]
+    res = SubtitleMergeService.merge_incomplete_split_dialogues(cues)
+    assert len(res) == 2
+

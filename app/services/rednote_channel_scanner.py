@@ -66,7 +66,7 @@ def extract_rednote_urls(text: str) -> List[str]:
 
 def scan_rednote(
     url: str,
-    max_videos: int = 200,
+    max_videos: int = 0,  # 0: Không giới hạn (quét sạch toàn bộ kênh)
     browser_id: str = "chrome",
     profile_id: Optional[str] = None,
     browser_exe_path: Optional[str] = None,
@@ -198,7 +198,7 @@ def scan_rednote(
             _log(f"Bắt đầu bóc tách {total_items} liên kết RedNote...")
 
             for idx, target_url in enumerate(extracted_urls):
-                if _is_cancelled() or len(all_videos) >= max_videos:
+                if _is_cancelled() or (0 < max_videos < 99999 and len(all_videos) >= max_videos):
                     break
 
                 _log(f"Đang bóc tách [{idx+1}/{total_items}]: {target_url[:60]}...")
@@ -443,7 +443,7 @@ def scan_rednote(
                 # Thu thập metadata nhanh từ profile state — KHÔNG goto từng video
                 _log(f"Đang thu thập {len(video_notes)} video từ kênh (chế độ nhanh)...")
                 for idx, vn in enumerate(video_notes):
-                    if _is_cancelled() or len(all_videos) >= max_videos:
+                    if _is_cancelled() or (0 < max_videos < 99999 and len(all_videos) >= max_videos):
                         break
 
                     vid = vn.get("noteId") or f"rednote_{idx+1}"

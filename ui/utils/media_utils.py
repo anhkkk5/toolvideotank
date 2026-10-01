@@ -498,9 +498,139 @@ def import_media_paths(gui, file_paths):
         first_video = newly_added[0]["path"]
         browse_video(gui, file_path=first_video)
 
+    # Lưu trữ bền vững Media Pool vào disk
+    save_media_pool_state(gui)
+
     # Refresh UI Media Pool
     if hasattr(gui, "_refresh_media_pool_ui") and callable(gui._refresh_media_pool_ui):
         gui._refresh_media_pool_ui()
+
+
+def save_media_pool_state(gui):
+    """Lưu trữ bền vững danh sách video trong Media Pool và cấu hình riêng vào disk."""
+    import json
+    pool = getattr(gui, "project_media_pool", [])
+    if not pool:
+        return
+    voice_configs = getattr(gui, "_video_voice_configs", {})
+    ocr_rects = getattr(gui, "_video_ocr_rects", {})
+
+    from runtime_paths import workspace_root
+    save_data = {
+        "media_pool": pool,
+        "video_voice_configs": voice_configs,
+        "video_ocr_rects": ocr_rects,
+        "updated_at": time.time(),
+    }
+
+    # 1. Lưu vào session cache toàn cục của workspace
+    cache_path = os.path.join(workspace_root(), "temp", "session_media_pool.json")
+    try:
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+        with open(cache_path, "w", encoding="utf-8") as f:
+            json.dump(save_data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+    # 2. Lưu liên kết cho từng video trong pool (để khi mở bất kỳ video nào trong Launcher cũng tìm lại được cả nhóm)
+    sessions_file = os.path.join(workspace_root(), "projects", "media_pool_sessions.json")
+    try:
+        os.makedirs(os.path.dirname(sessions_file), exist_ok=True)
+        all_sessions = {}
+        if os.path.exists(sessions_file):
+            try:
+                with open(sessions_file, "r", encoding="utf-8") as f:
+                    all_sessions = json.load(f)
+            except Exception:
+                all_sessions = {}
+        pool_paths = [os.path.normpath(it.get("path", "")) for it in pool if it.get("path")]
+        for p in pool_paths:
+            all_sessions[p] = save_data
+        with open(sessions_file, "w", encoding="utf-8") as f:
+            json.dump(all_sessions, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+    # 3. Lưu vào project state hiện tại nếu có
+    ps = getattr(gui, "current_project_state", None)
+    if ps and hasattr(ps, "settings"):
+        ps.settings["project_media_pool"] = pool
+        ps.settings["video_voice_configs"] = voice_configs
+        ps.settings["video_ocr_rects"] = ocr_rects
+        project_service = getattr(gui, "project_service", None)
+        if project_service and hasattr(project_service, "save_project"):
+            try:
+                project_service.save_project(ps)
+            except Exception:
+                pass
+
+
+def restore_media_pool_state(gui, target_video_path="") -> bool:
+    """Khôi phục danh sách media pool từ session cache hoặc project state."""
+    import json
+    norm_target = os.path.normpath(target_video_path) if target_video_path else ""
+
+    save_data = None
+    from runtime_paths import workspace_root
+
+    # 1. Thử tìm trong media_pool_sessions.json theo video được mở
+    if norm_target:
+        sessions_file = os.path.join(workspace_root(), "projects", "media_pool_sessions.json")
+        if os.path.exists(sessions_file):
+            try:
+                with open(sessions_file, "r", encoding="utf-8") as f:
+                    all_sessions = json.load(f)
+                    save_data = all_sessions.get(norm_target)
+            except Exception:
+                pass
+
+    # 2. Thử tìm trong project state hiện tại
+    if not save_data:
+        ps = getattr(gui, "current_project_state", None)
+        if ps and hasattr(ps, "settings") and ps.settings.get("project_media_pool"):
+            save_data = {
+                "media_pool": ps.settings.get("project_media_pool", []),
+                "video_voice_configs": ps.settings.get("video_voice_configs", {}),
+                "video_ocr_rects": ps.settings.get("video_ocr_rects", {}),
+            }
+
+    # 3. Thử tìm trong session_media_pool.json
+    if not save_data:
+        cache_path = os.path.join(workspace_root(), "temp", "session_media_pool.json")
+        if os.path.exists(cache_path):
+            try:
+                with open(cache_path, "r", encoding="utf-8") as f:
+                    save_data = json.load(f)
+            except Exception:
+                pass
+
+    if not save_data or not isinstance(save_data, dict):
+        return False
+
+    saved_pool = save_data.get("media_pool") or []
+    valid_pool = []
+    for it in saved_pool:
+        p = it.get("path", "")
+        if p and os.path.isfile(p) and not str(p).lower().endswith("_final_vi.mp4"):
+            valid_pool.append(dict(it))
+
+    if not valid_pool:
+        return False
+
+    # Nếu có target_video_path, kiểm tra xem nó có nằm trong pool không
+    if norm_target and not any(os.path.normpath(it.get("path", "")) == norm_target for it in valid_pool):
+        return False
+
+    gui.project_media_pool = valid_pool
+    if not hasattr(gui, "_video_voice_configs"):
+        gui._video_voice_configs = {}
+    gui._video_voice_configs.update(save_data.get("video_voice_configs") or {})
+
+    if not hasattr(gui, "_video_ocr_rects"):
+        gui._video_ocr_rects = {}
+    gui._video_ocr_rects.update(save_data.get("video_ocr_rects") or {})
+
+    return True
 
 
 def import_multi_media_files(gui):
@@ -523,7 +653,7 @@ def browse_video(gui, file_path=None):
     if not file_path:
         return
 
-    # 1. Lưu lại khung OCR của video cũ trước khi switch
+    # 1. Lưu lại khung OCR và Media Pool của video cũ trước khi switch
     old_video = getattr(gui, "_current_video_path", "")
     overlay = getattr(gui, "ocr_region_overlay", None)
     if old_video and overlay and hasattr(overlay, "get_norm_rect"):
@@ -552,9 +682,25 @@ def browse_video(gui, file_path=None):
         except Exception:
             pass
 
+    # Lưu lại trạng thái media pool hiện tại
+    save_media_pool_state(gui)
+
     if hasattr(gui, "ensure_media_backend_ready"):
         gui.ensure_media_backend_ready()
-    gui.video_path_edit.setText(file_path)
+
+    # Tìm sẵn thời lượng đã biết trong Media Pool để tránh ffprobe trên UI thread
+    dur_s = 0.0
+    if hasattr(gui, "project_media_pool"):
+        norm_f = os.path.normpath(file_path)
+        for item in gui.project_media_pool:
+            if os.path.normpath(item.get("path", "")) == norm_f:
+                dur_s = float(item.get("duration", 0.0) or 0.0)
+                break
+
+    if hasattr(gui, "video_path_edit"):
+        gui.video_path_edit.blockSignals(True)
+        gui.video_path_edit.setText(file_path)
+        gui.video_path_edit.blockSignals(False)
     gui._current_video_path = os.path.abspath(file_path)
     if hasattr(gui, "settings"):
         from views.launcher import LauncherWindow
@@ -563,15 +709,23 @@ def browse_video(gui, file_path=None):
     gui._allow_post_pipeline_preview_assets = False
     gui.refresh_video_dimensions(file_path)
 
+    if hasattr(gui, "timeline") and hasattr(gui.timeline, "clear"):
+        gui.timeline.clear()
     gui.timeline.set_segments([])
     gui.timeline.set_playing(False)
     gui.current_segments = []
     gui.current_translated_segments = []
     gui.current_segment_models = []
     gui.current_translated_segment_models = []
+    if hasattr(gui, "timeline") and hasattr(gui.timeline, "set_video_source"):
+        gui.timeline.set_video_source(file_path, dur_s)
 
     gui.current_project_state = gui.ensure_current_project()
     gui.load_project_context(gui.current_project_state)
+
+    # Chỉ khôi phục danh sách Media Pool nếu đang thiếu
+    if len(getattr(gui, "project_media_pool", [])) <= 1:
+        restore_media_pool_state(gui, file_path)
 
     # 2. Khôi phục khung OCR riêng của video mới vừa chọn
     if overlay and hasattr(overlay, "restore_for_video"):

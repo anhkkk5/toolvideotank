@@ -39,6 +39,10 @@ class SubtitleSegment:
     status: str = "ok"
     fusion_reason: str = ""                # Lý do giải trình từ Multimodal Fusion
     bbox: list[float] = field(default_factory=list) # Tọa độ chuẩn hóa của phụ đề [x1, y1, x2, y2]
+    cluster_id: str = ""                   # Cụm giọng nói (SPEAKER_00, SPEAKER_01...)
+    acoustic_hint: str = ""                # Gợi ý âm học kèm mức tin cậy (vd: male 52.8% (0.8s, LOW trust))
+    cluster_female_ratio: float = 0.5      # Tỉ lệ nữ trong cluster
+    cluster_male_ratio: float = 0.5        # Tỉ lệ nam trong cluster
 
     def to_dict(self) -> dict[str, Any]:
         """Convert segment to serializable dictionary."""
@@ -116,4 +120,8 @@ class SubtitleSegment:
             status=str(data.get("status", "ok") or "ok"),
             fusion_reason=str(data.get("fusion_reason", "") or ""),
             bbox=list(data.get("bbox") or []),
+            cluster_id=str(data.get("cluster_id", "") or data.get("voice_cluster", "") or "").strip(),
+            acoustic_hint=str(data.get("acoustic_hint", "") or "").strip(),
+            cluster_female_ratio=float(data.get("cluster_female_ratio", 0.5) or 0.5),
+            cluster_male_ratio=float(data.get("cluster_male_ratio", 0.5) or 0.5),
         )

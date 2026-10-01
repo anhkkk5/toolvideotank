@@ -491,6 +491,7 @@ def _scrape_douyin_user_videos(
     progress_callback: Optional[Callable] = None,
     preferred_browser: Optional[str] = None,
     cookie_cache_path: Optional[str] = None,
+    max_videos: int = 0,
 ) -> tuple:
     """Scrape video links and channel name from a Douyin user profile page.
 
@@ -579,11 +580,12 @@ def _scrape_douyin_user_videos(
             progress_callback(p)
 
         no_new_count = 0
-        max_scrolls = 20
+        is_unlimited = (max_videos <= 0 or max_videos >= 99999) if "max_videos" in locals() else True
+        max_scrolls = 1000 if is_unlimited else max(20, max_videos // 8 + 5)
         for scroll_idx in range(max_scrolls):
             prev_len = len(video_links)
             driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(1.0)
+            time.sleep(1.6)
 
             links = driver.find_elements("css selector", 'a[href*="/video/"]')
             for l in links:
@@ -605,13 +607,24 @@ def _scrape_douyin_user_videos(
             else:
                 if len(video_links) > 0:
                     no_new_count += 1
-                    if no_new_count >= 2:
-                        # 2 consecutive scrolls with 0 new videos -> all videos loaded
+                    # Nhấp nhả cuộn để kích hoạt lazy-load nếu bị kẹt
+                    try:
+                        driver.execute_script("window.scrollBy(0, -500);")
+                        time.sleep(0.4)
+                        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+                        time.sleep(1.0)
+                    except Exception:
+                        pass
+                    if no_new_count >= 6:
+                        # 6 consecutive scrolls with 0 new videos (~12-15s) -> all videos loaded
                         break
                 else:
-                    if scroll_idx >= 5:
-                        # 6 scrolls without any videos -> empty channel or blocked
+                    if scroll_idx >= 8:
+                        # 8 scrolls without any videos -> empty channel or blocked
                         break
+
+            if not is_unlimited and len(video_links) >= max_videos:
+                break
 
         # Extract channel name after page has hydrated
         channel_name = ""
@@ -1062,6 +1075,48 @@ class VideoDownloaderService:
 
     # ------------------------------------------------------------------
     # Single video download
+    def _apply_delogo_if_needed(self, video_path: str, delogo_bili: bool = True, delogo_wm: bool = True) -> bool:
+        """Tự động khử logo và watermark trên video tải về."""
+        try:
+            if not video_path or not os.path.isfile(video_path):
+                return False
+            from app.services.video_export_service import _resolve_ffmpeg, probe_video_dimensions, build_delogo_filters
+            ffmpeg = _resolve_ffmpeg()
+            vid_w, vid_h = probe_video_dimensions(video_path)
+            filters, out_v = build_delogo_filters(vid_w, vid_h, delogo_bilibili=delogo_bili, delogo_watermark=delogo_wm)
+            if not filters:
+                return False
+            dir_name = os.path.dirname(video_path)
+            base_name, ext = os.path.splitext(os.path.basename(video_path))
+            temp_clean = os.path.join(dir_name, f"{base_name}_delogo_temp{ext}")
+            cmd = [
+                ffmpeg, "-y",
+                "-i", video_path,
+                "-filter_complex", ";\n".join(filters),
+                "-map", f"[{out_v}]",
+                "-map", "0:a:0?",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
+                "-c:a", "copy",
+                temp_clean,
+            ]
+            import subprocess
+            kwargs = {"capture_output": True}
+            if os.name == "nt":
+                kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            p = subprocess.run(cmd, **kwargs)
+            if p.returncode == 0 and os.path.isfile(temp_clean) and os.path.getsize(temp_clean) > 10240:
+                try:
+                    os.replace(temp_clean, video_path)
+                except Exception:
+                    os.remove(video_path)
+                    os.rename(temp_clean, video_path)
+                return True
+            elif os.path.isfile(temp_clean):
+                os.remove(temp_clean)
+        except Exception as exc:
+            print(f"[VideoDownloaderService] Delogo notice: {exc}")
+        return False
+
     # ------------------------------------------------------------------
     def download_single(
         self,
@@ -1069,6 +1124,8 @@ class VideoDownloaderService:
         output_dir: str,
         quality: str = "best",
         progress_callback: Optional[Callable[[DownloadProgress], None]] = None,
+        auto_delogo_bilibili: bool = False,
+        auto_delogo_watermark: bool = False,
     ) -> dict:
         """Download a single video. Returns dict with result info."""
         import yt_dlp
@@ -1149,6 +1206,11 @@ class VideoDownloaderService:
                     result["title"] = info.get("title", "")
                     result["channel"] = progress.channel_name
 
+                    # Tự động tẩy Logo Bilibili & Watermark nếu tải video từ Bilibili
+                    if (platform == "bilibili" or "bilibili.com" in url or "b23.tv" in url) and (auto_delogo_bilibili or auto_delogo_watermark):
+                        for f_path in list(result["files"]):
+                            self._apply_delogo_if_needed(f_path, auto_delogo_bilibili, auto_delogo_watermark)
+
             progress.status = "finished"
             progress.percent = 100
             if progress_callback:
@@ -1208,6 +1270,7 @@ class VideoDownloaderService:
         output_base_dir: str,
         quality: str = "best",
         progress_callback: Optional[Callable[[DownloadProgress], None]] = None,
+        max_videos: int = 0,
     ) -> dict:
         """Download all videos from a channel/user page.
 
@@ -1248,6 +1311,7 @@ class VideoDownloaderService:
                     progress_callback=progress_callback,
                     preferred_browser=self.preferred_browser,
                     cookie_cache_path=cookie_file,
+                    max_videos=max_videos,
                 )
                 if not video_links:
                     result["error"] = "Không tìm thấy video nào trên trang kênh."
@@ -1283,6 +1347,8 @@ class VideoDownloaderService:
                 "extract_flat": True,
                 "skip_download": True,
             }
+            if max_videos > 0 and max_videos < 99999:
+                flat_opts["playlistend"] = max_videos
 
             if platform == "douyin":
                 flat_opts["http_headers"] = {

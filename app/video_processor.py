@@ -680,10 +680,18 @@ def _build_video_lut_chain(video_filter_state=None):
     return build_video_lut_chain(video_filter_state)
 
 
+_VIDEO_DIMENSIONS_CACHE: dict[str, tuple[int, int]] = {}
+
 def get_video_dimensions(video_path):
     """Return (width, height) of the first video stream using ffprobe.
     Falls back to (1920, 1080) if ffprobe is unavailable or fails.
     """
+    if not video_path:
+        return 1920, 1080
+    norm_p = os.path.normpath(str(video_path))
+    if norm_p in _VIDEO_DIMENSIONS_CACHE:
+        return _VIDEO_DIMENSIONS_CACHE[norm_p]
+
     ffprobe = _ffprobe_path()
     if not os.path.exists(ffprobe):
         print("ffprobe not found — using default resolution 1920x1080")
@@ -699,7 +707,9 @@ def get_video_dimensions(video_path):
             **_text_subprocess_run_kwargs(),
         )
         w, h = result.stdout.strip().split('x')
-        return int(w), int(h)
+        dims = (int(w), int(h))
+        _VIDEO_DIMENSIONS_CACHE[norm_p] = dims
+        return dims
     except Exception as e:
         print(f"ffprobe failed ({e}) — using default 1920x1080")
         return 1920, 1080

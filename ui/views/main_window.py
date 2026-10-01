@@ -523,6 +523,10 @@ def _connect_ui_signals(gui):
     # timing, selection, persistence, and preview state.
     gui.blur_add_btn.clicked.connect(lambda: gui.on_add_timeline_layer("blur"))
     gui.ocr_region_btn.clicked.connect(gui.toggle_ocr_overlay_visibility)
+    if hasattr(gui, "delogo_region_btn"):
+        gui.delogo_region_btn.clicked.connect(gui.toggle_delogo_overlay_visibility)
+    if hasattr(gui, "watermark_region_btn"):
+        gui.watermark_region_btn.clicked.connect(gui.toggle_watermark_overlay_visibility)
     if hasattr(gui, "ocr_translator_btn"):
         gui.ocr_translator_btn.toggled.connect(gui.toggle_ocr_translator)
     if hasattr(gui, "ocr_translator_overlay"):

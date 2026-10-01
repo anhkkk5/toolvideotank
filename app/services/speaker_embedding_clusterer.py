@@ -256,3 +256,186 @@ class SpeakerEmbeddingClusterer:
 
         print(f"[SpeakerClusterer] Reduced {len(speaker_ids)} raw speakers down to {len(active_speakers)} canonical characters.")
         return merged_turns
+
+    def cluster_cues(
+        self,
+        audio_path: str,
+        cues: list[dict[str, Any]],
+        *,
+        similarity_threshold: float = 0.35,
+    ) -> list[dict[str, Any]]:
+        """Trích xuất Speaker Embeddings từ audio và gom cụm các câu thoại (cues).
+
+        Tự động xác định số lượng nhân vật thông qua Agglomerative Voiceprint Clustering.
+        Gán `cluster_id` (SPEAKER_00, SPEAKER_01...) và tính toán `cluster_gender_prior`
+        cho từng câu thoại nhằm cung cấp bằng chứng cho Bayesian Evidence Fusion.
+        """
+        if not cues or not audio_path or not os.path.isfile(audio_path):
+            return cues
+
+        extractor = self._get_extractor()
+        if extractor is None:
+            return cues
+
+        try:
+            import soundfile as sf
+            audio, sr = sf.read(audio_path, dtype="float32")
+            if audio.ndim > 1:
+                audio = audio.mean(axis=-1)
+        except Exception as exc:
+            print(f"[SpeakerClusterer] Cannot read audio for clustering: {exc}")
+            return cues
+
+        # 1. Trích xuất embedding cho từng câu thoại
+        cue_embeddings: dict[int, np.ndarray] = {}
+        for idx, cue in enumerate(cues):
+            cid = cue.get("id", idx + 1)
+            st = float(cue.get("start", 0.0) or 0.0)
+            en = float(cue.get("end", st + 0.1) or (st + 0.1))
+            s_idx = max(0, int(st * sr))
+            e_idx = min(len(audio), int(en * sr))
+            chunk = audio[s_idx:e_idx]
+            if len(chunk) < 800:
+                continue
+
+            try:
+                stream = extractor.create_stream()
+                stream.accept_waveform(sr, chunk)
+                stream.input_finished()
+                if extractor.is_ready(stream):
+                    emb = np.array(extractor.compute(stream), dtype=np.float32)
+                    norm = np.linalg.norm(emb)
+                    if norm > 1e-6:
+                        cue_embeddings[cid] = emb / norm
+            except Exception:
+                continue
+
+        if not cue_embeddings:
+            return cues
+
+        # 2. Agglomerative Clustering gom cụm câu thoại dựa trên Cosine Similarity
+        # Khởi tạo mỗi câu là 1 cụm
+        clusters: dict[int, list[int]] = {cid: [cid] for cid in cue_embeddings}
+        cluster_centroids: dict[int, np.ndarray] = {cid: cue_embeddings[cid].copy() for cid in cue_embeddings}
+
+        active_cids = list(clusters.keys())
+        sim_thresh = float(similarity_threshold)
+
+        while len(active_cids) > 1:
+            best_pair = None
+            best_sim = -1.0
+
+            for i in range(len(active_cids)):
+                c1 = active_cids[i]
+                e1 = cluster_centroids[c1]
+                for j in range(i + 1, len(active_cids)):
+                    c2 = active_cids[j]
+                    e2 = cluster_centroids[c2]
+                    sim = float(np.dot(e1, e2))
+                    if sim > best_sim:
+                        best_sim = sim
+                        best_pair = (c1, c2)
+
+            if best_pair and best_sim >= sim_thresh:
+                c1, c2 = best_pair
+                # Gộp c2 vào c1
+                clusters[c1].extend(clusters[c2])
+                new_cent = cluster_centroids[c1] * len(clusters[c1]) + cluster_centroids[c2] * len(clusters[c2])
+                norm = np.linalg.norm(new_cent)
+                if norm > 1e-6:
+                    cluster_centroids[c1] = new_cent / norm
+                del clusters[c2]
+                del cluster_centroids[c2]
+                active_cids.remove(c2)
+            else:
+                break
+
+        # 2.5 Hấp thụ các câu đơn lẻ / cụm manh mún (< 1.5s) vào cụm chính có âm sắc tương đồng nhất
+        id_to_cue = {c.get("id", i + 1): c for i, c in enumerate(cues)}
+        cluster_durs = {
+            cid: sum(float(id_to_cue.get(mid, {}).get("end", 0.0)) - float(id_to_cue.get(mid, {}).get("start", 0.0)) for mid in clusters[cid])
+            for cid in list(clusters.keys())
+        }
+        major_c = [cid for cid in clusters if cluster_durs.get(cid, 0.0) >= 1.5]
+        minor_c = [cid for cid in clusters if cluster_durs.get(cid, 0.0) < 1.5]
+
+        if major_c and minor_c:
+            for minor in minor_c:
+                best_major = None
+                best_sim = -1.0
+                for major in major_c:
+                    sim = float(np.dot(cluster_centroids[minor], cluster_centroids[major]))
+                    if sim > best_sim:
+                        best_sim = sim
+                        best_major = major
+                if best_major and best_sim >= 0.25:
+                    clusters[best_major].extend(clusters[minor])
+                    new_cent = cluster_centroids[best_major] * len(clusters[best_major]) + cluster_centroids[minor] * len(clusters[minor])
+                    norm = np.linalg.norm(new_cent)
+                    if norm > 1e-6:
+                        cluster_centroids[best_major] = new_cent / norm
+                    if minor in clusters:
+                        del clusters[minor]
+                    if minor in cluster_centroids:
+                        del cluster_centroids[minor]
+
+        # 3. Đặt tên chuẩn hóa cụm SPEAKER_00, SPEAKER_01... sắp xếp theo số lượng câu
+        sorted_clusters = sorted(clusters.values(), key=lambda member_ids: -len(member_ids))
+        cue_to_cluster: dict[int, str] = {}
+        cluster_gender_stats: dict[str, dict[str, float]] = {}
+
+        id_to_cue = {c.get("id", i + 1): c for i, c in enumerate(cues)}
+
+        for cl_idx, member_ids in enumerate(sorted_clusters):
+            cluster_name = f"SPEAKER_{cl_idx:02d}"
+            f_score = 0.0
+            m_score = 0.0
+
+            for cid in member_ids:
+                cue_to_cluster[cid] = cluster_name
+                c_item = id_to_cue.get(cid, {})
+                rg = str(c_item.get("raw_gender") or c_item.get("gender") or "").lower()
+                rc = float(c_item.get("raw_gender_confidence") or c_item.get("confidence") or 0.5)
+                if rc > 1.0:
+                    rc /= 100.0
+                if rg == "female":
+                    f_score += rc
+                elif rg == "male":
+                    m_score += rc
+
+            total_s = f_score + m_score
+            if total_s > 0:
+                cluster_gender_stats[cluster_name] = {
+                    "female": f_score / total_s,
+                    "male": m_score / total_s,
+                }
+            else:
+                cluster_gender_stats[cluster_name] = {"female": 0.5, "male": 0.5}
+
+        # 4. Gán thông tin cụm và Prior vào cues
+        enriched_cues: list[dict[str, Any]] = []
+        for idx, cue in enumerate(cues):
+            c_copy = dict(cue)
+            cid = c_copy.get("id", idx + 1)
+            cl_name = cue_to_cluster.get(cid, "SPEAKER_00")
+            c_copy["cluster_id"] = cl_name
+            c_copy["voice_cluster"] = cl_name
+
+            stats = cluster_gender_stats.get(cl_name, {"female": 0.5, "male": 0.5})
+            c_copy["cluster_female_ratio"] = round(stats["female"], 3)
+            c_copy["cluster_male_ratio"] = round(stats["male"], 3)
+            if stats["female"] > 0.60:
+                c_copy["cluster_gender_prior"] = "female"
+                c_copy["cluster_prior_confidence"] = round(stats["female"], 3)
+            elif stats["male"] > 0.60:
+                c_copy["cluster_gender_prior"] = "male"
+                c_copy["cluster_prior_confidence"] = round(stats["male"], 3)
+            else:
+                c_copy["cluster_gender_prior"] = "unknown"
+                c_copy["cluster_prior_confidence"] = 0.5
+
+            enriched_cues.append(c_copy)
+
+        print(f"[SpeakerClusterer] Clustered {len(cues)} cues into {len(sorted_clusters)} voiceprint characters.")
+        return enriched_cues
+

@@ -88,6 +88,7 @@ class VideoCreatorConfig:
     subtitle_config: SubtitleRenderConfig = field(default_factory=SubtitleRenderConfig)
     cleanup_intermediate_audio: bool = False
     enable_blur_mask: bool = True
+    mask_mode: str = "box"                # Kiểu mặt nạ: "blur" (Ảnh 1), "box" (Ảnh 2), "none"
     blur_rect: tuple[float, float, float, float] | None = None
     # Brand logo settings
     enable_brand_logo: bool = False
@@ -102,6 +103,13 @@ class VideoCreatorConfig:
     watermark_font_size: int = 36
     watermark_opacity: float = 0.35
     watermark_color: str = "#FFFFFF"
+    # Xóa / Tẩy Logo & Watermark video gốc (Bilibili, Douyin, Bản quyền mờ)
+    delogo_bilibili: bool = False
+    delogo_watermark: bool = False
+    delogo_watermark_rect: tuple[float, float, float, float] | None = None
+    delogo_watermark_mode: str = "delogo"
+    delogo_custom_rect: tuple[float, float, float, float] | None = None
+    delogo_custom_mode: Literal["delogo", "boxblur", "inpaint"] = "inpaint"
 
 
 @dataclass
@@ -459,16 +467,55 @@ class VideoCreatorService:
                     )
 
                 # 3.4. Khớp thời lượng Duration Fitting (qua DurationFittingService)
-                # Tự động chống đè giọng nói (Anti-overlap Timeline Resolution):
-                actual_start = round(float(seg.start), 3)
+                # Tự động chống đè giọng nói & Chống sụp đổ dây chuyền (Anti-domino Drift Guard):
+                orig_start = round(float(seg.start), 3)
+                orig_end = round(float(seg.end), 3)
+                orig_dur = max(0.2, round(orig_end - orig_start, 3))
+
+                # Cố định mốc bắt đầu tuyệt đối tại orig_start để lồng tiếng LUÔN khớp 100% với phụ đề hiển thị
+                # Tuyệt đối không cho phép tích lũy độ trôi (Zero Cumulative Drift)
+                actual_start = orig_start
                 if tts_blocks:
                     prev_end = round(tts_blocks[-1].start_time + tts_blocks[-1].duration, 3)
-                    if actual_start < prev_end:
-                        # Dịch nhẹ thời điểm phát câu sau để không nói chồng chéo lên câu trước
-                        actual_start = prev_end
+                    # Nếu câu trước dài quá đè vào thời điểm bắt đầu của câu này:
+                    if prev_end > orig_start:
+                        # Cắt nhẹ đuôi và fade-out khối trước 20ms trước khi câu mới bắt đầu
+                        target_prev_dur = max(0.1, round(orig_start - 0.02 - tts_blocks[-1].start_time, 3))
+                        if target_prev_dur < tts_blocks[-1].duration:
+                            try:
+                                import subprocess
+                                from runtime_paths import subprocess_hidden_kwargs
+                                trimmed_prev = os.path.splitext(tts_blocks[-1].audio_path)[0] + "_trim.wav"
+                                cmd = [
+                                    fitting_svc.ffmpeg_bin, "-y",
+                                    "-i", tts_blocks[-1].audio_path,
+                                    "-t", f"{target_prev_dur:.3f}",
+                                    "-af", f"afade=t=out:st={max(0.0, target_prev_dur - 0.05):.3f}:d=0.05",
+                                    trimmed_prev,
+                                ]
+                                subprocess.run(cmd, check=True, capture_output=True, **subprocess_hidden_kwargs())
+                                if os.path.isfile(trimmed_prev):
+                                    tts_blocks[-1].audio_path = trimmed_prev
+                            except Exception as exc:
+                                print(f"[VideoCreator] Trimming previous audio notice: {exc}")
+                            # Luôn đồng bộ duration để bảo đảm không bao giờ overlap
+                            tts_blocks[-1].duration = target_prev_dur
+                        # Câu mới LUÔN xuất phát chính xác tại orig_start
+                        actual_start = orig_start
 
-                target_end = max(round(float(seg.end), 3), round(actual_start + 0.1, 3))
-                slot_dur = max(0.1, round(target_end - actual_start, 3))
+                # Xác định slot_dur cho câu hiện tại: Không bao giờ bị bóp nhỏ hơn orig_dur
+                next_tts_start = None
+                for future_seg, future_assign in zip(request.segments[i:], assignments[i:]):
+                    if future_assign.is_tts_eligible:
+                        next_tts_start = round(float(future_seg.start), 3)
+                        break
+
+                if next_tts_start is not None and next_tts_start > actual_start:
+                    available_gap = round(next_tts_start - actual_start, 3)
+                    slot_dur = max(orig_dur, min(available_gap, round(orig_dur * 1.25, 3)))
+                else:
+                    slot_dur = orig_dur
+
                 fitted_path = os.path.join(fitted_output_dir, f"segment_{seg.id:04d}_fit.wav")
                 fit_res = fitting_svc.fit_segment(
                     segment_id=seg.id,
@@ -801,6 +848,7 @@ class VideoCreatorService:
             overflow_policy=request.config.overflow_policy,
             subtitle_config=request.config.subtitle_config,
             enable_blur_mask=getattr(request.config, "enable_blur_mask", True),
+            mask_mode=getattr(request.config, "mask_mode", "box"),
             blur_rect=getattr(request.config, "blur_rect", None),
             enable_brand_logo=getattr(request.config, "enable_brand_logo", False),
             brand_logo_path=getattr(request.config, "brand_logo_path", ""),
@@ -813,6 +861,12 @@ class VideoCreatorService:
             watermark_font_size=getattr(request.config, "watermark_font_size", 36),
             watermark_opacity=getattr(request.config, "watermark_opacity", 0.35),
             watermark_color=getattr(request.config, "watermark_color", "#FFFFFF"),
+            delogo_bilibili=getattr(request.config, "delogo_bilibili", False),
+            delogo_watermark=getattr(request.config, "delogo_watermark", False),
+            delogo_watermark_rect=getattr(request.config, "delogo_watermark_rect", None),
+            delogo_watermark_mode=getattr(request.config, "delogo_watermark_mode", "delogo"),
+            delogo_custom_rect=getattr(request.config, "delogo_custom_rect", None),
+            delogo_custom_mode=getattr(request.config, "delogo_custom_mode", "delogo"),
         )
 
         # ---------------------------------------------------------------------

@@ -1498,6 +1498,13 @@ class MpvVideoView(QWidget):
             if self.text_overlay._items and not self.text_overlay._suppressed:
                 self.text_overlay.show()
                 self.text_overlay.raise_()
+        # Đồng bộ các overlay độc lập (OCR, Xóa Logo, Watermark)
+        w = self.window()
+        if w is not None:
+            for attr in ("ocr_region_overlay", "delogo_region_overlay", "watermark_region_overlay", "ocr_translator_overlay"):
+                overlay = getattr(w, attr, None)
+                if overlay and getattr(overlay, "_requested_visible", False):
+                    overlay.sync_to_view()
         self.update()
 
     def moveEvent(self, event):
@@ -1505,6 +1512,12 @@ class MpvVideoView(QWidget):
         self.reposition_subtitle()
         self.blur_overlay.sync_to_view()
         self.mask_overlay.sync_to_view()
+        w = self.window()
+        if w is not None:
+            for attr in ("ocr_region_overlay", "delogo_region_overlay", "watermark_region_overlay", "ocr_translator_overlay"):
+                overlay = getattr(w, attr, None)
+                if overlay and getattr(overlay, "_requested_visible", False):
+                    overlay.sync_to_view()
 
     def showEvent(self, event):
         super().showEvent(event)

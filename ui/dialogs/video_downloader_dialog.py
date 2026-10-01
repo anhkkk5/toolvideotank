@@ -181,7 +181,7 @@ class ScanWorker(QThread):
         browser_id: str = "chrome",
         profile_id: Optional[str] = None,
         browser_exe: Optional[str] = None,
-        max_count: int = 200,
+        max_count: int = 0,  # 0: Không giới hạn (quét toàn bộ kênh)
         parent=None,
     ):
         super().__init__(parent)
@@ -273,6 +273,8 @@ class ScanWorker(QThread):
                     "no_warnings": True,
                     "extractor_args": {"tiktok": ["app_version=0"]},
                 }
+                if self.max_count > 0 and self.max_count < 99999:
+                    ydl_opts["playlistend"] = self.max_count
 
                 # Attach saved cookies for this platform if available
                 from app.services.cookie_storage_service import get_saved_platform_cookies
@@ -290,8 +292,11 @@ class ScanWorker(QThread):
                         entries = info.get("entries") or [info]
                         ch_name = info.get("uploader") or info.get("channel") or info.get("title") or "Unknown"
                         channel_info["name"] = ch_name
+                        is_unlimited = (self.max_count <= 0 or self.max_count >= 99999)
                         for i, e in enumerate(entries):
                             if self._is_cancelled:
+                                break
+                            if not is_unlimited and len(videos) >= self.max_count:
                                 break
                             vid = str(e.get("id") or (i + 1))
                             v_url = e.get("url") or e.get("webpage_url") or scan_url
@@ -339,15 +344,91 @@ class DownloadWorker(QThread):
     sig_progress = Signal(int, int, str)   # current, total, message
     sig_finished = Signal(int, int, bool)  # success_count, total, was_cancelled
 
-    def __init__(self, selected_items: List[tuple], output_dir: str, parent=None):
+    def __init__(
+        self,
+        selected_items: List[tuple],
+        output_dir: str,
+        auto_delogo_bilibili: bool = False,
+        auto_delogo_watermark: bool = False,
+        parent=None,
+    ):
         """selected_items: list of (row_idx, video_dict)"""
         super().__init__(parent)
         self.selected_items = selected_items
         self.output_dir = output_dir
+        self.auto_delogo_bilibili = auto_delogo_bilibili
+        self.auto_delogo_watermark = auto_delogo_watermark
         self._is_cancelled = False
 
     def cancel(self):
         self._is_cancelled = True
+
+    def _apply_delogo_cleanup(self, video_path: str, delogo_bili: bool = True, delogo_wm: bool = True) -> bool:
+        """Khử sạch logo Bilibili và watermark bản quyền trên file video vừa tải về."""
+        try:
+            if not video_path or not os.path.isfile(video_path):
+                return False
+            if not delogo_bili and not delogo_wm:
+                return False
+
+            from app.services.video_export_service import (
+                _resolve_ffmpeg,
+                probe_video_dimensions,
+                build_delogo_filters,
+            )
+            ffmpeg = _resolve_ffmpeg()
+            vid_w, vid_h = probe_video_dimensions(video_path)
+
+            filters, out_v = build_delogo_filters(
+                vid_w=vid_w,
+                vid_h=vid_h,
+                delogo_bilibili=delogo_bili,
+                delogo_watermark=delogo_wm,
+                current_v="0:v",
+            )
+            if not filters:
+                return False
+
+            dir_name = os.path.dirname(video_path)
+            base_name, ext = os.path.splitext(os.path.basename(video_path))
+            temp_clean_path = os.path.join(dir_name, f"{base_name}_delogo_temp{ext}")
+
+            cmd = [
+                ffmpeg, "-y",
+                "-i", video_path,
+                "-filter_complex", ";\n".join(filters),
+                "-map", f"[{out_v}]",
+                "-map", "0:a:0?",
+                "-c:v", "libx264",
+                "-preset", "veryfast",
+                "-crf", "20",
+                "-pix_fmt", "yuv420p",
+                "-c:a", "copy",
+                temp_clean_path,
+            ]
+            import subprocess
+            kwargs = {"capture_output": True}
+            if os.name == "nt":
+                kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+            proc = subprocess.run(cmd, **kwargs)
+            if proc.returncode == 0 and os.path.isfile(temp_clean_path) and os.path.getsize(temp_clean_path) > 10240:
+                try:
+                    os.replace(temp_clean_path, video_path)
+                except Exception:
+                    os.remove(video_path)
+                    os.rename(temp_clean_path, video_path)
+                print(f"[DownloadWorker] Delogo cleanup succeeded for: {os.path.basename(video_path)}")
+                return True
+            else:
+                if os.path.isfile(temp_clean_path):
+                    try:
+                        os.remove(temp_clean_path)
+                    except Exception:
+                        pass
+        except Exception as exc:
+            print(f"[DownloadWorker] Delogo cleanup notice: {exc}")
+        return False
 
     def run(self):
         os.makedirs(self.output_dir, exist_ok=True)
@@ -414,9 +495,18 @@ class DownloadWorker(QThread):
                 try:
                     from app.services.video_downloader_service import VideoDownloaderService
                     svc = VideoDownloaderService(output_root=self.output_dir)
-                    res = svc.download_single(v.get("url"), self.output_dir)
+                    res = svc.download_single(
+                        v.get("url"),
+                        self.output_dir,
+                        auto_delogo_bilibili=False,
+                        auto_delogo_watermark=False,
+                    )
                     if res.get("success"):
                         downloaded = True
+                        if res.get("files") and len(res.get("files")) > 0:
+                            f_cand = res.get("files")[0]
+                            if os.path.isfile(f_cand):
+                                out_path = f_cand
                 except Exception:
                     downloaded = False
 
@@ -430,8 +520,39 @@ class DownloadWorker(QThread):
                 break
 
             if downloaded:
+                actual_file = out_path if (os.path.exists(out_path) and os.path.getsize(out_path) > 10240) else None
+                if not actual_file and os.path.isdir(self.output_dir):
+                    for f in os.listdir(self.output_dir):
+                        if f.endswith(".mp4") and clean_title[:20].lower() in f.lower():
+                            fp = os.path.join(self.output_dir, f)
+                            if os.path.getsize(fp) > 10240:
+                                actual_file = fp
+                                break
+
+                # Khử Logo Bilibili & Watermark nếu được bật
+                v_url = (v.get("url") or "") + " " + (v.get("webpage_url") or "") + " " + (v.get("id") or "")
+                is_bilibili = (
+                    "bilibili" in v_url.lower()
+                    or "b23.tv" in v_url.lower()
+                    or v.get("platform") == "bilibili"
+                    or (hasattr(self, "platform") and self.platform == "bilibili")
+                )
+
+                delogo_bili = self.auto_delogo_bilibili and (is_bilibili or not v.get("platform"))
+                delogo_wm = self.auto_delogo_watermark and (is_bilibili or not v.get("platform"))
+
+                did_delogo = False
+                if actual_file and (delogo_bili or delogo_wm):
+                    self.sig_row_status.emit(row_idx, "🧹 Đang xóa logo...")
+                    did_delogo = self._apply_delogo_cleanup(
+                        actual_file,
+                        delogo_bili=delogo_bili,
+                        delogo_wm=delogo_wm,
+                    )
+
                 success += 1
-                self.sig_row_status.emit(row_idx, "✅ Hoàn thành")
+                status_msg = "✅ Hoàn thành (Đã xóa logo)" if did_delogo else "✅ Hoàn thành"
+                self.sig_row_status.emit(row_idx, status_msg)
             else:
                 self.sig_row_status.emit(row_idx, "❌ Lỗi tải")
 
@@ -695,6 +816,37 @@ class VideoDownloaderDialog(QDialog):
         self.mode_combo.setStyleSheet(self._combo_style())
         c_layout.addWidget(self.mode_combo)
 
+        lbl_limit = QLabel("🔢 SỐ LƯỢNG VIDEO QUÉT:")
+        lbl_limit.setStyleSheet("font-size: 11px; font-weight: 700; color: #cbd5e1; margin-top: 6px;")
+        c_layout.addWidget(lbl_limit)
+
+        limit_row = QHBoxLayout()
+        limit_row.setSpacing(6)
+
+        self.limit_combo = QComboBox()
+        self.limit_combo.addItem("♾️ Không giới hạn (Quét sạch toàn bộ kênh)", 0)
+        self.limit_combo.addItem("50 video mới nhất", 50)
+        self.limit_combo.addItem("100 video mới nhất", 100)
+        self.limit_combo.addItem("200 video mới nhất", 200)
+        self.limit_combo.addItem("500 video mới nhất", 500)
+        self.limit_combo.addItem("1000 video mới nhất", 1000)
+        self.limit_combo.addItem("⚙️ Tùy chỉnh số lượng...", -1)
+        self.limit_combo.setStyleSheet(self._combo_style())
+        limit_row.addWidget(self.limit_combo, 1)
+
+        self.custom_limit_spin = QSpinBox()
+        self.custom_limit_spin.setRange(1, 99999)
+        self.custom_limit_spin.setValue(200)
+        self.custom_limit_spin.setSuffix(" video")
+        self.custom_limit_spin.setStyleSheet(self._input_style())
+        self.custom_limit_spin.setVisible(False)
+        limit_row.addWidget(self.custom_limit_spin)
+        c_layout.addLayout(limit_row)
+
+        self.limit_combo.currentIndexChanged.connect(
+            lambda: self.custom_limit_spin.setVisible(self.limit_combo.currentData() == -1)
+        )
+
         left_content_layout.addWidget(self.card_config)
 
         # --- Card 2.5: Trình Duyệt & Hồ Sơ Quét (Profiles) ---
@@ -790,6 +942,37 @@ class VideoDownloaderDialog(QDialog):
         ck_layout.addLayout(out_row)
 
         left_content_layout.addWidget(card_cookie)
+
+        # --- Card 4: Tự Động Xóa Logo & Watermark (Delogo AI) ---
+        card_delogo = self._create_card("🧹 TỰ ĐỘNG XÓA LOGO & WATERMARK (DELOGO AI)")
+        dl_layout = card_delogo.layout()
+
+        self.chk_auto_delogo_bili = QCheckBox("🎯 Tự động xóa Logo Bilibili (Góc trên cùng bên phải)")
+        self.chk_auto_delogo_bili.setChecked(False)
+        self.chk_auto_delogo_bili.setStyleSheet("color: #ff9d42; font-weight: bold; font-size: 11px;")
+        dl_layout.addWidget(self.chk_auto_delogo_bili)
+
+        self.chk_auto_delogo_wm = QCheckBox("🌊 Tự động làm mờ dải Watermark bản quyền (ở dưới)")
+        self.chk_auto_delogo_wm.setChecked(False)
+        self.chk_auto_delogo_wm.setStyleSheet("color: #38bdf8; font-weight: bold; font-size: 11px;")
+        dl_layout.addWidget(self.chk_auto_delogo_wm)
+
+        lbl_delogo_note = QLabel(
+            "💡 Chỉ bật khi video gốc thực sự có logo Bilibili hoặc dải chữ watermark cần xóa, "
+            "tránh chèn dải che mờ không cần thiết lên video."
+        )
+        lbl_delogo_note.setWordWrap(True)
+        lbl_delogo_note.setStyleSheet(f"font-size: 10px; color: {self._TEXT_MUTED}; font-style: italic;")
+        dl_layout.addWidget(lbl_delogo_note)
+
+        # QSettings persistence for downloader delogo options (mặc định False)
+        dl_settings = QSettings("TankVideo", "TankVideoStudio")
+        self.chk_auto_delogo_bili.setChecked(dl_settings.value("downloader/auto_delogo_bilibili", False, type=bool))
+        self.chk_auto_delogo_wm.setChecked(dl_settings.value("downloader/auto_delogo_watermark", False, type=bool))
+        self.chk_auto_delogo_bili.toggled.connect(lambda v: dl_settings.setValue("downloader/auto_delogo_bilibili", v))
+        self.chk_auto_delogo_wm.toggled.connect(lambda v: dl_settings.setValue("downloader/auto_delogo_watermark", v))
+
+        left_content_layout.addWidget(card_delogo)
 
         # --- Action Buttons: BẮT ĐẦU QUÉT & DỪNG QUÉT ---
         act_row = QHBoxLayout()
@@ -1480,6 +1663,13 @@ class VideoDownloaderDialog(QDialog):
             self.header_cb.blockSignals(False)
         self._update_table_stats()
 
+        # Determine scan limit (0 = Không giới hạn)
+        limit_data = self.limit_combo.currentData() if hasattr(self, "limit_combo") else 0
+        if limit_data == -1 and hasattr(self, "custom_limit_spin"):
+            max_count = self.custom_limit_spin.value()
+        else:
+            max_count = int(limit_data) if limit_data is not None else 0
+
         # Start worker thread with selected browser & profile
         mode = "channel" if "Kênh" in self.mode_combo.currentText() else "single"
         self._scan_worker = ScanWorker(
@@ -1489,6 +1679,7 @@ class VideoDownloaderDialog(QDialog):
             browser_id=getattr(self, "_selected_browser_id", "chrome"),
             profile_id=getattr(self, "_selected_profile_id", "Default"),
             browser_exe=getattr(self, "_selected_browser_exe", ""),
+            max_count=max_count,
             parent=self,
         )
         self._scan_worker.sig_progress.connect(self._on_scan_progress)
@@ -1952,10 +2143,15 @@ class VideoDownloaderDialog(QDialog):
         self.scan_progress.show()
         self.scan_progress.setRange(0, len(selected_items))
         self.scan_progress.setValue(0)
-        self.scan_status_lbl.setText(f"Bắt đầu tải {len(selected_items)} video...")
-        self.header_status_badge.setText(f"📥 Đang tải 0/{len(selected_items)}...")
-
-        self._download_worker = DownloadWorker(selected_items, out_dir, parent=self)
+        auto_bili = self.chk_auto_delogo_bili.isChecked() if hasattr(self, "chk_auto_delogo_bili") else False
+        auto_wm = self.chk_auto_delogo_wm.isChecked() if hasattr(self, "chk_auto_delogo_wm") else False
+        self._download_worker = DownloadWorker(
+            selected_items,
+            out_dir,
+            auto_delogo_bilibili=auto_bili,
+            auto_delogo_watermark=auto_wm,
+            parent=self,
+        )
         self._download_worker.sig_row_status.connect(self._on_row_status_update)
         self._download_worker.sig_progress.connect(self._on_download_progress)
         self._download_worker.sig_finished.connect(self._on_download_finished)

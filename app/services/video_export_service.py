@@ -384,8 +384,10 @@ def generate_ass_script(
     target_cy: int | None = None,
     enable_mask: bool = True,
     duration: float = 0.0,
+    user_rect: tuple[float, float, float, float] | None = None,
+    mask_mode: str | None = None,
 ) -> tuple[str, int]:
-    """Sinh kịch bản ASS với kiểu dáng tùy biến: hộp nền ôm sát chữ (che video gốc) và chữ rõ nét."""
+    """Sinh kịch bản ASS với kiểu dáng tùy biến: hộp nền ôm sát chữ (che video gốc) hoặc dải làm mờ ngang (Ảnh 1) và chữ rõ nét."""
     is_vertical = vid_h > vid_w
     scale_ref = 1080.0
     res_scale = (vid_w / scale_ref) if is_vertical else (vid_h / scale_ref)
@@ -393,16 +395,37 @@ def generate_ass_script(
     user_scale = float(getattr(cfg, "font_scale", 1.0) or 1.0)
     font_size = max(18, int(round(user_size * user_scale * res_scale)))
 
-    if target_cy is None:
-        target_cy = int(round(vid_h * (0.74 if is_vertical else 0.82)))
+    eff_mask_mode = str(mask_mode if mask_mode is not None else getattr(cfg, "mask_mode", "box") or "box").strip().lower()
 
-    bg_color = getattr(cfg, "badge_bg_color", "&H00DDE5FF&") or "&H00DDE5FF&"
-    text_color = getattr(cfg, "badge_text_color", "&H00111111&") or "&H00111111&"
+    if target_cy is None:
+        if user_rect and len(user_rect) == 4 and user_rect[2] > 0 and user_rect[3] > 0:
+            target_cy = int(round((user_rect[1] + user_rect[3] / 2.0) * vid_h))
+        else:
+            target_cy = int(round(vid_h * (0.74 if is_vertical else 0.82)))
+
+    bg_color = getattr(cfg, "badge_bg_color", "&H00000000&") or "&H00000000&"
+    text_color = getattr(cfg, "badge_text_color", "&H00FFFFFF&") or "&H00FFFFFF&"
     font_name = getattr(cfg, "font_name", "Arial") or "Arial"
     bold = getattr(cfg, "bold", True)
-    has_box = getattr(cfg, "background_box", True) and enable_mask
-    outline_w = getattr(cfg, "outline_width", 3) if not has_box else 0
-    outline_col = getattr(cfg, "outline_color", "&H00000000") or "&H00000000"
+
+    # Chế độ mặt nạ / che chữ
+    if eff_mask_mode == "blur":
+        # Mặt nạ làm mờ ngang (Ảnh 1): Đã có dải video mờ che chữ gốc, không dùng hộp đen BgBadge
+        has_box = False
+        text_color = "&H00FFFFFF&"
+        outline_col = "&H00000000&"
+        outline_w = max(4, int(round(font_size * 0.13)))
+        bold = True
+        font_size = max(font_size, int(round(font_size * 1.05)))
+    elif eff_mask_mode == "none":
+        has_box = False
+        outline_w = getattr(cfg, "outline_width", 3)
+        outline_col = getattr(cfg, "outline_color", "&H00000000") or "&H00000000"
+    else:  # "box"
+        has_box = getattr(cfg, "background_box", True) and enable_mask
+        outline_w = getattr(cfg, "outline_width", 3) if not has_box else 0
+        outline_col = getattr(cfg, "outline_color", "&H00000000") or "&H00000000"
+
     animation = str(getattr(cfg, "animation", "Pop In") or "Pop In").strip().lower()
 
     # Thẻ hiệu ứng chữ phụ đề
@@ -463,6 +486,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     max_chars_per_line = max(16, max_line_w // max(1, char_w))
     rendered_cnt = 0
 
+    user_has_rect = (user_rect is not None and len(user_rect) == 4 and user_rect[2] > 0 and user_rect[3] > 0)
+
     for s in segments:
         text = str(getattr(s, "translated_text", "") or "").strip()
         if not text or getattr(s, "is_noise", False) or s.end <= s.start:
@@ -484,16 +509,20 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         if cur:
             lines.append(" ".join(cur))
 
-        # Tọa độ Y riêng của từng segment nếu có bbox OCR cụ thể
+        # Tọa độ Y riêng của từng segment
         seg_cy = target_cy
-        bbox = getattr(s, "bbox", None)
-        if bbox and len(bbox) == 4:
-            try:
-                by1, by2 = float(bbox[1]), float(bbox[3])
-                if 0.20 <= by1 < by2 <= 0.98 and (by2 - by1) <= 0.12:
-                    seg_cy = int(round(((by1 + by2) / 2.0) * vid_h))
-            except Exception:
-                pass
+        # NẾU ĐÃ CÓ user_rect (người dùng quét OCR): TUYỆT ĐỐI KHÔNG để bbox ngẫu nhiên làm lệch tâm phụ đề!
+        if not user_has_rect:
+            bbox = getattr(s, "bbox", None)
+            if bbox and len(bbox) == 4:
+                try:
+                    by1, by2 = float(bbox[1]), float(bbox[3])
+                    if 0.10 <= by1 < by2 <= 0.98 and (by2 - by1) <= 0.18:
+                        cand_cy = int(round(((by1 + by2) / 2.0) * vid_h))
+                        if target_cy is None or abs(cand_cy - target_cy) <= int(round(vid_h * 0.08)):
+                            seg_cy = cand_cy
+                except Exception:
+                    pass
 
         num_lines = len(lines)
         longest_line_chars = max(len(l) for l in lines)
@@ -505,6 +534,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         box_h = num_lines * line_h + pad_y * 2
         # Đảm bảo chiều cao tối thiểu che kín dòng chữ gốc trên video
         min_box_h = max(int(round(font_size * 1.45)), 48 if is_vertical else 38)
+        if user_has_rect:
+            user_h_px = int(round(user_rect[3] * vid_h))
+            min_user_box_h = int(round(user_h_px * 1.25))
+            min_box_h = max(min_box_h, min_user_box_h)
         box_h = max(min_box_h, box_h)
         radius = min(14, int(box_h * 0.22))
 
@@ -551,12 +584,13 @@ class SubtitleRenderConfig:
     blur_rect: tuple[float, float, float, float] | None = None  # (x, y, w, h) normalized 0.0-1.0
     blur_strength: int = 18               # Bán kính làm mờ
     background_box: bool = True           # Bật/tắt hộp nền
-    badge_bg_color: str = "&H00DDE5FF&"    # Màu hồng pastel ôm sát chữ che video gốc
-    badge_text_color: str = "&H00111111&"  # Màu chữ đen sắc nét nổi bật
+    badge_bg_color: str = "&H00000000&"    # Hộp nền đen ôm sát chữ che video gốc phong cách Ảnh 3
+    badge_text_color: str = "&H00FFFFFF&"  # Màu chữ trắng sắc nét nổi bật
     box_alpha: float = 1.0                # Độ mờ của hộp nền (1.0 = đặc hoàn toàn)
-    box_radius: int = 14                  # Bo tròn góc (px)
+    box_radius: int = 12                  # Bo tròn góc (px)
     animation: str = "Pop In"             # Hiệu ứng xuất hiện
-    preset_name: str = "pastel_box"       # Tên mẫu định sẵn
+    preset_name: str = "black_box"        # Tên mẫu định sẵn
+    mask_mode: str = "box"                # Kiểu mặt nạ: "blur" (Ảnh 1), "box" (Ảnh 2), "none"
     # Watermark chữ cấu hình
     enable_watermark: bool = False
     watermark_text: str = ""
@@ -570,6 +604,13 @@ class SubtitleRenderConfig:
     brand_logo_position: str = "top_left"
     brand_logo_size_percent: int = 15
     brand_logo_opacity: float = 1.0
+    # Xóa / Tẩy Logo & Watermark video gốc (Bilibili, Douyin, Bản quyền mờ)
+    delogo_bilibili: bool = False
+    delogo_watermark: bool = False
+    delogo_watermark_rect: tuple[float, float, float, float] | None = None
+    delogo_watermark_mode: str = "delogo"  # "delogo" (Xóa sạch tàng hình, 0s), "telea", "boxblur"
+    delogo_custom_rect: tuple[float, float, float, float] | None = None
+    delogo_custom_mode: Literal["delogo", "boxblur", "inpaint"] = "inpaint"
 
 
 @dataclass
@@ -582,6 +623,7 @@ class VideoExportRequest:
     overflow_policy: OverflowPolicy = "shortest"
     subtitle_config: SubtitleRenderConfig = field(default_factory=SubtitleRenderConfig)
     enable_blur_mask: bool = True
+    mask_mode: str = "box"                # Kiểu mặt nạ: "blur" (Ảnh 1), "box" (Ảnh 2), "none"
     blur_rect: tuple[float, float, float, float] | None = None
     # Brand logo settings
     enable_brand_logo: bool = False
@@ -596,6 +638,113 @@ class VideoExportRequest:
     watermark_font_size: int = 36
     watermark_opacity: float = 0.35
     watermark_color: str = "#FFFFFF"
+    # Xóa / Tẩy Logo & Watermark video gốc (Bilibili, Douyin, Bản quyền mờ)
+    delogo_bilibili: bool = False
+    delogo_watermark: bool = False
+    delogo_watermark_rect: tuple[float, float, float, float] | None = None
+    delogo_watermark_mode: str = "delogo"  # "delogo" (Xóa sạch tàng hình, 0s), "telea", "boxblur"
+    delogo_custom_rect: tuple[float, float, float, float] | None = None
+    delogo_custom_mode: Literal["delogo", "boxblur", "inpaint"] = "inpaint"
+
+
+def build_delogo_filters(
+    vid_w: int,
+    vid_h: int,
+    delogo_bilibili: bool,
+    delogo_watermark: bool,
+    delogo_custom_rect: tuple[float, float, float, float] | None = None,
+    delogo_custom_mode: str = "delogo",
+    current_v: str = "0:v",
+    delogo_watermark_rect: tuple[float, float, float, float] | None = None,
+    delogo_watermark_mode: str = "delogo",
+    has_top_right_logo: bool = False,
+) -> tuple[list[str], str]:
+    """Tạo chuỗi filter FFmpeg để xóa logo Bilibili/Douyin, xóa watermark mờ và xóa vùng tùy chọn.
+    
+    Áp dụng thuật toán nội suy điểm ảnh Delogo (xóa logo góc và tẩy sạch chữ mà KHÔNG tạo mặt nạ mờ che khuất video).
+    """
+    is_vertical = vid_h > vid_w
+    filters: list[str] = []
+    idx = 1
+
+    def _sanitize_box(x: float, y: float, w: float, h: float) -> tuple[int, int, int, int]:
+        px_x = int(round(x * vid_w))
+        px_y = int(round(y * vid_h))
+        px_w = int(round(w * vid_w))
+        px_h = int(round(h * vid_h))
+        # Đảm bảo số chẵn cho chuẩn yuv420p
+        px_x = px_x + (px_x % 2)
+        px_y = px_y + (px_y % 2)
+        px_w = max(16, px_w - (px_w % 2))
+        px_h = max(16, px_h - (px_h % 2))
+        # Giới hạn an toàn trong khung hình video (cách mép ít nhất 2px để delogo nội suy biên)
+        px_x = max(2, min(px_x, vid_w - px_w - 2))
+        px_y = max(2, min(px_y, vid_h - px_h - 2))
+        px_w = max(16, min(px_w, vid_w - px_x - 2))
+        px_h = max(16, min(px_h, vid_h - px_y - 2))
+        return px_x, px_y, px_w, px_h
+
+    # 1. Logo Bilibili / Douyin góc trên bên phải (ôm sát logo, xóa sạch viền không nhòe góc)
+    # Tự động xóa sạch nếu bật delogo_bilibili HOẶC khi có Logo thương hiệu góc trên phải để nền phía dưới sạch bóng 100%
+    if delogo_bilibili or has_top_right_logo:
+        if is_vertical:
+            rx, ry, rw, rh = 0.78, 0.012, 0.20, 0.055
+        else:
+            # Video ngang 16:9: Mở rộng vùng quét bao trọn cả tên kênh 星白漫 lẫn logo bilibili
+            rx, ry, rw, rh = 0.78, 0.008, 0.21, 0.075
+        bx, by, bw, bh = _sanitize_box(rx, ry, rw, rh)
+        out_v = f"v_delogo_{idx}"
+        filters.append(f"[{current_v}]delogo=x={bx}:y={by}:w={bw}:h={bh}:show=0[{out_v}]")
+        current_v = out_v
+        idx += 1
+
+    # 2. Xóa Watermark chữ bản quyền: XÓA SẠCH TÀNG HÌNH BẰNG DELOGO NỘI SUY (TUYỆT ĐỐI KHÔNG DÙNG MẶT NẠ MỜ CHE Ở GIỮA)
+    if delogo_watermark:
+        if delogo_watermark_rect and len(delogo_watermark_rect) == 4 and delogo_watermark_rect[2] > 0.01:
+            rx, ry, rw, rh = delogo_watermark_rect
+            # Giới hạn an toàn: Nếu vùng chọn quá cao (> 5.5% chiều cao video), delogo nội suy sẽ tạo vệt sọc đứng biến dạng
+            # Tự động thu hẹp chiều cao về vùng trung tâm thực tế của chữ mờ (cao ~4.8% video) để xóa sạch mịn màng
+            if rh > 0.055:
+                ry_center = ry + rh / 2.0
+                rh = 0.048
+                ry = max(0.01, ry_center - rh / 2.0)
+        elif is_vertical:
+            rx, ry, rw, rh = 0.25, 0.65, 0.50, 0.045
+        else:
+            rx, ry, rw, rh = 0.35, 0.49, 0.30, 0.045
+        bx, by, bw, bh = _sanitize_box(rx, ry, rw, rh)
+        out_v = f"v_wm_{idx}"
+        # Thuật toán Delogo nội suy điểm ảnh: Tẩy sạch dòng chữ mà giữ nguyên 100% bối cảnh gốc, không để lại vết mờ
+        filters.append(f"[{current_v}]delogo=x={bx}:y={by}:w={bw}:h={bh}:show=0[{out_v}]")
+        current_v = out_v
+        idx += 1
+
+    # 3. Vùng xóa tùy chỉnh do người dùng chỉ định
+    if delogo_custom_rect and len(delogo_custom_rect) == 4:
+        crx, cry, crw, crh = delogo_custom_rect
+        if crw > 0.01 and crh > 0.01:
+            # Nếu người dùng đã dán Brand Logo ở góc trên phải và vùng xóa này cũng nằm ở góc trên phải:
+            # Chính Brand Logo sẽ che kín 100% góc này, bỏ qua để tránh tạo vết mờ bao quanh / đè logo!
+            is_top_right = (crx >= 0.60 and cry <= 0.25)
+            if not (has_top_right_logo and is_top_right):
+                bx, by, bw, bh = _sanitize_box(crx, cry, crw, crh)
+                out_v = f"v_custom_{idx}"
+                if str(delogo_custom_mode).lower() == "boxblur":
+                    min_dim = min(bw, bh)
+                    luma_r = max(2, min(10, int(min_dim // 3)))
+                    chroma_r = max(1, min(5, int(min_dim // 6)))
+                    filters.append(
+                        f"[{current_v}]split[v_main_{idx}][v_crop_{idx}];"
+                        f"[v_crop_{idx}]crop={bw}:{bh}:{bx}:{by},boxblur={luma_r}:2:{chroma_r}:2[v_blur_{idx}];"
+                        f"[v_main_{idx}][v_blur_{idx}]overlay={bx}:{by}[{out_v}]"
+                    )
+                else:
+                    # Mặc định: Xóa tàng hình sạch sẽ bằng delogo
+                    filters.append(f"[{current_v}]delogo=x={bx}:y={by}:w={bw}:h={bh}:show=0[{out_v}]")
+                current_v = out_v
+                idx += 1
+
+    return filters, current_v
 
 
 @dataclass
@@ -793,32 +942,110 @@ class VideoExportService:
                         f"Applied '-shortest' policy."
                     )
 
-            # 3.2. Cấu hình Mặt Nạ Hộp Nền Bo Góc Phong Cách CapCut (Giống Ảnh 3)
             cfg = request.subtitle_config
+
+            # 3.1b. Áp dụng Xóa Logo Bilibili & Watermark Video Gốc (Delogo AI & BoxBlur)
+            delogo_bili = getattr(request, "delogo_bilibili", False) or getattr(cfg, "delogo_bilibili", False)
+            delogo_wm = getattr(request, "delogo_watermark", False) or getattr(cfg, "delogo_watermark", False)
+            delogo_c_rect = getattr(request, "delogo_custom_rect", None) or getattr(cfg, "delogo_custom_rect", None)
+            delogo_c_mode = getattr(request, "delogo_custom_mode", "delogo") or getattr(cfg, "delogo_custom_mode", "delogo")
+
+            # Nếu người dùng chọn chế độ AI Inpainting hoặc OpenCV Telea siêu tốc
+            if str(delogo_c_mode).lower() in ("inpaint", "lama", "telea") and delogo_c_rect and len(delogo_c_rect) == 4:
+                try:
+                    from app.services.video_inpainting_service import VideoInpaintingService
+                    inpaint_svc = VideoInpaintingService()
+                    dir_name = os.path.dirname(request.original_video_path)
+                    base_n, ext = os.path.splitext(os.path.basename(request.original_video_path))
+                    actual_mode = "telea" if str(delogo_c_mode).lower() == "telea" else "lama"
+                    inpaint_clean_path = os.path.join(dir_name, f"{base_n}_inpainted_{actual_mode}{ext}")
+
+                    if not os.path.isfile(inpaint_clean_path):
+                        print(f"[ExportVideo] Running Inpainting ({actual_mode}) on {request.original_video_path} with rect {delogo_c_rect}...")
+                        ok = inpaint_svc.inpaint_video(
+                            input_video_path=request.original_video_path,
+                            output_video_path=inpaint_clean_path,
+                            bbox=delogo_c_rect,
+                            mode=actual_mode,
+                        )
+                        if ok and os.path.isfile(inpaint_clean_path):
+                            request.original_video_path = inpaint_clean_path
+                    else:
+                        request.original_video_path = inpaint_clean_path
+                    # Đã inpaint sạch bóng bằng AI / Telea, bỏ qua bộ lọc delogo FFmpeg cho vùng này
+                    delogo_c_rect = None
+                except Exception as inpaint_exc:
+                    print(f"[ExportVideo] Inpainting notice: {inpaint_exc}")
+
+            # 3.1. Nhận diện cấu hình Brand Logo trước để phối hợp tránh tạo vết mờ che logo góc trên phải
+            enable_logo = getattr(request, "enable_brand_logo", False) or getattr(cfg, "enable_brand_logo", False)
+            logo_path = str(getattr(request, "brand_logo_path", "") or getattr(cfg, "brand_logo_path", "")).strip()
+            has_logo = enable_logo and bool(logo_path) and os.path.isfile(logo_path)
+            logo_pos = str(getattr(request, "brand_logo_position", None) or getattr(cfg, "brand_logo_position", "top_left") or "top_left").strip().lower()
+            has_top_right_logo = (has_logo and logo_pos == "top_right")
+
+            delogo_wm_rect = getattr(request, "delogo_watermark_rect", None) or getattr(cfg, "delogo_watermark_rect", None)
+            delogo_wm_mode = getattr(request, "delogo_watermark_mode", "delogo") or getattr(cfg, "delogo_watermark_mode", "delogo")
+            if delogo_bili or delogo_wm or (delogo_c_rect and len(delogo_c_rect) == 4):
+                delogo_filters, current_v = build_delogo_filters(
+                    vid_w=vid_w,
+                    vid_h=vid_h,
+                    delogo_bilibili=delogo_bili,
+                    delogo_watermark=delogo_wm,
+                    delogo_custom_rect=delogo_c_rect,
+                    delogo_custom_mode=delogo_c_mode,
+                    current_v=current_v,
+                    delogo_watermark_rect=delogo_wm_rect,
+                    delogo_watermark_mode=delogo_wm_mode,
+                    has_top_right_logo=has_top_right_logo,
+                )
+                filter_chains.extend(delogo_filters)
+                print(f"[ExportVideo] Applied delogo filters ({len(delogo_filters)}): bili={delogo_bili}, wm={delogo_wm}, custom={bool(delogo_c_rect)}")
+
+            # 3.2. Cấu hình Mặt Nạ Che Chữ và Xác Định Vị Trí Phụ Đề
             enable_blur = getattr(request, "enable_blur_mask", True) and getattr(cfg, "enable_blur_mask", True)
+            mask_mode = str(getattr(request, "mask_mode", None) or getattr(cfg, "mask_mode", "box") or "box").strip().lower()
+
+            # Lấy thông tin user_rect (khung OCR hoặc khung che chữ do người dùng chỉ định)
+            user_rect = request.blur_rect or getattr(cfg, "blur_rect", None)
+            if not user_rect:
+                rect_str = os.getenv("OCR_SUBTITLE_RECT", "").strip()
+                if rect_str:
+                    try:
+                        parts = [float(p) for p in rect_str.split(",")]
+                        if len(parts) == 4 and parts[2] > 0 and parts[3] > 0:
+                            user_rect = (parts[0], parts[1], parts[2], parts[3])
+                    except Exception:
+                        user_rect = None
 
             # Xác định tọa độ Y trung tâm của phụ đề để đè mặt nạ và chữ tiếng Việt lên đúng chữ tiếng Trung gốc
             target_cy = None
 
-            # 1. Kiểm tra bbox trong các segments (nếu OCR đã ghi nhận tọa độ chữ tiếng Trung)
-            valid_segs_with_bbox = []
-            for s in request.segments:
-                if str(getattr(s, "translated_text", "") or "").strip() and not getattr(s, "is_noise", False):
-                    bb = getattr(s, "bbox", None)
-                    if bb and len(bb) == 4:
-                        try:
-                            by1, by2 = float(bb[1]), float(bb[3])
-                            if 0.40 <= by1 < by2 <= 0.98 and (by2 - by1) <= 0.12:
-                                valid_segs_with_bbox.append((by1 + by2) / 2.0)
-                        except Exception:
-                            pass
-            if valid_segs_with_bbox:
-                valid_segs_with_bbox.sort()
-                mid_idx = len(valid_segs_with_bbox) // 2
-                target_cy = int(round(valid_segs_with_bbox[mid_idx] * vid_h))
-                print(f"[ExportVideo] Subtitle target center from segment bbox: cy={target_cy}px")
+            # 1. ƯU TIÊN SỐ 1: Tôn trọng tuyệt đối khung OCR / Vùng che do người dùng thiết lập
+            if user_rect and len(user_rect) == 4 and user_rect[2] > 0 and user_rect[3] > 0:
+                target_cy = int(round((user_rect[1] + user_rect[3] / 2.0) * vid_h))
+                print(f"[ExportVideo] Subtitle target center from user blur_rect: cy={target_cy}px (y={user_rect[1]:.2f}, h={user_rect[3]:.2f})")
 
-            # 2. Nếu segments chưa có bbox, tự động dò vị trí chữ tiếng Trung thoại thực tế trên video
+            # 2. ƯU TIÊN SỐ 2: Kiểm tra bbox trong các segments (nếu OCR đã ghi nhận tọa độ chữ tiếng Trung)
+            if target_cy is None:
+                valid_segs_with_bbox = []
+                for s in request.segments:
+                    if str(getattr(s, "translated_text", "") or "").strip() and not getattr(s, "is_noise", False):
+                        bb = getattr(s, "bbox", None)
+                        if bb and len(bb) == 4:
+                            try:
+                                by1, by2 = float(bb[1]), float(bb[3])
+                                if 0.10 <= by1 < by2 <= 0.98 and (by2 - by1) <= 0.18:
+                                    valid_segs_with_bbox.append((by1 + by2) / 2.0)
+                            except Exception:
+                                pass
+                if valid_segs_with_bbox:
+                    valid_segs_with_bbox.sort()
+                    mid_idx = len(valid_segs_with_bbox) // 2
+                    target_cy = int(round(valid_segs_with_bbox[mid_idx] * vid_h))
+                    print(f"[ExportVideo] Subtitle target center from segment bbox: cy={target_cy}px")
+
+            # 3. ƯU TIÊN SỐ 3: Nếu không có user_rect và segments chưa có bbox, tự động dò vị trí chữ tiếng Trung thoại thực tế trên video
             if target_cy is None:
                 valid_segs = [s for s in request.segments if str(getattr(s, "translated_text", "") or "").strip() and not getattr(s, "is_noise", False)]
                 sample_times = [(s.start + s.end) / 2.0 for s in valid_segs if s.end > s.start][:6]
@@ -832,66 +1059,56 @@ class VideoExportService:
                     target_cy = int(round((bot_detected[1] + bot_detected[3] / 2.0) * vid_h))
                     print(f"[ExportVideo] Subtitle target center from auto detector: cy={target_cy}px")
 
-            # 3. Kiểm tra user_rect / OCR_SUBTITLE_RECT nếu chưa có target_cy
-            user_rect = request.blur_rect or getattr(cfg, "blur_rect", None)
-            if not user_rect:
-                rect_str = os.getenv("OCR_SUBTITLE_RECT", "").strip()
-                if rect_str:
-                    try:
-                        parts = [float(p) for p in rect_str.split(",")]
-                        if len(parts) == 4 and parts[2] > 0 and parts[3] > 0:
-                            user_rect = (parts[0], parts[1], parts[2], parts[3])
-                    except Exception:
-                        user_rect = None
-
-            if user_rect and target_cy is None:
-                # Nếu user_rect là một dải hẹp (h <= 0.09) do người dùng chủ đích chỉnh một dòng cụ thể
-                if user_rect[3] <= 0.09:
-                    target_cy = int(round((user_rect[1] + user_rect[3] / 2.0) * vid_h))
-                else:
-                    # Khung quét OCR diện rộng: chữ tiếng Trung thoại thường nằm ở 75% chiều cao khung quét
-                    target_cy = int(round((user_rect[1] + user_rect[3] * 0.75) * vid_h))
-
             # 4. Fallback cuối cùng theo tỷ lệ chuẩn video dọc 9:16 (74.3%) hoặc video ngang 16:9 (83%)
             if target_cy is None:
                 target_cy = int(round(vid_h * (0.743 if vid_h > vid_w else 0.83)))
 
-            # 3.3. Áp dụng Logo Thương hiệu (Brand Logo) nếu được bật
-            enable_logo = getattr(request, "enable_brand_logo", False) or getattr(cfg, "enable_brand_logo", False)
-            logo_path = str(getattr(request, "brand_logo_path", "") or getattr(cfg, "brand_logo_path", "")).strip()
-            has_logo = enable_logo and bool(logo_path) and os.path.isfile(logo_path)
+            # 3.3. Áp dụng Mặt Nạ Làm Mờ (Blur Mask): Che sạch chữ Trung gốc gọn gàng thanh thoát
+            if enable_blur and mask_mode == "blur":
+                if user_rect and len(user_rect) == 4 and user_rect[2] > 0 and user_rect[3] > 0:
+                    ocr_y = int(round(user_rect[1] * vid_h))
+                    ocr_h = int(round(user_rect[3] * vid_h))
+                    ocr_x = int(round(user_rect[0] * vid_w))
+                    ocr_w = int(round(user_rect[2] * vid_w))
 
-            if has_logo:
-                logo_pct = max(5, min(50, int(getattr(request, "brand_logo_size_percent", None) or getattr(cfg, "brand_logo_size_percent", 15) or 15)))
-                target_logo_w = max(40, int(round(vid_w * (logo_pct / 100.0))))
-                logo_alpha = max(0.1, min(1.0, float(getattr(request, "brand_logo_opacity", None) or getattr(cfg, "brand_logo_opacity", 1.0) or 1.0)))
+                    # Thu hẹp chiều cao thanh thoát vừa vặn ôm khít chữ Trung, tuyệt đối không phình to
+                    pad_v = max(2, int(round(vid_h * 0.003)))
+                    strip_y = max(0, ocr_y - pad_v)
+                    strip_h = ocr_h + pad_v * 2
 
-                filter_chains.append(
-                    f"[2:v]format=rgba,colorchannelmixer=aa={logo_alpha:.2f},scale={target_logo_w}:-1[brand_logo]"
-                )
-
-                logo_pos = str(getattr(request, "brand_logo_position", None) or getattr(cfg, "brand_logo_position", "top_left") or "top_left").strip().lower()
-                margin_px = max(15, int(round(vid_w * 0.025)))
-
-                if logo_pos == "top_left":
-                    pos_xy = f"{margin_px}:{margin_px}"
-                elif logo_pos == "top_right":
-                    pos_xy = f"main_w-overlay_w-{margin_px}:{margin_px}"
-                elif logo_pos == "bottom_left":
-                    pos_xy = f"{margin_px}:main_h-overlay_h-{margin_px}"
-                elif logo_pos == "bottom_right":
-                    pos_xy = f"main_w-overlay_w-{margin_px}:main_h-overlay_h-{margin_px}"
-                elif logo_pos == "center":
-                    pos_xy = "(main_w-overlay_w)/2:(main_h-overlay_h)/2"
-                elif logo_pos == "top_center":
-                    pos_xy = f"(main_w-overlay_w)/2:{margin_px}"
+                    # Về chiều rộng: Chỉ làm mờ trong phạm vi dòng chữ Trung (mở rộng nhẹ 2 bên để êm biên)
+                    # KHÔNG KÉO DÀI HẾT TOÀN BỘ CHIỀU NGANG VIDEO làm đen cả đáy màn hình
+                    pad_h = max(20, int(round(vid_w * 0.04)))
+                    strip_x = max(0, ocr_x - pad_h)
+                    strip_w = min(vid_w - strip_x, ocr_w + pad_h * 2)
                 else:
-                    pos_xy = f"{margin_px}:{margin_px}"
+                    # Fallback thanh thoát gọn gàng ở chân trang
+                    strip_h = int(round(vid_h * (0.048 if vid_h > vid_w else 0.040)))
+                    strip_y = max(0, target_cy - strip_h // 2)
+                    strip_w = int(round(vid_w * 0.75))
+                    strip_x = (vid_w - strip_w) // 2
 
+                # Đảm bảo số chẵn cho chuẩn yuv420p
+                strip_x = strip_x - (strip_x % 2)
+                strip_y = strip_y - (strip_y % 2)
+                strip_w = strip_w + (strip_w % 2)
+                strip_h = strip_h + (strip_h % 2)
+                if strip_x + strip_w > vid_w:
+                    strip_w = vid_w - strip_x
+                if strip_y + strip_h > vid_h:
+                    strip_h = vid_h - strip_y
+
+                # Căn giữa phụ đề tiếng Việt chuẩn xác tại tâm dải làm mờ
+                target_cy = strip_y + strip_h // 2
+
+                # boxblur=12:2: Làm mờ mịn nhẹ nhàng, chỉ nằm gọn ở vùng có chữ, 2 bên màn hình giữ nguyên độ nét
                 filter_chains.append(
-                    f"[{current_v}][brand_logo]overlay={pos_xy}:repeatlast=1[v_logo]"
+                    f"[{current_v}]split[v_base_strip][v_crop_strip];"
+                    f"[v_crop_strip]crop={strip_w}:{strip_h}:{strip_x}:{strip_y},boxblur=12:2[v_blur_strip];"
+                    f"[v_base_strip][v_blur_strip]overlay={strip_x}:{strip_y}[v_masked]"
                 )
-                current_v = "v_logo"
+                current_v = "v_masked"
+                print(f"[ExportVideo] Applied Blur Mask Strip (Thanh thoát): x={strip_x}px, y={strip_y}px, w={strip_w}px, h={strip_h}px")
 
             # Đồng bộ cấu hình Watermark từ request sang cfg nếu có
             if getattr(request, "enable_watermark", False):
@@ -902,7 +1119,7 @@ class VideoExportService:
                 cfg.watermark_opacity = request.watermark_opacity
                 cfg.watermark_color = request.watermark_color
 
-            # Sinh kịch bản ASS với mặt nạ hộp nền bo góc phong cách CapCut giống Ảnh 3 và Watermark chữ
+            # 3.4. Sinh kịch bản ASS (phụ đề tiếng Việt in đậm, viền đen sắc nét đè trực tiếp lên dải làm mờ)
             temp_ass_path = os.path.join(
                 self.temp_dir,
                 f"export_sub_{int(time.time() * 1000)}_{os.getpid()}.ass",
@@ -915,6 +1132,8 @@ class VideoExportService:
                 target_cy=target_cy,
                 enable_mask=enable_blur,
                 duration=max(t_video, t_audio),
+                user_rect=user_rect,
+                mask_mode=mask_mode,
             )
 
             if ass_rendered_cnt > 0:
@@ -924,6 +1143,41 @@ class VideoExportService:
                 escaped_ass = os.path.abspath(temp_ass_path).replace("\\", "/").replace(":", r"\:")
                 filter_chains.append(f"[{current_v}]subtitles='{escaped_ass}'[outv]")
                 current_v = "outv"
+
+            # 3.5. DÁN LOGO THƯƠNG HIỆU LÊN LỚP TRÊN CÙNG (TOPMOST)
+            # Đảm bảo Logo luôn nằm trên cùng, sắc nét 100%, không bao giờ bị dải mờ hay phụ đề đè lên
+            if has_logo:
+                logo_pct = max(5, min(50, int(getattr(request, "brand_logo_size_percent", None) or getattr(cfg, "brand_logo_size_percent", 15) or 15)))
+                # Sử dụng kích thước cạnh ngắn hơn min(vid_w, vid_h) để logo trên video ngang (16:9) không bị phình to gấp đôi và tụt xuống dưới
+                ref_dim = min(vid_w, vid_h)
+                target_logo_w = max(40, int(round(ref_dim * (logo_pct / 100.0))))
+                logo_alpha = max(0.1, min(1.0, float(getattr(request, "brand_logo_opacity", None) or getattr(cfg, "brand_logo_opacity", 1.0) or 1.0)))
+
+                filter_chains.append(
+                    f"[2:v]format=rgba,colorchannelmixer=aa={logo_alpha:.2f},scale={target_logo_w}:-1[brand_logo]"
+                )
+
+                margin_x = max(8, int(round(vid_w * 0.010)))
+                margin_y = max(8, int(round(vid_h * 0.010)))
+                if logo_pos == "top_left":
+                    pos_xy = f"{margin_x}:{margin_y}"
+                elif logo_pos == "top_right":
+                    pos_xy = f"main_w-overlay_w-{margin_x}:{margin_y}"
+                elif logo_pos == "bottom_left":
+                    pos_xy = f"{margin_x}:main_h-overlay_h-{margin_y}"
+                elif logo_pos == "bottom_right":
+                    pos_xy = f"main_w-overlay_w-{margin_x}:main_h-overlay_h-{margin_y}"
+                elif logo_pos == "center":
+                    pos_xy = "(main_w-overlay_w)/2:(main_h-overlay_h)/2"
+                elif logo_pos == "top_center":
+                    pos_xy = f"(main_w-overlay_w)/2:{margin_y}"
+                else:
+                    pos_xy = f"{margin_x}:{margin_y}"
+
+                filter_chains.append(
+                    f"[{current_v}][brand_logo]overlay={pos_xy}:repeatlast=1[v_logo_final]"
+                )
+                current_v = "v_logo_final"
 
             # =====================================================================
             # 4. EXECUTE FFMPEG EXPORT COMMAND

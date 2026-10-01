@@ -74,9 +74,9 @@ def _enable_reusable_detector_preprocess(engine):
     detector._capcap_reusable_preprocess = True
     return engine
 
-MAX_CROP_WIDTH = 960
+MAX_CROP_WIDTH = 640
 EMPTY_TOLERANCE = 2
-EXACT_HASH_THRESHOLD = 5.0
+EXACT_HASH_THRESHOLD = 0.15
 _OCR_MODEL_SETS = (
     (
         "PP-OCRv4",
@@ -264,6 +264,35 @@ def _open_video(video_path):
     return cap
 
 
+def get_crop_normalized_rect(image_shape, region="bottom") -> tuple[float, float, float, float]:
+    """Trả về tọa độ chuẩn hóa (x, y, w, h) của vùng crop phụ đề trên toàn khung hình video."""
+    h, w = image_shape[:2]
+    rect_str = os.getenv("OCR_SUBTITLE_RECT", "")
+    if rect_str:
+        try:
+            parts = [float(x) for x in rect_str.split(",")]
+            if len(parts) == 4:
+                rx, ry, rw_val, rh = parts
+                return (max(0.0, rx), max(0.0, ry), min(1.0, rw_val), min(1.0, rh))
+        except Exception:
+            pass
+    effective_region = (os.getenv("OCR_SUBTITLE_REGION") or region or "bottom").strip().lower()
+    if effective_region == "bottom":
+        if h > w:
+            top_r = float(os.getenv("OCR_VERTICAL_TOP_RATIO", "0.56"))
+            bot_r = float(os.getenv("OCR_VERTICAL_BOTTOM_RATIO", "0.74"))
+            return (0.0, top_r, 1.0, max(0.01, bot_r - top_r))
+        else:
+            ratio = float(os.getenv("OCR_CROP_RATIO", "0.28"))
+            top_r = 1.0 - ratio
+            bot_r = 0.96
+            return (0.0, top_r, 1.0, max(0.01, bot_r - top_r))
+    elif effective_region == "top":
+        ratio = float(os.getenv("OCR_CROP_RATIO", "0.28"))
+        return (0.0, 0.0, 1.0, ratio)
+    return (0.0, 0.0, 1.0, 1.0)
+
+
 def crop_subtitle_region(image, region="bottom"):
     h, w = image.shape[:2]
     rect_str = os.getenv("OCR_SUBTITLE_RECT", "")
@@ -306,12 +335,20 @@ def preprocess_for_ocr(image):
 
 
 def _crop_hash(image):
-    small = cv2.resize(image, (64, 64), interpolation=cv2.INTER_NEAREST)
-    return small.astype(np.float32).mean(axis=(0, 1))
+    if image is None or image.size == 0:
+        return np.zeros((64, 128), dtype=np.uint8)
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
+    small = cv2.resize(gray, (128, 64), interpolation=cv2.INTER_AREA)
+    _, text_mask = cv2.threshold(small, 170, 255, cv2.THRESH_BINARY)
+    edges = cv2.Canny(small, 80, 180)
+    return np.bitwise_or(text_mask, edges)
 
 
 def _hamming_distance(h1, h2):
-    return float(np.sum(np.abs(h1.astype(np.float32) - h2.astype(np.float32))))
+    if h1 is None or h2 is None:
+        return 1.0
+    denom = max(1.0, float(np.count_nonzero(np.bitwise_or(h1, h2))))
+    return float(np.count_nonzero(h1 != h2)) / denom
 
 
 def _sanitize_ocr_line(text: str) -> str:
@@ -339,10 +376,12 @@ def _sanitize_ocr_line(text: str) -> str:
         # e.g., '咋7' -> '咋了', '来7' -> '来了', '对J' -> '对了', '太7' -> '太了'
         cleaned = re.sub(r"(?<=[\u4e00-\u9fff\u3400-\u4dbf])\s*[7J](?=[^\d]|$)", "了", cleaned)
 
-    # Filter out non-dialogue text (food receipts, medication deliveries, address headers, letter salutations, ads)
+    # Filter out non-dialogue text (food receipts, medication deliveries, address headers, letter salutations, ads, student workbooks/textbook covers)
     if re.search(
         r"(?:份餐具|外卖|送药|医药也快|A栋|a栋|To\s*[\u4e00-\u9fff]|排骨.*必涌泉|"
-        r"想卖闲置|卖闲置|闲置.*嫌麻烦|转转.*二手|二手.*转卖|点击评论区|主页有|评论区置顶|关注公众号|私信获取)",
+        r"想卖闲置|卖闲置|闲置.*嫌麻烦|转转.*二手|二手.*转卖|点击评论区|主页有|评论区置顶|关注公众号|私信获取|"
+        r"山东名师|名师出|课时证|助力学生|学生得优|情境设|真题度|养提升|未养提升|究创新|农究创新|"
+        r"视频精讲|五年级|六年级|七年级|八年级|九年级|初中数学|小学数学|高中数学|同步练习|模拟卷|必刷题|重难点手册)",
         cleaned,
     ):
         return ""
@@ -378,7 +417,7 @@ def _is_blank_region(image):
     return True
 
 
-def ocr_frame(engine, image, profiling=None, return_details=False):
+def ocr_frame(engine, image, profiling=None, return_details=False, crop_norm=None):
     """OCR one frame and optionally accumulate lightweight aggregate timings."""
     preprocess_started = time.perf_counter()
     h, w = image.shape[:2]
@@ -437,18 +476,32 @@ def ocr_frame(engine, image, profiling=None, return_details=False):
                 try:
                     xs = [pt[0] for pt in box]
                     ys = [pt[1] for pt in box]
-                    norm_box = [
-                        round(float(min(xs)) / max(1.0, float(w)), 4),
-                        round(float(min(ys)) / max(1.0, float(h)), 4),
-                        round(float(max(xs)) / max(1.0, float(w)), 4),
-                        round(float(max(ys)) / max(1.0, float(h)), 4),
-                    ]
+                    if crop_norm and len(crop_norm) == 4:
+                        cx0, cy0, cw0, ch0 = crop_norm
+                        norm_box = [
+                            round(cx0 + (float(min(xs)) / max(1.0, float(w))) * cw0, 4),
+                            round(cy0 + (float(min(ys)) / max(1.0, float(h))) * ch0, 4),
+                            round(cx0 + (float(max(xs)) / max(1.0, float(w))) * cw0, 4),
+                            round(cy0 + (float(max(ys)) / max(1.0, float(h))) * ch0, 4),
+                        ]
+                    else:
+                        norm_box = [
+                            round(float(min(xs)) / max(1.0, float(w)), 4),
+                            round(float(min(ys)) / max(1.0, float(h)), 4),
+                            round(float(max(xs)) / max(1.0, float(w)), 4),
+                            round(float(max(ys)) / max(1.0, float(h)), 4),
+                        ]
                 except Exception:
                     norm_box = None
             
+            fallback_box = (
+                [crop_norm[0], crop_norm[1], round(crop_norm[0] + crop_norm[2], 4), round(crop_norm[1] + crop_norm[3], 4)]
+                if crop_norm and len(crop_norm) == 4
+                else [0.1, 0.7, 0.9, 0.95]
+            )
             details.append({
                 "text": cleaned,
-                "bbox": norm_box or [0.1, 0.7, 0.9, 0.95],
+                "bbox": norm_box or fallback_box,
                 "confidence": round(score, 3)
             })
 
@@ -509,6 +562,114 @@ def _texts_equal(current_texts, prev_texts):
     return all(a == b for a, b in zip(current_texts, prev_texts))
 
 
+def _iter_video_frames(video_path, target_fps, start_seconds=0.0, end_seconds=None):
+    """Yields (timestamp_seconds, frame_bgr, video_duration_sec, total_estimated_steps).
+
+    High-performance video frame extraction:
+    - Primary: PyAV streaming linear decoder (C libavcodec multithread).
+      Dramatically faster than per-frame seek because it avoids backward GOP seeks.
+    - Fallback: OpenCV sequential grab() loop without repetitive cap.set().
+    """
+    target_fps = max(0.1, float(target_fps or 1.0))
+    frame_interval = 1.0 / target_fps
+    start_s = max(0.0, float(start_seconds or 0.0))
+    end_s = float(end_seconds) if end_seconds is not None else None
+
+    # 1. Thử PyAV
+    try:
+        import av
+        container = av.open(video_path)
+        stream = container.streams.video[0]
+        stream.thread_type = "AUTO"
+        time_base = float(stream.time_base)
+
+        if stream.duration is not None and stream.duration > 0:
+            duration = float(stream.duration * time_base)
+        elif container.duration is not None and container.duration > 0:
+            duration = float(container.duration / av.time.AV_TIME_BASE)
+        else:
+            duration = 0.0
+
+        effective_end = min(duration, end_s) if (end_s is not None and duration > 0) else (end_s if end_s is not None else duration)
+        if effective_end > start_s:
+            est_steps = max(1, int((effective_end - start_s) * target_fps) + 1)
+        else:
+            est_steps = max(1, int(duration * target_fps) + 1) if duration > 0 else 100
+
+        # Nếu start_s > 0.5s, seek 1 lần tới trước start_s
+        if start_s > 0.5:
+            seek_pts = max(0, int((start_s - 0.5) / time_base))
+            try:
+                container.seek(seek_pts, stream=stream)
+            except Exception:
+                pass
+
+        next_target_ts = start_s
+        for frame in container.decode(stream):
+            if frame.pts is None:
+                continue
+            pts_sec = float(frame.pts * time_base)
+            if pts_sec < start_s - 1e-4:
+                continue
+            if end_s is not None and pts_sec > end_s + 1e-4:
+                break
+            if pts_sec >= next_target_ts - 1e-4:
+                img = frame.to_ndarray(format="bgr24")
+                yield (pts_sec, img, duration, est_steps)
+                next_target_ts += frame_interval
+                if pts_sec >= next_target_ts:
+                    next_target_ts = pts_sec + frame_interval
+
+        container.close()
+        return
+    except Exception as exc:
+        print(f"[OCR] PyAV fast reader unavailable or failed ({exc}); falling back to OpenCV sequential grab...")
+
+    # 2. Fallback: OpenCV Sequential Grab
+    cap = _open_video(video_path)
+    try:
+        video_fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+        frame_step = max(1, round(video_fps / target_fps))
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+        duration = (total_frames / video_fps) if total_frames and video_fps else 0.0
+
+        effective_end = min(duration, end_s) if (end_s is not None and duration > 0) else (end_s if end_s is not None else duration)
+        if effective_end > start_s:
+            est_steps = max(1, int((effective_end - start_s) * target_fps) + 1)
+        elif total_frames:
+            est_steps = (total_frames + frame_step - 1) // frame_step
+        else:
+            est_steps = 100
+
+        start_frame = max(0, int(start_s * video_fps))
+        if start_frame > 0:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+            current_frame_pos = start_frame
+        else:
+            current_frame_pos = 0
+
+        target_frame_idx = start_frame
+        while True:
+            while current_frame_pos < target_frame_idx:
+                if not cap.grab():
+                    return
+                current_frame_pos += 1
+
+            ret, img = cap.read()
+            if not ret or img is None:
+                break
+
+            timestamp = current_frame_pos / video_fps
+            current_frame_pos += 1
+            if end_s is not None and timestamp > end_s + 1e-4:
+                break
+
+            yield (timestamp, img, duration, est_steps)
+            target_frame_idx += frame_step
+    finally:
+        cap.release()
+
+
 def transcribe_video_ocr(video_path, *, region="bottom", fps=None, ocr_engine=None, start_seconds=0.0, end_seconds=None):
     workflow_started = time.perf_counter()
     profiling = {
@@ -562,126 +723,108 @@ def transcribe_video_ocr(video_path, *, region="bottom", fps=None, ocr_engine=No
             if sampling_duration <= 15:
                 fps = 3.0
             elif sampling_duration <= 60:
-                fps = 1.5
+                fps = 2.5
             elif sampling_duration <= 360:
-                fps = 1.0
-            elif sampling_duration <= 600:
-                fps = 0.75
+                fps = 2.0
+            elif sampling_duration <= 720:
+                fps = 1.5
             else:
-                fps = 0.5
+                fps = 1.0
             range_label = f", selected range: {sampling_duration:.0f}s" if end_seconds is not None else ""
             print(f"[OCR] Video duration: {duration:.0f}s{range_label}, auto fps: {fps}")
 
     start_seconds = max(0.0, float(start_seconds or 0.0))
-    end_seconds = min(float(duration or 0.0), float(end_seconds)) if end_seconds is not None and duration else end_seconds
     frame_interval = 1.0 / fps
-    cap = _open_video(video_path)
-    video_fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
-    frame_step = max(1, round(video_fps / fps))
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
-    # Include the initial frame at 0 and the final partial sampling interval.
-    total_steps = (total_frames + frame_step - 1) // frame_step if total_frames else 0
-    if end_seconds is not None:
-        total_steps = max(1, int(max(0.0, end_seconds - start_seconds) * fps) + 1)
-    if total_steps <= 0:
-        total_steps = int(duration * fps) if duration > 0 else 300
-    print(f"[OCR] Seeking {total_steps} frames at {fps} fps from video directly...")
-    try:
-        if ocr_engine is None:
-            engine_started = time.perf_counter()
-            ocr_engine = _load_ocr_engine()
-            profiling["engine_init"] = time.perf_counter() - engine_started
 
-        segments = []
-        prev_texts = None
-        prev_hash = None
-        seg_start = None
-        seg_text_lines = []
-        empty_streak = 0
-        ocr_count = 0
-        skip_count = 0
-        unchanged_skip_count = 0
-        blank_skip_count = 0
-        step = max(0, int(start_seconds * fps))
-        sampled_count = 0
+    if ocr_engine is None:
+        engine_started = time.perf_counter()
+        ocr_engine = _load_ocr_engine()
+        profiling["engine_init"] = time.perf_counter() - engine_started
 
-        while True:
-            frame_idx = step * frame_step
-            decode_started = time.perf_counter()
-            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
-            ret, img = cap.read()
-            profiling["seek_decode"] += time.perf_counter() - decode_started
-            if not ret or img is None:
-                break
-            timestamp = frame_idx / video_fps
-            if end_seconds is not None and timestamp > float(end_seconds):
-                break
-            sampled_count += 1
-            crop_started = time.perf_counter()
-            cropped = crop_subtitle_region(img, region=region)
-            profiling["crop_preprocess"] += time.perf_counter() - crop_started
-            change_started = time.perf_counter()
-            cur_hash = _crop_hash(cropped)
-            unchanged = prev_hash is not None and _hamming_distance(cur_hash, prev_hash) < EXACT_HASH_THRESHOLD
-            profiling["change_detection"] += time.perf_counter() - change_started
+    segments = []
+    last_frame_texts = []
+    last_frame_details = []
+    prev_texts = None
+    prev_hash = None
+    seg_start = None
+    seg_text_lines = []
+    empty_streak = 0
+    ocr_count = 0
+    skip_count = 0
+    unchanged_skip_count = 0
+    blank_skip_count = 0
+    step = max(0, int(start_seconds * fps))
+    sampled_count = 0
 
-            if unchanged:
+    crop_norm = None
+    fallback_bbox = [0.1, 0.7, 0.9, 0.95]
+    total_steps = 0
+    video_duration = duration
+
+    frame_gen = _iter_video_frames(
+        video_path, fps, start_seconds=start_seconds, end_seconds=end_seconds
+    )
+
+    decode_started = time.perf_counter()
+    for timestamp, img, discovered_duration, est_steps in frame_gen:
+        profiling["seek_decode"] += time.perf_counter() - decode_started
+        if discovered_duration > 0:
+            video_duration = discovered_duration
+        if total_steps == 0:
+            total_steps = est_steps
+            print(f"[OCR] Streaming ~{total_steps} frames at {fps} fps from video directly...")
+
+        if crop_norm is None:
+            crop_norm = get_crop_normalized_rect(img.shape, region=region)
+            fallback_bbox = [crop_norm[0], crop_norm[1], round(crop_norm[0] + crop_norm[2], 4), round(crop_norm[1] + crop_norm[3], 4)]
+
+        sampled_count += 1
+        crop_started = time.perf_counter()
+        cropped = crop_subtitle_region(img, region=region)
+        profiling["crop_preprocess"] += time.perf_counter() - crop_started
+        change_started = time.perf_counter()
+        cur_hash = _crop_hash(cropped)
+        unchanged = prev_hash is not None and _hamming_distance(cur_hash, prev_hash) < EXACT_HASH_THRESHOLD
+        profiling["change_detection"] += time.perf_counter() - change_started
+
+        if unchanged:
+            skip_count += 1
+            unchanged_skip_count += 1
+            texts = list(last_frame_texts)
+            details = list(last_frame_details)
+        else:
+            blank_started = time.perf_counter()
+            is_blank = _is_blank_region(cropped)
+            profiling["blank_detection"] += time.perf_counter() - blank_started
+            if is_blank:
                 skip_count += 1
-                unchanged_skip_count += 1
-                texts = list(prev_texts) if prev_texts else []
+                blank_skip_count += 1
+                texts = []
+                details = []
+                last_frame_texts = []
+                last_frame_details = []
+                prev_hash = cur_hash
             else:
-                blank_started = time.perf_counter()
-                is_blank = _is_blank_region(cropped)
-                profiling["blank_detection"] += time.perf_counter() - blank_started
-                if is_blank:
-                    skip_count += 1
-                    blank_skip_count += 1
-                    texts = []
-                else:
-                    texts, details = ocr_frame(ocr_engine, cropped, profiling=profiling, return_details=True)
-                    ocr_count += 1
-                    prev_hash = cur_hash
-                    prev_details = details
+                texts, details = ocr_frame(ocr_engine, cropped, profiling=profiling, return_details=True, crop_norm=crop_norm)
+                ocr_count += 1
+                prev_hash = cur_hash
+                last_frame_texts = list(texts)
+                last_frame_details = list(details)
 
-            step += 1
+        step += 1
 
-            if sampled_count % 30 == 0:
-                pct = sampled_count * 100 // total_steps if total_steps > 0 else 0
-                print(f"[OCR] Frame {sampled_count}/{total_steps} ({pct}%, OCR: {ocr_count}, skip: {skip_count})")
+        if sampled_count % 30 == 0:
+            pct = sampled_count * 100 // total_steps if total_steps > 0 else 0
+            print(f"[OCR] Frame {sampled_count}/{total_steps} ({pct}%, OCR: {ocr_count}, skip: {skip_count})")
 
-            temporal_started = time.perf_counter()
-            if not texts:
-                empty_streak += 1
-                if empty_streak >= EMPTY_TOLERANCE and seg_start is not None:
-                    end_ts = max(seg_start + frame_interval, timestamp - frame_interval * 0.5)
-                    combined = " ".join(seg_text_lines).strip()
-                    if combined:
-                        seg_bbox = seg_details[0]["bbox"] if seg_details and "bbox" in seg_details[0] else [0.1, 0.7, 0.9, 0.95]
-                        seg_conf = seg_details[0]["confidence"] if seg_details and "confidence" in seg_details[0] else 0.85
-                        segments.append({
-                            "start": seg_start,
-                            "end": end_ts,
-                            "text": combined,
-                            "words": [],
-                            "bbox": seg_bbox,
-                            "ocr_confidence": seg_conf,
-                        })
-                    seg_start = None
-                    seg_text_lines = []
-                    seg_details = []
-                    prev_texts = None
-                profiling["temporal"] += time.perf_counter() - temporal_started
-                continue
-
-            empty_streak = 0
-            if prev_texts is not None and _texts_equal(texts, prev_texts):
-                profiling["temporal"] += time.perf_counter() - temporal_started
-                continue
-            if seg_start is not None and seg_text_lines:
+        temporal_started = time.perf_counter()
+        if not texts:
+            empty_streak += 1
+            if empty_streak >= EMPTY_TOLERANCE and seg_start is not None:
                 end_ts = max(seg_start + frame_interval, timestamp - frame_interval * 0.5)
                 combined = " ".join(seg_text_lines).strip()
                 if combined:
-                    seg_bbox = seg_details[0]["bbox"] if seg_details and "bbox" in seg_details[0] else [0.1, 0.7, 0.9, 0.95]
+                    seg_bbox = seg_details[0]["bbox"] if seg_details and "bbox" in seg_details[0] else fallback_bbox
                     seg_conf = seg_details[0]["confidence"] if seg_details and "confidence" in seg_details[0] else 0.85
                     segments.append({
                         "start": seg_start,
@@ -691,13 +834,39 @@ def transcribe_video_ocr(video_path, *, region="bottom", fps=None, ocr_engine=No
                         "bbox": seg_bbox,
                         "ocr_confidence": seg_conf,
                     })
-            seg_start = 0.0 if step == 1 else timestamp - frame_interval * 0.5
-            seg_text_lines = texts
-            seg_details = details if 'details' in locals() and details else []
-            prev_texts = texts
+                seg_start = None
+                seg_text_lines = []
+                seg_details = []
+                prev_texts = None
             profiling["temporal"] += time.perf_counter() - temporal_started
-    finally:
-        cap.release()
+            decode_started = time.perf_counter()
+            continue
+
+        empty_streak = 0
+        if prev_texts is not None and _texts_equal(texts, prev_texts):
+            profiling["temporal"] += time.perf_counter() - temporal_started
+            decode_started = time.perf_counter()
+            continue
+        if seg_start is not None and seg_text_lines:
+            end_ts = max(seg_start + frame_interval, timestamp - frame_interval * 0.5)
+            combined = " ".join(seg_text_lines).strip()
+            if combined:
+                seg_bbox = seg_details[0]["bbox"] if seg_details and "bbox" in seg_details[0] else fallback_bbox
+                seg_conf = seg_details[0]["confidence"] if seg_details and "confidence" in seg_details[0] else 0.85
+                segments.append({
+                    "start": seg_start,
+                    "end": end_ts,
+                    "text": combined,
+                    "words": [],
+                    "bbox": seg_bbox,
+                    "ocr_confidence": seg_conf,
+                })
+        seg_start = 0.0 if step == 1 else timestamp - frame_interval * 0.5
+        seg_text_lines = texts
+        seg_details = details if 'details' in locals() and details else []
+        prev_texts = texts
+        profiling["temporal"] += time.perf_counter() - temporal_started
+        decode_started = time.perf_counter()
 
     final_temporal_started = time.perf_counter()
     if seg_start is not None and seg_text_lines:
@@ -709,7 +878,7 @@ def transcribe_video_ocr(video_path, *, region="bottom", fps=None, ocr_engine=No
             end_ts = max(seg_start + frame_interval, video_duration)
             if end_seconds is not None:
                 end_ts = min(end_ts, float(end_seconds))
-            seg_bbox = seg_details[0]["bbox"] if 'seg_details' in locals() and seg_details and "bbox" in seg_details[0] else [0.1, 0.7, 0.9, 0.95]
+            seg_bbox = seg_details[0]["bbox"] if 'seg_details' in locals() and seg_details and "bbox" in seg_details[0] else fallback_bbox
             seg_conf = seg_details[0]["confidence"] if 'seg_details' in locals() and seg_details and "confidence" in seg_details[0] else 0.85
             segments.append({
                 "start": seg_start,

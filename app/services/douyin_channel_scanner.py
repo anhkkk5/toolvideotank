@@ -26,7 +26,7 @@ if sys.platform == "win32":
 
 def scan_douyin_channel(
     channel_url: str,
-    max_videos: int = 200,
+    max_videos: int = 0,  # 0: Không giới hạn (quét sạch toàn bộ kênh)
     browser_id: str = "chrome",
     profile_id: Optional[str] = None,
     browser_exe_path: Optional[str] = None,
@@ -351,9 +351,13 @@ def scan_douyin_channel(
             });
         }""")
 
-        # Fast intelligent scrolling
+        # Intelligent infinite scrolling (Hỗ trợ Không Giới Hạn & Quét Sạch Toàn Bộ Kênh)
+        is_unlimited = (max_videos <= 0 or max_videos >= 99999)
         stable_rounds = 0
-        max_scroll_rounds = max(5, min(60, max_videos // 10 + 3))
+        max_scroll_rounds = 3000 if is_unlimited else max(10, max_videos // 8 + 10)
+
+        limit_desc = "Không giới hạn (Quét hết kênh)" if is_unlimited else f"Tối đa {max_videos} video"
+        _log(f"Chế độ quét: {limit_desc}. Đang tiến hành bóc tách toàn bộ video...")
 
         for scroll_idx in range(max_scroll_rounds):
             if is_cancelled_cb and is_cancelled_cb():
@@ -361,12 +365,15 @@ def scan_douyin_channel(
                 break
 
             if not has_more_videos:
-                _log("Đã lấy trọn vẹn danh sách video của kênh (has_more=0). Dừng cuộn.")
+                _log("✅ Douyin API báo cáo: Đã lấy trọn vẹn 100% video của kênh (has_more=0).")
                 break
 
             prev_count = len(all_videos)
-            page.mouse.wheel(0, 3600)
-            page.wait_for_timeout(1300)
+
+            # Trigger cả cuộn đáy JavaScript và cuộn chuột vật lý để chắc chắn kích hoạt API tải tiếp
+            page.evaluate("() => window.scrollTo(0, document.body.scrollHeight || document.documentElement.scrollHeight);")
+            page.mouse.wheel(0, 2500)
+            page.wait_for_timeout(1600)
 
             cur_count = len(all_videos)
             if cur_count > prev_count:
@@ -374,6 +381,15 @@ def scan_douyin_channel(
                 _log(f"Đang quét... Đã tìm thấy {cur_count} video")
             else:
                 stable_rounds += 1
+
+                # Nhấp nhả cuộn: Cuộn lên nhẹ rồi cuộn lại xuống đáy để kích hoạt event listener nếu bị kẹt
+                if stable_rounds % 2 == 1:
+                    page.mouse.wheel(0, -500)
+                    page.wait_for_timeout(400)
+                    page.mouse.wheel(0, 2500)
+                    page.evaluate("() => window.scrollTo(0, document.body.scrollHeight);")
+                    page.wait_for_timeout(800)
+
                 if cur_count == 0 and stable_rounds <= 2:
                     # Click tab '作品' to ensure active tab
                     page.evaluate("""() => {
@@ -390,12 +406,13 @@ def scan_douyin_channel(
                         cookie_expired_detected = True
                         break
 
-                if stable_rounds >= 4:
-                    _log("Không có video mới sau 4 lần cuộn. Hoàn tất quét.")
+                # Chỉ dừng khi đã thử nhấp nhả 7 lần liên tiếp (~15 giây) mà API vẫn không trả về thêm
+                if stable_rounds >= 7:
+                    _log("Đã cuộn đến cuối trang, không còn video mới. Hoàn tất quét toàn kênh.")
                     break
 
-            if cur_count >= max_videos:
-                _log(f"Đã đạt giới hạn tối đa {max_videos} video.")
+            if not is_unlimited and cur_count >= max_videos:
+                _log(f"Đã đạt giới hạn yêu cầu {max_videos} video.")
                 break
 
         # Fallback extraction from DOM video cards (strictly validated)

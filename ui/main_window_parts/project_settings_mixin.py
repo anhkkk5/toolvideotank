@@ -800,7 +800,7 @@ class ProjectSettingsMixin:
             or (hasattr(self, "transcript_text") and self.transcript_text.toPlainText().strip())
         )
         if not bool(getattr(self, "_alternate_ocr_range_pending", None)):
-            self._ocr_overlay_visible = project_engine == "ocr" and not has_transcript
+            self._ocr_overlay_visible = False
         self._update_ocr_overlay()
         # Clear any stale layer selection from the previous project so
         # the inspector does not stay pinned to a track that no longer
@@ -1002,17 +1002,17 @@ class ProjectSettingsMixin:
     def _has_cleanable_project_data(self) -> bool:
         project_root = str(getattr(getattr(self, "current_project_state", None), "project_root", "") or "").strip()
         candidates = [
-            self.last_extracted_audio,
-            self.last_vocals_path,
-            self.last_music_path,
-            self.last_voice_vi_path,
-            self.last_mixed_vi_path,
-            self.live_preview_subtitle_path,
-            self.live_preview_ass_path,
-            self.last_preview_video_path,
-            self.last_styled_preview_path,
-            self.last_exact_preview_5s_path,
-            self.last_exact_preview_frame_path,
+            getattr(self, "last_extracted_audio", None),
+            getattr(self, "last_vocals_path", None),
+            getattr(self, "last_music_path", None),
+            getattr(self, "last_voice_vi_path", None),
+            getattr(self, "last_mixed_vi_path", None),
+            getattr(self, "live_preview_subtitle_path", None),
+            getattr(self, "live_preview_ass_path", None),
+            getattr(self, "last_preview_video_path", None),
+            getattr(self, "last_styled_preview_path", None),
+            getattr(self, "last_exact_preview_5s_path", None),
+            getattr(self, "last_exact_preview_frame_path", None),
             self.get_project_temp_path("tts"),
             self.get_project_temp_path("segment_audio_preview"),
             self.get_project_temp_path("voice_sample_preview"),

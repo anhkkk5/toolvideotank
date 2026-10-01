@@ -68,6 +68,14 @@ class VideoView(QGraphicsView):
         self.reposition_subtitle()
         self.viewport().update()
 
+        # Tự động đồng bộ các khung overlay (OCR, Xóa Logo, Watermark) bám sát video khi co giãn
+        w = self.window()
+        if w is not None:
+            for attr in ("ocr_region_overlay", "delogo_region_overlay", "watermark_region_overlay", "ocr_translator_overlay"):
+                overlay = getattr(w, attr, None)
+                if overlay and getattr(overlay, "_requested_visible", False):
+                    overlay.sync_to_view()
+
     def set_video_dimensions(self, width: int, height: int):
         self.video_source_width = max(0, int(width or 0))
         self.video_source_height = max(0, int(height or 0))

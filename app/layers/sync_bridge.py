@@ -53,15 +53,18 @@ def sync_segments_to_dub_subtitle_layers(
     a layer that already exists for the given segment index, so
     re-syncing the timeline doesn't clobber voice data.
     """
+    target = find_or_create_track(
+        timeline, DUB_SUBTITLE_TRACK_NAME, LayerType.DUB_SUBTITLE, 26
+    )
     if not segments:
+        target.layers.clear()
+        for t in getattr(timeline, "tracks", []):
+            if getattr(t, "type", None) in (LayerType.DUB_SUBTITLE, LayerType.SUBTITLE):
+                t.layers.clear()
         return []
 
     indexed = list(enumerate(segments))
     indexed.sort(key=lambda kv: float(kv[1].get("start", 0)))
-
-    target = find_or_create_track(
-        timeline, DUB_SUBTITLE_TRACK_NAME, LayerType.DUB_SUBTITLE, 26
-    )
 
     existing_by_idx: dict[int, DubSubtitleLayer] = {}
     existing_by_key: dict[tuple[float, float, str], list[DubSubtitleLayer]] = {}

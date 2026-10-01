@@ -139,7 +139,7 @@ def fetch_facebook_reel_metadata(reel_id_or_url: str) -> Dict[str, Any]:
 
 def scan_facebook_channel(
     url: str,
-    max_videos: int = 100,
+    max_videos: int = 0,  # 0: Không giới hạn (quét sạch toàn bộ kênh)
     browser_id: str = "chrome",
     profile_id: Optional[str] = None,
     browser_exe_path: Optional[str] = None,
@@ -337,7 +337,8 @@ def scan_facebook_channel(
 
             # Queue of raw items to enrich
             raw_items_dict: Dict[str, Dict[str, Any]] = {}
-            max_scrolls = max(80, max_videos // 3)
+            is_unlimited = (max_videos <= 0 or max_videos >= 99999)
+            max_scrolls = 2000 if is_unlimited else max(80, max_videos // 3)
 
             while scroll_attempts < max_scrolls:
                 if _cancelled():
@@ -397,12 +398,12 @@ def scan_facebook_channel(
 
                     _progress(f"Đã quét được {len(videos)} video Facebook...", len(videos))
 
-                if len(videos) >= max_videos:
+                if not is_unlimited and len(videos) >= max_videos:
                     break
 
                 if len(seen_ids) == last_count:
                     stuck_count += 1
-                    if stuck_count >= 5:
+                    if stuck_count >= 8:
                         break
                 else:
                     stuck_count = 0

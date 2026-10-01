@@ -129,6 +129,97 @@ class AudioMixingService:
         combined = "+".join(terms)
         return f"volume=eval=frame:volume='{self.normal_volume:.2f}-{diff:.2f}*min(1,{combined})'"
 
+    def _assemble_unified_tts_track(
+        self,
+        sorted_blocks: list[TTSAudioBlock],
+        total_duration: float,
+        output_tts_path: str,
+    ) -> str:
+        """Ghép toàn bộ các câu thoại vào một track âm thanh duy nhất theo timeline tuyệt đối.
+        
+        Giải quyết triệt để giới hạn 32KB dòng lệnh của Windows API (WinError 206)
+        khi xử lý video dài (1 tiếng, 2 tiếng...) có hàng ngàn câu thoại phụ đề.
+        """
+        import math
+        import wave
+        import numpy as np
+
+        target_sr = 16000
+        for b in sorted_blocks:
+            if b.audio_path and os.path.isfile(b.audio_path):
+                try:
+                    with wave.open(b.audio_path, "rb") as test_w:
+                        test_sr = test_w.getframerate()
+                        if test_sr in {16000, 22050, 24000, 44100, 48000}:
+                            target_sr = test_sr
+                            break
+                except Exception:
+                    pass
+
+        # Cơ chế Streaming Disk-Writing: Ghi tuần tự trực tiếp xuống file WAV theo dòng thời gian
+        # Giúp tiêu thụ RAM luôn cố định < 10MB kể cả với video siêu dài 10 tiếng, 20 tiếng, 30 tiếng
+        os.makedirs(os.path.dirname(os.path.abspath(output_tts_path)) or ".", exist_ok=True)
+        tts_scale = float(getattr(self, "tts_volume", 1.0))
+        silence_1s = b"\x00\x00" * target_sr
+        current_sample = 0
+
+        with wave.open(output_tts_path, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(target_sr)
+
+            for b in sorted_blocks:
+                if not b.audio_path or not os.path.isfile(b.audio_path):
+                    continue
+                try:
+                    start_sample = max(current_sample, int(round(b.start_time * target_sr)))
+                    gap_samples = start_sample - current_sample
+                    if gap_samples > 0:
+                        full_secs = gap_samples // target_sr
+                        rem = gap_samples % target_sr
+                        for _ in range(full_secs):
+                            wf.writeframes(silence_1s)
+                        if rem > 0:
+                            wf.writeframes(b"\x00\x00" * rem)
+                        current_sample = start_sample
+
+                    with wave.open(b.audio_path, "rb") as w:
+                        sr = w.getframerate()
+                        n_ch = w.getnchannels()
+                        n_fr = w.getnframes()
+                        raw = w.readframes(n_fr)
+                    data = np.frombuffer(raw, dtype=np.int16).astype(np.float32)
+                    if n_ch == 2:
+                        data = (data[0::2] + data[1::2]) * 0.5
+                    if sr != target_sr and len(data) > 0:
+                        orig_idx = np.arange(len(data))
+                        new_len = int(len(data) * target_sr / sr)
+                        new_idx = np.linspace(0, len(data) - 1, new_len)
+                        data = np.interp(new_idx, orig_idx, data)
+
+                    if tts_scale <= 0.001:
+                        vol = 0.0
+                    else:
+                        vol = max(0.1, float(getattr(b, "volume", 1.0) or 1.0) * 1.35 * tts_scale)
+                    data = np.clip(data * vol, -32767.0, 32767.0).astype(np.int16)
+                    wf.writeframes(data.tobytes())
+                    current_sample += len(data)
+                except Exception as e:
+                    print(f"[AudioMixing] Warning streaming block {b.segment_id}: {e}")
+
+            # Đệm khoảng lặng đến hết độ dài tổng thể video nếu cần
+            total_samples = int(round(total_duration * target_sr))
+            if total_samples > current_sample:
+                gap_samples = total_samples - current_sample
+                full_secs = gap_samples // target_sr
+                rem = gap_samples % target_sr
+                for _ in range(full_secs):
+                    wf.writeframes(silence_1s)
+                if rem > 0:
+                    wf.writeframes(b"\x00\x00" * rem)
+
+        return output_tts_path
+
     def mix(
         self,
         *,
@@ -189,22 +280,38 @@ class AudioMixingService:
         # Sắp xếp blocks theo start_time tăng dần
         sorted_blocks = sorted(clean_blocks, key=lambda x: x.start_time)
 
-        # Kiểm tra Overlap giữa các khối thoại liên tiếp
+        # Kiểm tra và Tự Động Xử Lý Overlap giữa các khối thoại liên tiếp (Auto-resolve TTS Overlap)
         for i in range(1, len(sorted_blocks)):
             prev = sorted_blocks[i - 1]
             curr = sorted_blocks[i]
             if curr.start_time < prev.end_time:
-                if (prev.end_time - curr.start_time) <= 0.005:
+                overlap_dur = round(prev.end_time - curr.start_time, 3)
+                if overlap_dur <= 0.005:
                     curr.start_time = prev.end_time
                 else:
-                    return MixedAudioResult(
-                        status="failed",
-                        original_duration=orig_dur,
-                        error=(
-                            f"TTS overlap detected: Segment {prev.segment_id} ends at {prev.end_time:.3f}s "
-                            f"but Segment {curr.segment_id} starts at {curr.start_time:.3f}s."
-                        ),
+                    print(
+                        f"[AudioMixing] Auto-resolving overlap ({overlap_dur:.3f}s) between Segment {prev.segment_id} "
+                        f"and Segment {curr.segment_id} (fade-out trimming)..."
                     )
+                    # Cắt nhẹ đuôi của câu trước để câu sau cất lời chuẩn xác tại curr.start_time
+                    new_prev_dur = max(0.1, round(curr.start_time - prev.start_time - 0.01, 3))
+                    try:
+                        trimmed_audio = os.path.splitext(prev.audio_path)[0] + "_mix_resolved.wav"
+                        fade_start = max(0.0, new_prev_dur - 0.05)
+                        cmd = [
+                            self.ffmpeg_bin, "-y",
+                            "-i", prev.audio_path,
+                            "-t", f"{new_prev_dur:.3f}",
+                            "-af", f"afade=t=out:st={fade_start:.3f}:d=0.05",
+                            trimmed_audio,
+                        ]
+                        from runtime_paths import subprocess_hidden_kwargs
+                        subprocess.run(cmd, check=True, capture_output=True, **subprocess_hidden_kwargs())
+                        if os.path.isfile(trimmed_audio):
+                            prev.audio_path = trimmed_audio
+                    except Exception as trim_err:
+                        print(f"[AudioMixing] Auto-resolve overlap trim notice: {trim_err}")
+                    prev.duration = new_prev_dur
 
         os.makedirs(os.path.dirname(os.path.abspath(output_path)) or ".", exist_ok=True)
 
@@ -248,42 +355,52 @@ class AudioMixingService:
 
         # =====================================================================
         # BƯỚC 5: XÂY DỰNG FFMPEG FILTER COMPLEX SCRIPT (ABSOLUTE TIMELINE PLACEMENT)
+        # Tự động chuyển sang Unified Master Track khi có nhiều câu thoại (> 30 câu)
+        # để chống lỗi WinError 206 (The filename or extension is too long) trên Windows
         # =====================================================================
         vol_filter = self.build_volume_filter_expression(duck_intervals)
+        use_unified_track = len(sorted_blocks) > 30
+        unified_tts_path = output_path + ".unified_tts.wav"
 
-        inputs = ["-i", original_audio_path]
-        for b in sorted_blocks:
-            inputs.extend(["-i", b.audio_path])
-
-        script_lines: list[str] = []
-        # Luồng 0: Audio gốc áp dụng volume ducking, chuẩn hóa stereo 44.1k
-        script_lines.append(
-            f"[0:a]{vol_filter},aformat=sample_fmts=s16:sample_rates=44100:channel_layouts=stereo[bg];"
-        )
-
-        # Các luồng 1..N: Từng câu thoại đặt đúng mốc tuyệt đối start_time qua adelay
-        tts_scale = float(getattr(self, "tts_volume", 1.0))
-        for idx, b in enumerate(sorted_blocks, start=1):
-            delay_ms = int(round(b.start_time * 1000.0))
-            # Boost âm lượng giọng đọc TTS (1.35x * tts_scale) để giọng lồng tiếng to rõ, nổi bật trên nhạc nền
-            if tts_scale <= 0.001:
-                tts_vol = 0.0
-            else:
-                tts_vol = max(0.1, float(getattr(b, "volume", 1.0) or 1.0) * 1.35 * tts_scale)
-            script_lines.append(
-                f"[{idx}:a]aformat=sample_fmts=s16:sample_rates=44100:channel_layouts=stereo,"
-                f"adelay={delay_ms}|{delay_ms},"
-                f"volume={tts_vol:.2f}[tts_{idx}];"
+        if use_unified_track:
+            self._assemble_unified_tts_track(
+                sorted_blocks=sorted_blocks,
+                total_duration=expected_total_duration,
+                output_tts_path=unified_tts_path,
             )
+            inputs = ["-i", original_audio_path, "-i", unified_tts_path]
+            script_lines = [
+                f"[0:a]{vol_filter},aformat=sample_fmts=s16:sample_rates=44100:channel_layouts=stereo[bg];",
+                f"[1:a]aformat=sample_fmts=s16:sample_rates=44100:channel_layouts=stereo[fg];",
+                f"[bg][fg]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0,alimiter=limit=0.98[outa]"
+            ]
+        else:
+            inputs = ["-i", original_audio_path]
+            for b in sorted_blocks:
+                inputs.extend(["-i", b.audio_path])
 
-        # Hòa âm tất cả luồng (1 luồng gốc + N luồng thoại)
-        # normalize=0: BẮT BUỘC để FFmpeg không chia nhỏ âm lượng cho N inputs (tránh làm tiếng bị lí nhí)
-        # alimiter: Giữ âm thanh to rõ chuẩn studio mà không bị rè/clipping
-        mix_sources = "[bg]" + "".join(f"[tts_{i}]" for i in range(1, len(sorted_blocks) + 1))
-        num_inputs = 1 + len(sorted_blocks)
-        script_lines.append(
-            f"{mix_sources}amix=inputs={num_inputs}:duration=longest:dropout_transition=0:normalize=0,alimiter=limit=0.98[outa]"
-        )
+            script_lines: list[str] = []
+            script_lines.append(
+                f"[0:a]{vol_filter},aformat=sample_fmts=s16:sample_rates=44100:channel_layouts=stereo[bg];"
+            )
+            tts_scale = float(getattr(self, "tts_volume", 1.0))
+            for idx, b in enumerate(sorted_blocks, start=1):
+                delay_ms = int(round(b.start_time * 1000.0))
+                if tts_scale <= 0.001:
+                    tts_vol = 0.0
+                else:
+                    tts_vol = max(0.1, float(getattr(b, "volume", 1.0) or 1.0) * 1.35 * tts_scale)
+                script_lines.append(
+                    f"[{idx}:a]aformat=sample_fmts=s16:sample_rates=44100:channel_layouts=stereo,"
+                    f"adelay={delay_ms}|{delay_ms},"
+                    f"volume={tts_vol:.2f}[tts_{idx}];"
+                )
+
+            mix_sources = "[bg]" + "".join(f"[tts_{i}]" for i in range(1, len(sorted_blocks) + 1))
+            num_inputs = 1 + len(sorted_blocks)
+            script_lines.append(
+                f"{mix_sources}amix=inputs={num_inputs}:duration=longest:dropout_transition=0:normalize=0,alimiter=limit=0.98[outa]"
+            )
 
         script_content = "\n".join(script_lines)
         filter_script_path = output_path + ".filter_script.txt"
@@ -330,6 +447,11 @@ class AudioMixingService:
             if os.path.isfile(filter_script_path):
                 try:
                     os.remove(filter_script_path)
+                except Exception:
+                    pass
+            if os.path.isfile(unified_tts_path):
+                try:
+                    os.remove(unified_tts_path)
                 except Exception:
                     pass
 

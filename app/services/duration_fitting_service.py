@@ -152,8 +152,24 @@ class DurationFittingService:
         # 5. Rule 2: Audio ngắn hơn hoặc bằng slot (hoặc chỉ dài hơn <= tolerance_ratio)
         if raw_duration <= (slot_duration * self.tolerance_ratio):
             try:
-                if os.path.abspath(target_output) != raw_abs:
-                    shutil.copyfile(raw_audio_path, target_output)
+                # Cắt khoảng lặng đầu (leading silence) để giọng lồng tiếng phát ra tức thì cùng phụ đề
+                cmd = [
+                    self.ffmpeg_bin,
+                    "-y",
+                    "-i", raw_audio_path,
+                    "-filter:a", "silenceremove=start_periods=1:start_duration=0.01:start_threshold=-42dB",
+                    "-ar", "16000",
+                    "-ac", "1",
+                    target_output,
+                ]
+                kwargs: dict[str, Any] = {"capture_output": True}
+                if os.name == "nt":
+                    kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                proc = subprocess.run(cmd, **kwargs)
+                if proc.returncode != 0 or not os.path.isfile(target_output):
+                    if os.path.abspath(target_output) != raw_abs:
+                        shutil.copyfile(raw_audio_path, target_output)
+
                 fitted_dur = measure_wav_duration(target_output)
                 return FittedAudioResult(
                     segment_id=segment_id,
@@ -177,22 +193,35 @@ class DurationFittingService:
 
         # 6. Rule 3 & 4: Audio dài hơn > 3% -> Tính required_speed và áp dụng atempo
         required_speed = raw_duration / float(slot_duration)
+        adaptive_ceiling = max(self.max_speed, 1.35)
         if required_speed <= self.max_speed:
             applied_speed = round(required_speed, 3)
             warning = ""
-        else:
-            applied_speed = self.max_speed
+        elif required_speed <= adaptive_ceiling:
+            applied_speed = round(required_speed, 3)
             warning = (
                 f"Thời lượng âm thanh ({raw_duration:.2f}s) vượt quá slot ({slot_duration:.2f}s). "
-                f"Đã áp dụng tốc độ trần {self.max_speed:.2f}x (overflow)."
+                f"Đã tự động tăng tốc thích ứng lên {applied_speed:.2f}x để bảo toàn timeline."
+            )
+        else:
+            applied_speed = adaptive_ceiling
+            warning = (
+                f"Thời lượng âm thanh ({raw_duration:.2f}s) vượt quá slot ({slot_duration:.2f}s). "
+                f"Đã áp dụng tốc độ trần {adaptive_ceiling:.2f}x (overflow)."
             )
 
-        # 7. Thực thi FFmpeg atempo
+        # 7. Thực thi FFmpeg với bộ lọc cắt khoảng lặng đầu (silenceremove) & atempo
+        # Đảm bảo giọng lồng tiếng cất lên NGAY LẬP TỨC khi phụ đề xuất hiện, loại bỏ độ trễ 150-250ms
+        filter_parts = ["silenceremove=start_periods=1:start_duration=0.01:start_threshold=-42dB"]
+        if abs(applied_speed - 1.0) >= 0.01:
+            filter_parts.append(f"atempo={applied_speed:.3f}")
+        filter_chain = ",".join(filter_parts)
+
         cmd = [
             self.ffmpeg_bin,
             "-y",
             "-i", raw_audio_path,
-            "-filter:a", f"atempo={applied_speed:.3f}",
+            "-filter:a", filter_chain,
             "-ar", "16000",
             "-ac", "1",
             target_output,

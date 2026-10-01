@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
+    QDoubleSpinBox,
     QFileDialog,
     QFrame,
     QGroupBox,
@@ -63,9 +64,33 @@ class SingleVoiceSetupDialog(QDialog):
         self.initial_orig_volume = max(0, min(100, int(initial_orig_volume)))
         self.initial_tts_volume = max(0, min(200, int(initial_tts_volume)))
         self.blur_rect = blur_rect
+        if not self.blur_rect and parent:
+            for attr in ("ocr_region_overlay", "ocr_overlay"):
+                ov = getattr(parent, attr, None)
+                if not ov and hasattr(parent, "preview_panel"):
+                    ov = getattr(parent.preview_panel, attr, None)
+                if ov and hasattr(ov, "get_norm_rect"):
+                    r = ov.get_norm_rect()
+                    if r and len(r) == 4 and r[2] > 0.01 and r[3] > 0.01:
+                        self.blur_rect = tuple(r)
+                        break
+            if not self.blur_rect and hasattr(parent, "_video_ocr_rects"):
+                norm_p = os.path.normpath(self.video_path) if self.video_path else ""
+                self.blur_rect = parent._video_ocr_rects.get(norm_p)
+            if not self.blur_rect:
+                rect_str = os.getenv("OCR_SUBTITLE_RECT", "").strip()
+                if rect_str:
+                    try:
+                        parts = [float(p) for p in rect_str.split(",")]
+                        if len(parts) == 4 and parts[2] > 0 and parts[3] > 0:
+                            self.blur_rect = tuple(parts)
+                    except Exception:
+                        pass
+        self._watermark_delogo_rect = (0.35, 0.49, 0.30, 0.045)
         self.initial_voice_id = initial_voice_id
         self.individual_voices = individual_voices
         self.start_now = False
+        self.save_only = False
 
         self.setWindowTitle("Cài đặt lồng tiếng (1 giọng) & Tạo video tự động")
         # Tự động tính toán kích thước rộng rãi, vừa vặn độ phân giải màn hình
@@ -174,7 +199,7 @@ class SingleVoiceSetupDialog(QDialog):
             indiv_map = {}
             for p in self.video_paths:
                 cfg = getattr(self.parent(), "_video_voice_configs", {}).get(os.path.normpath(p), {})
-                if cfg.get("voice_name") and cfg.get("label"):
+                if cfg.get("label") and (cfg.get("voice_name") or cfg.get("voice_mode") == "dual"):
                     indiv_map[os.path.normpath(p)] = cfg
 
         if len(self.video_paths) > 1 and indiv_map and len(indiv_map) > 0:
@@ -287,10 +312,48 @@ class SingleVoiceSetupDialog(QDialog):
         visual_layout.setSpacing(8)
         visual_layout.setContentsMargins(12, 14, 12, 12)
 
-        self.chk_blur_mask = QCheckBox("Tự động che mờ (Blur Mask) chữ Trung gốc theo vùng OCR đã chọn")
+        self.chk_blur_mask = QCheckBox("Bật tính năng che chữ Trung gốc theo vùng OCR đã chọn")
         self.chk_blur_mask.setChecked(True)
         self.chk_blur_mask.setStyleSheet("color: #f8fbff; font-weight: bold; font-size: 12px;")
         visual_layout.addWidget(self.chk_blur_mask)
+
+        # Lựa chọn kiểu mặt nạ che chữ: Làm mờ ngang (Ảnh 1) hoặc Hộp đen (Ảnh 2)
+        mask_row = QHBoxLayout()
+        mask_row.setSpacing(8)
+        lbl_mask_type = QLabel("Kiểu che chữ Trung:")
+        lbl_mask_type.setStyleSheet("color: #d7e3f4; font-size: 11px; font-weight: 600; margin-left: 20px;")
+        mask_row.addWidget(lbl_mask_type)
+
+        self.combo_mask_mode = QComboBox()
+        self.combo_mask_mode.addItem("🌫️ Mặt nạ làm mờ ngang (Ảnh 1 - Đẹp & Khuyên dùng)", "blur")
+        self.combo_mask_mode.addItem("🖤 Khung che chữ đen bo góc (Ảnh 2)", "box")
+        self.combo_mask_mode.addItem("🚫 Không che chữ gốc (Chỉ đè phụ đề)", "none")
+        mask_row.addWidget(self.combo_mask_mode, 1)
+        visual_layout.addLayout(mask_row)
+
+        self.lbl_mask_hint = QLabel("💡 Dải làm mờ ngang (Ảnh 1) làm nhòe sạch chữ gốc video, chữ tiếng Việt in đậm viền đen nổi bật.")
+        self.lbl_mask_hint.setStyleSheet("color: #38bdf8; font-size: 11px; margin-left: 20px;")
+        visual_layout.addWidget(self.lbl_mask_hint)
+
+        def _on_mask_mode_changed(idx):
+            mode = self.combo_mask_mode.currentData()
+            if mode == "blur":
+                self.lbl_mask_hint.setText("💡 Dải làm mờ ngang (Ảnh 1) làm nhòe sạch chữ gốc video, chữ tiếng Việt in đậm viền đen nổi bật.")
+                self.lbl_mask_hint.setStyleSheet("color: #38bdf8; font-size: 11px; margin-left: 20px;")
+                p_idx = self.sub_style_group.combo_preset.findData("blur_mask")
+                if p_idx >= 0:
+                    self.sub_style_group.combo_preset.setCurrentIndex(p_idx)
+            elif mode == "box":
+                self.lbl_mask_hint.setText("💡 Khung đen bo góc (Ảnh 2) ôm sát chữ tiếng Việt đè lên chữ Trung gốc.")
+                self.lbl_mask_hint.setStyleSheet("color: #fbbf24; font-size: 11px; margin-left: 20px;")
+                p_idx = self.sub_style_group.combo_preset.findData("youtube_box")
+                if p_idx >= 0:
+                    self.sub_style_group.combo_preset.setCurrentIndex(p_idx)
+            else:
+                self.lbl_mask_hint.setText("💡 Chỉ hiển thị phụ đề tiếng Việt, không che nội dung video gốc.")
+                self.lbl_mask_hint.setStyleSheet("color: #94a3b8; font-size: 11px; margin-left: 20px;")
+
+        self.combo_mask_mode.currentIndexChanged.connect(_on_mask_mode_changed)
 
         # Hiển thị thông tin toạ độ khung che chữ Trung
         rect_desc = "Tự động phát hiện theo vùng OCR chân trang"
@@ -335,13 +398,18 @@ class SingleVoiceSetupDialog(QDialog):
         layout.addWidget(self.sub_style_group)
 
         # --- 5. KHUNG LOGO THƯƠNG HIỆU & HÌNH MỜ (WATERMARK) ---
-        branding_box = QGroupBox("5. Logo Thương hiệu & Hình mờ Bản quyền (Watermark)")
+        branding_box = QGroupBox("5. Đóng Dấu Bản Quyền CỦA BẠN (Chèn Thêm Logo / Chữ Watermark)")
         branding_layout = QVBoxLayout(branding_box)
         branding_layout.setSpacing(12)
         branding_layout.setContentsMargins(12, 14, 12, 12)
 
+        lbl_brand_hint = QLabel("💡 Đóng dấu logo hoặc tên kênh của bạn lên video. (Lưu ý: Nếu muốn XÓA logo/watermark có sẵn của video nguồn, hãy dùng Mục 6 bên dưới!)")
+        lbl_brand_hint.setStyleSheet("color: #9fb3ca; font-size: 11px;")
+        lbl_brand_hint.setWordWrap(True)
+        branding_layout.addWidget(lbl_brand_hint)
+
         # === PHẦN A: LOGO THƯƠNG HIỆU (BRAND LOGO) ===
-        self.chk_enable_logo = QCheckBox("Bật hiển thị Logo thương hiệu xuyên suốt video")
+        self.chk_enable_logo = QCheckBox("Bật hiển thị Logo thương hiệu của bạn xuyên suốt video")
         self.chk_enable_logo.setStyleSheet("color: #ff9d42; font-weight: bold; font-size: 12px;")
         branding_layout.addWidget(self.chk_enable_logo)
 
@@ -392,8 +460,8 @@ class SingleVoiceSetupDialog(QDialog):
         logo_opt_row.addWidget(lbl_l_pos)
 
         self.combo_logo_pos = QComboBox()
-        self.combo_logo_pos.addItem("Góc trên trái (Top-Left) ★ Khuyên dùng", "top_left")
-        self.combo_logo_pos.addItem("Góc trên phải (Top-Right)", "top_right")
+        self.combo_logo_pos.addItem("Góc trên phải (Top-Right) ★ Đè lên vị trí logo Bilibili/Douyin", "top_right")
+        self.combo_logo_pos.addItem("Góc trên trái (Top-Left)", "top_left")
         self.combo_logo_pos.addItem("Góc dưới trái (Bottom-Left)", "bottom_left")
         self.combo_logo_pos.addItem("Góc dưới phải (Bottom-Right)", "bottom_right")
         self.combo_logo_pos.addItem("Chính giữa (Center)", "center")
@@ -441,7 +509,7 @@ class SingleVoiceSetupDialog(QDialog):
         branding_layout.addWidget(sep)
 
         # === PHẦN B: HÌNH MỜ CHỮ (TEXT WATERMARK) ===
-        self.chk_enable_watermark = QCheckBox("Bật hình mờ chữ (Watermark chống reup) xuyên suốt video")
+        self.chk_enable_watermark = QCheckBox("✍️ Đóng dấu chữ Watermark CỦA BẠN (Chèn thêm chữ lên video)")
         self.chk_enable_watermark.setStyleSheet("color: #38bdf8; font-weight: bold; font-size: 12px;")
         branding_layout.addWidget(self.chk_enable_watermark)
 
@@ -454,13 +522,13 @@ class SingleVoiceSetupDialog(QDialog):
         wm_row1 = QHBoxLayout()
         wm_row1.setSpacing(8)
 
-        lbl_wm_text = QLabel("Chữ Watermark:")
+        lbl_wm_text = QLabel("Chữ đóng dấu:")
         lbl_wm_text.setStyleSheet("color: #d7e3f4; font-size: 12px; font-weight: 600;")
         lbl_wm_text.setMinimumWidth(95)
         wm_row1.addWidget(lbl_wm_text)
 
         self.txt_watermark = QLineEdit()
-        self.txt_watermark.setPlaceholderText("Ví dụ: Nhím Review, Tên Kênh...")
+        self.txt_watermark.setPlaceholderText("Ví dụ: Nhím Review, Tên Kênh Của Bạn...")
         self.txt_watermark.setStyleSheet("background-color: #1a2738; color: #f8fbff; border: 1px solid #344862; border-radius: 6px; padding: 5px 8px; font-size: 11px;")
         wm_row1.addWidget(self.txt_watermark, 1)
 
@@ -516,6 +584,184 @@ class SingleVoiceSetupDialog(QDialog):
         self.chk_enable_watermark.toggled.connect(self.wm_container.setEnabled)
         layout.addWidget(branding_box)
 
+        # --- 6. KHUNG XÓA LOGO & WATERMARK GỐC (DELOGO AI) ---
+        delogo_box = QGroupBox("6. Xóa / Tẩy Logo & Watermark Video Gốc (Delogo AI)")
+        delogo_layout = QVBoxLayout(delogo_box)
+        delogo_layout.setSpacing(10)
+        delogo_layout.setContentsMargins(12, 14, 12, 12)
+
+        delogo_desc = QLabel(
+            "💡 Tẩy sạch logo đài, logo Bilibili, Douyin và chữ bản quyền mờ "
+            "trên video nguồn bằng thuật toán nội suy điểm ảnh Delogo và BoxBlur thông minh."
+        )
+        delogo_desc.setWordWrap(True)
+        delogo_desc.setStyleSheet("color: #9fb3ca; font-size: 11px; line-height: 1.4;")
+        delogo_layout.addWidget(delogo_desc)
+
+        # 1. Preset: Logo Bilibili / Douyin góc trên phải
+        self.chk_delogo_bilibili = QCheckBox("🎯 Tự động xóa Logo Bilibili / Douyin (Góc trên cùng bên phải)")
+        self.chk_delogo_bilibili.setStyleSheet("color: #ff9d42; font-weight: bold; font-size: 12px;")
+        delogo_layout.addWidget(self.chk_delogo_bilibili)
+
+        lbl_bili_hint = QLabel("    Khử sạch logo 'bilibili' và tên kênh ở góc trên phải bằng thuật toán Delogo nội suy điểm ảnh.")
+        lbl_bili_hint.setStyleSheet("color: #8ea3bb; font-size: 11px;")
+        delogo_layout.addWidget(lbl_bili_hint)
+
+        # 2. Watermark bản quyền
+        self.chk_delogo_watermark = QCheckBox("🥷 Xóa sạch Watermark chữ mờ bản quyền (Không tạo mặt nạ mờ)")
+        self.chk_delogo_watermark.setStyleSheet("color: #38bdf8; font-weight: bold; font-size: 12px;")
+        delogo_layout.addWidget(self.chk_delogo_watermark)
+
+        self.watermark_delogo_container = QWidget()
+        wm_delogo_layout = QVBoxLayout(self.watermark_delogo_container)
+        wm_delogo_layout.setContentsMargins(18, 0, 0, 4)
+        wm_delogo_layout.setSpacing(6)
+
+        wm_d_row_mode = QHBoxLayout()
+        wm_d_row_mode.setSpacing(10)
+        lbl_wm_mode = QLabel("Kiểu xóa:")
+        lbl_wm_mode.setStyleSheet("color: #d7e3f4; font-size: 11px;")
+        wm_d_row_mode.addWidget(lbl_wm_mode)
+
+        self.combo_wm_delogo_mode = QComboBox()
+        self.combo_wm_delogo_mode.addItem("🥷 Xóa sạch tàng hình (Delogo) - Siêu tốc 0s, không để lại vết mờ", "delogo")
+        self.combo_wm_delogo_mode.addItem("⚡ Tẩy nhanh phục hồi nền (OpenCV Telea) - Nhanh 2s", "telea")
+        self.combo_wm_delogo_mode.addItem("🎭 Mặt nạ che mờ mịn (BoxBlur) - Siêu tốc 1s", "boxblur")
+        wm_d_row_mode.addWidget(self.combo_wm_delogo_mode, 1)
+        wm_delogo_layout.addLayout(wm_d_row_mode)
+
+        wm_d_row1 = QHBoxLayout()
+        self.lbl_watermark_delogo_info = QLabel("📐 Tọa độ: x=35.0%, y=49.0%, w=30.0%, h=4.5%")
+        self.lbl_watermark_delogo_info.setStyleSheet("color: #38bdf8; font-size: 11px;")
+        wm_d_row1.addWidget(self.lbl_watermark_delogo_info)
+
+        self.btn_grab_watermark_rect = QPushButton("📐 Lấy tọa độ từ khung [Xóa Watermark]")
+        self.btn_grab_watermark_rect.setToolTip("Lấy tọa độ vùng chọn từ khung màu xanh dương trên màn hình Preview")
+        self.btn_grab_watermark_rect.setStyleSheet("""
+            QPushButton {
+                background-color: #082f49; color: #38bdf8;
+                border: 1px solid #0284c7; border-radius: 6px; padding: 4px 10px; font-size: 11px; font-weight: 600;
+            }
+            QPushButton:hover { background-color: #0369a1; color: #fff; }
+        """)
+        self.btn_grab_watermark_rect.clicked.connect(self._grab_watermark_preview_rect)
+        wm_d_row1.addWidget(self.btn_grab_watermark_rect)
+        wm_d_row1.addStretch()
+        wm_delogo_layout.addLayout(wm_d_row1)
+
+        delogo_layout.addWidget(self.watermark_delogo_container)
+        self.chk_delogo_watermark.toggled.connect(self.watermark_delogo_container.setEnabled)
+
+        # 3. Custom Rect: Vùng xóa tùy chỉnh do người dùng chỉ định (Option 3 kết hợp)
+        self.chk_delogo_custom = QCheckBox("📐 Xóa / Làm mờ vùng tùy chọn bổ sung (Khung tự chọn)")
+        self.chk_delogo_custom.setStyleSheet("color: #34d399; font-weight: bold; font-size: 12px;")
+        delogo_layout.addWidget(self.chk_delogo_custom)
+
+        self.custom_delogo_container = QWidget()
+        custom_layout = QVBoxLayout(self.custom_delogo_container)
+        custom_layout.setContentsMargins(18, 0, 0, 4)
+        custom_layout.setSpacing(8)
+
+        custom_row1 = QHBoxLayout()
+        custom_row1.setSpacing(10)
+
+        lbl_cmode = QLabel("Kiểu xử lý:")
+        lbl_cmode.setStyleSheet("color: #d7e3f4; font-size: 11px;")
+        custom_row1.addWidget(lbl_cmode)
+
+        self.combo_custom_delogo_mode = QComboBox()
+        self.combo_custom_delogo_mode.addItem("🎭 Mặt nạ che mờ mịn (BoxBlur) - Siêu tốc 1s", "boxblur")
+        self.combo_custom_delogo_mode.addItem("⚡ Tẩy nhanh vết logo (OpenCV Telea) - Nhanh 5-8s", "telea")
+        self.combo_custom_delogo_mode.addItem("🥷 Xóa tàng hình (Delogo nội suy viền) - Siêu tốc 1s", "delogo")
+        self.combo_custom_delogo_mode.addItem("🤖 AI Deep Learning (LaMa) - Phục hồi nền (Nặng: 4-6 phút CPU)", "inpaint")
+        custom_row1.addWidget(self.combo_custom_delogo_mode)
+
+        self.btn_grab_preview_rect = QPushButton("📐 Lấy tọa độ từ Preview")
+        self.btn_grab_preview_rect.setToolTip("Lấy tọa độ vùng chọn hiện tại từ khung [Xóa Logo] trên Preview")
+        self.btn_grab_preview_rect.setStyleSheet("""
+            QPushButton {
+                background-color: #1e293b; color: #34d399;
+                border: 1px solid #059669; border-radius: 6px; padding: 4px 10px; font-size: 11px; font-weight: 600;
+            }
+            QPushButton:hover { background-color: #065f46; color: #fff; }
+        """)
+        self.btn_grab_preview_rect.clicked.connect(self._grab_preview_rect)
+        custom_row1.addWidget(self.btn_grab_preview_rect)
+
+        self.btn_use_brand_cover = QPushButton("👑 Đè Logo của bạn (1s)")
+        self.btn_use_brand_cover.setToolTip("Tự động bật Logo thương hiệu ở mục 5 và đặt góc trên phải để đè lên logo Bilibili")
+        self.btn_use_brand_cover.setStyleSheet("""
+            QPushButton {
+                background-color: #1e293b; color: #fbbf24;
+                border: 1px solid #d97706; border-radius: 6px; padding: 4px 10px; font-size: 11px; font-weight: 600;
+            }
+            QPushButton:hover { background-color: #78350f; color: #fff; }
+        """)
+        self.btn_use_brand_cover.clicked.connect(self._activate_brand_cover_mode)
+        custom_row1.addWidget(self.btn_use_brand_cover)
+
+        custom_row1.addStretch()
+        custom_layout.addLayout(custom_row1)
+
+        # Hàng 2: Tọa độ tùy chỉnh (X%, Y%, W%, H%)
+        coords_row = QHBoxLayout()
+        coords_row.setSpacing(8)
+
+        lbl_cx = QLabel("X:")
+        lbl_cx.setStyleSheet("color: #8ea3bb; font-size: 11px;")
+        self.spin_delogo_x = QDoubleSpinBox()
+        self.spin_delogo_x.setRange(0.0, 100.0)
+        self.spin_delogo_x.setSingleStep(1.0)
+        self.spin_delogo_x.setSuffix("%")
+        self.spin_delogo_x.setValue(80.0)
+
+        lbl_cy = QLabel("Y:")
+        lbl_cy.setStyleSheet("color: #8ea3bb; font-size: 11px;")
+        self.spin_delogo_y = QDoubleSpinBox()
+        self.spin_delogo_y.setRange(0.0, 100.0)
+        self.spin_delogo_y.setSingleStep(1.0)
+        self.spin_delogo_y.setSuffix("%")
+        self.spin_delogo_y.setValue(2.0)
+
+        lbl_cw = QLabel("Rộng:")
+        lbl_cw.setStyleSheet("color: #8ea3bb; font-size: 11px;")
+        self.spin_delogo_w = QDoubleSpinBox()
+        self.spin_delogo_w.setRange(1.0, 100.0)
+        self.spin_delogo_w.setSingleStep(1.0)
+        self.spin_delogo_w.setSuffix("%")
+        self.spin_delogo_w.setValue(18.0)
+
+        lbl_ch = QLabel("Cao:")
+        lbl_ch.setStyleSheet("color: #8ea3bb; font-size: 11px;")
+        self.spin_delogo_h = QDoubleSpinBox()
+        self.spin_delogo_h.setRange(1.0, 100.0)
+        self.spin_delogo_h.setSingleStep(1.0)
+        self.spin_delogo_h.setSuffix("%")
+        self.spin_delogo_h.setValue(10.0)
+
+        for sp in (self.spin_delogo_x, self.spin_delogo_y, self.spin_delogo_w, self.spin_delogo_h):
+            sp.setStyleSheet("background-color: #1a2738; color: #f8fbff; border: 1px solid #344862; border-radius: 4px; padding: 2px 4px; font-size: 11px;")
+            sp.valueChanged.connect(self._update_custom_delogo_label)
+
+        coords_row.addWidget(lbl_cx)
+        coords_row.addWidget(self.spin_delogo_x)
+        coords_row.addWidget(lbl_cy)
+        coords_row.addWidget(self.spin_delogo_y)
+        coords_row.addWidget(lbl_cw)
+        coords_row.addWidget(self.spin_delogo_w)
+        coords_row.addWidget(lbl_ch)
+        coords_row.addWidget(self.spin_delogo_h)
+        custom_layout.addLayout(coords_row)
+
+        self.lbl_custom_delogo_info = QLabel("📐 Tọa độ vùng xóa: x=80.0%, y=2.0%, w=18.0%, h=10.0%")
+        self.lbl_custom_delogo_info.setStyleSheet("color: #34d399; font-size: 11px;")
+        custom_layout.addWidget(self.lbl_custom_delogo_info)
+
+        delogo_layout.addWidget(self.custom_delogo_container)
+        self.chk_delogo_custom.toggled.connect(self.custom_delogo_container.setEnabled)
+
+        layout.addWidget(delogo_box)
+
         # Nạp cài đặt đã lưu trước đó
         self._load_branding_settings()
 
@@ -534,6 +780,25 @@ class SingleVoiceSetupDialog(QDialog):
         btn_layout.addWidget(self.cancel_btn)
 
         count = len(self.video_paths)
+        save_txt = f"💾 Lưu giọng nói ({count} video)" if count > 1 else "💾 Lưu giọng nói"
+        self.save_voice_btn = QPushButton(save_txt)
+        self.save_voice_btn.setObjectName("saveVoiceBtn")
+        self.save_voice_btn.setMinimumHeight(38)
+        self.save_voice_btn.setMinimumWidth(150)
+        self.save_voice_btn.setToolTip("Lưu lại cài đặt giọng đọc cho video này mà không xuất video ngay")
+        self.save_voice_btn.setStyleSheet(
+            "QPushButton { background: #0f766e; color: #ffffff; font-weight: 700; font-size: 13px; "
+            "border: 1px solid #14b8a6; border-radius: 8px; padding: 6px 18px; } "
+            "QPushButton:hover { background: #14b8a6; color: #ffffff; border-color: #2dd4bf; }"
+        )
+        def _on_save_voice_clicked():
+            self.save_only = True
+            self.start_now = False
+            self._save_branding_settings()
+            self.accept()
+        self.save_voice_btn.clicked.connect(_on_save_voice_clicked)
+        btn_layout.addWidget(self.save_voice_btn)
+
         btn_txt = f"🚀 Bắt đầu tạo video ({count} video)" if count > 1 else "🚀 Bắt đầu tạo video"
         self.start_btn = QPushButton(btn_txt)
         self.start_btn.setObjectName("primaryActionBtn")
@@ -545,16 +810,14 @@ class SingleVoiceSetupDialog(QDialog):
             "QPushButton:hover { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #ff7d1a, stop:1 #f05400); border-color: #ffa352; }"
         )
         def _on_start_btn_clicked():
+            self.save_only = False
             self.start_now = True
+            self._save_branding_settings()
             self.accept()
         self.start_btn.clicked.connect(_on_start_btn_clicked)
         btn_layout.addWidget(self.start_btn)
 
         root_layout.addLayout(btn_layout)
-
-    def get_subtitle_config(self) -> SubtitleRenderConfig:
-        """Trả về SubtitleRenderConfig được người dùng chọn."""
-        return self.sub_style_group.get_subtitle_render_config()
 
     def _apply_dark_style(self):
         self.setStyleSheet("""
@@ -621,11 +884,31 @@ class SingleVoiceSetupDialog(QDialog):
             "duck_volume": min(orig_vol, max(0.05, orig_vol * 0.40)) if orig_vol > 0.001 else 0.0,
         }
 
+    def get_mask_mode(self) -> str:
+        """Trả về kiểu mặt nạ che: 'blur' (Ảnh 1), 'box' (Ảnh 2), 'none'."""
+        if not self.chk_blur_mask.isChecked():
+            return "none"
+        mode = self.combo_mask_mode.currentData()
+        return str(mode or "blur")
+
     def is_blur_mask_enabled(self) -> bool:
-        return self.chk_blur_mask.isChecked()
+        return self.chk_blur_mask.isChecked() and self.get_mask_mode() != "none"
 
     def is_burn_subtitles_enabled(self) -> bool:
         return self.chk_burn_subtitles.isChecked()
+
+    def get_blur_rect(self) -> tuple[float, float, float, float] | None:
+        """Trả về tọa độ vùng che chữ Trung (khớp khung OCR đã quét)."""
+        if not self.chk_blur_mask.isChecked():
+            return None
+        return getattr(self, "blur_rect", None)
+
+    def get_subtitle_config(self) -> SubtitleRenderConfig:
+        """Trả về SubtitleRenderConfig được người dùng chọn."""
+        cfg = self.sub_style_group.get_subtitle_render_config()
+        cfg.mask_mode = self.get_mask_mode()
+        cfg.blur_rect = self.get_blur_rect()
+        return cfg
 
     def get_voice_config(self) -> dict[str, Any]:
         """Trả về cấu hình giọng đọc chuẩn hóa."""
@@ -641,6 +924,7 @@ class SingleVoiceSetupDialog(QDialog):
             "tts_volume": int(mix.get("tts_volume", 1.0) * 100),
             "duck_volume": mix.get("duck_volume", 0.2),
             "blur_mask": self.is_blur_mask_enabled(),
+            "mask_mode": self.get_mask_mode(),
             "burn_subtitles": self.is_burn_subtitles_enabled(),
             "start_now": getattr(self, "start_now", False),
         }
@@ -694,7 +978,7 @@ class SingleVoiceSetupDialog(QDialog):
         self.lbl_logo_preview.setToolTip("Chưa chọn file ảnh")
 
     def _load_branding_settings(self):
-        """Khôi phục các cài đặt Logo & Watermark đã lưu từ trước."""
+        """Khôi phục các cài đặt Logo, Watermark và Xóa Logo gốc đã lưu từ trước."""
         settings = QSettings("TankVideo", "TankVideoStudio")
         # Brand Logo
         enable_logo = settings.value("branding/enable_logo", False, type=bool)
@@ -735,8 +1019,85 @@ class SingleVoiceSetupDialog(QDialog):
         self.slider_watermark_size.setValue(max(18, min(80, wm_size)))
         self.slider_watermark_opacity.setValue(max(10, min(100, wm_op)))
 
+        # Delogo & Watermark removal settings (mặc định False để không chèn dải mờ bừa bãi)
+        bili_def = settings.value("delogo/enable_bilibili", False, type=bool)
+        wm_delogo_def = settings.value("delogo/enable_watermark", False, type=bool)
+        wm_delogo_mode = settings.value("delogo/watermark_mode", "delogo", type=str)
+        custom_def = settings.value("delogo/enable_custom", False, type=bool)
+        custom_mode = settings.value("delogo/custom_mode", "boxblur", type=str)
+        custom_rect_str = settings.value("delogo/custom_rect", "", type=str)
+
+        self.chk_delogo_bilibili.setChecked(bili_def)
+        self.chk_delogo_watermark.setChecked(wm_delogo_def)
+        self.chk_delogo_custom.setChecked(custom_def)
+        self.custom_delogo_container.setEnabled(custom_def)
+
+        wm_mode_idx = self.combo_wm_delogo_mode.findData(wm_delogo_mode)
+        if wm_mode_idx >= 0:
+            self.combo_wm_delogo_mode.setCurrentIndex(wm_mode_idx)
+
+        mode_idx = self.combo_custom_delogo_mode.findData(custom_mode)
+        if mode_idx >= 0:
+            self.combo_custom_delogo_mode.setCurrentIndex(mode_idx)
+
+        p = self.parent()
+        delogo_loaded = False
+        if p and hasattr(p, "delogo_region_overlay"):
+            d_ov = getattr(p, "delogo_region_overlay", None)
+            if d_ov and (getattr(d_ov, "_user_customized", False) or getattr(d_ov, "_requested_visible", False)):
+                dr = d_ov.get_norm_rect()
+                if dr and len(dr) == 4 and dr[2] > 0.01 and dr[3] > 0.01:
+                    self.chk_delogo_custom.setChecked(True)
+                    self.custom_delogo_container.setEnabled(True)
+                    self.spin_delogo_x.setValue(round(dr[0] * 100, 1))
+                    self.spin_delogo_y.setValue(round(dr[1] * 100, 1))
+                    self.spin_delogo_w.setValue(round(dr[2] * 100, 1))
+                    self.spin_delogo_h.setValue(round(dr[3] * 100, 1))
+                    delogo_loaded = True
+
+        if not delogo_loaded and custom_rect_str:
+            try:
+                parts = [float(p) for p in custom_rect_str.split(",")]
+                if len(parts) == 4:
+                    self.spin_delogo_x.setValue(round(parts[0] * 100, 1))
+                    self.spin_delogo_y.setValue(round(parts[1] * 100, 1))
+                    self.spin_delogo_w.setValue(round(parts[2] * 100, 1))
+                    self.spin_delogo_h.setValue(round(parts[3] * 100, 1))
+            except Exception:
+                pass
+        elif not delogo_loaded and self.blur_rect and len(self.blur_rect) == 4:
+            self.spin_delogo_x.setValue(round(self.blur_rect[0] * 100, 1))
+            self.spin_delogo_y.setValue(round(self.blur_rect[1] * 100, 1))
+            self.spin_delogo_w.setValue(round(self.blur_rect[2] * 100, 1))
+            self.spin_delogo_h.setValue(round(self.blur_rect[3] * 100, 1))
+        self._update_custom_delogo_label()
+
+        # Watermark delogo: Tự động nhận diện khung Xóa Watermark từ Preview
+        wm_loaded = False
+        if p and hasattr(p, "watermark_region_overlay"):
+            wm_ov = getattr(p, "watermark_region_overlay", None)
+            if wm_ov and (getattr(wm_ov, "_user_customized", False) or getattr(wm_ov, "_requested_visible", False)):
+                wm_r = wm_ov.get_norm_rect()
+                if wm_r and len(wm_r) == 4 and wm_r[2] > 0.01 and wm_r[3] > 0.01:
+                    self.chk_delogo_watermark.setChecked(True)
+                    self.watermark_delogo_container.setEnabled(True)
+                    self._watermark_delogo_rect = wm_r
+                    self._update_watermark_delogo_label()
+                    wm_loaded = True
+
+        if not wm_loaded:
+            wm_rect_str = settings.value("delogo/watermark_rect", "", type=str)
+            if wm_rect_str:
+                try:
+                    parts = [float(x) for x in wm_rect_str.split(",")]
+                    if len(parts) == 4:
+                        self._watermark_delogo_rect = (parts[0], parts[1], parts[2], parts[3])
+                        self._update_watermark_delogo_label()
+                except Exception:
+                    pass
+
     def _save_branding_settings(self):
-        """Lưu lại cài đặt Logo & Watermark để tiện dùng cho những lần sau."""
+        """Lưu lại cài đặt Logo, Watermark và Delogo để tiện dùng cho những lần sau."""
         settings = QSettings("TankVideo", "TankVideoStudio")
         # Brand Logo
         settings.setValue("branding/enable_logo", self.chk_enable_logo.isChecked())
@@ -751,6 +1112,119 @@ class SingleVoiceSetupDialog(QDialog):
         settings.setValue("branding/watermark_pos", self.combo_watermark_pos.currentData() or "center")
         settings.setValue("branding/watermark_size", self.slider_watermark_size.value())
         settings.setValue("branding/watermark_opacity", self.slider_watermark_opacity.value())
+
+        # Delogo
+        settings.setValue("delogo/enable_bilibili", self.chk_delogo_bilibili.isChecked())
+        settings.setValue("delogo/enable_watermark", self.chk_delogo_watermark.isChecked())
+        settings.setValue("delogo/watermark_mode", self.combo_wm_delogo_mode.currentData() or "delogo")
+        wm_r = self._get_watermark_delogo_rect()
+        if wm_r:
+            settings.setValue("delogo/watermark_rect", f"{wm_r[0]:.4f},{wm_r[1]:.4f},{wm_r[2]:.4f},{wm_r[3]:.4f}")
+        else:
+            settings.setValue("delogo/watermark_rect", "")
+        settings.setValue("delogo/enable_custom", self.chk_delogo_custom.isChecked())
+        settings.setValue("delogo/custom_mode", self.combo_custom_delogo_mode.currentData() or "boxblur")
+        cr = self._get_custom_delogo_rect()
+        if cr:
+            settings.setValue("delogo/custom_rect", f"{cr[0]:.4f},{cr[1]:.4f},{cr[2]:.4f},{cr[3]:.4f}")
+        else:
+            settings.setValue("delogo/custom_rect", "")
+
+    def _activate_brand_cover_mode(self):
+        """Bật nhanh Logo thương hiệu ở mục 5 và đặt vị trí góc trên cùng bên phải để đè lên logo Bilibili."""
+        self.chk_enable_logo.setChecked(True)
+        idx = self.combo_logo_pos.findData("top_right")
+        if idx >= 0:
+            self.combo_logo_pos.setCurrentIndex(idx)
+        if not self.txt_logo_path.text().strip():
+            self._browse_logo_file()
+
+    def _update_watermark_delogo_label(self):
+        if hasattr(self, "_watermark_delogo_rect") and self._watermark_delogo_rect:
+            x, y, w, h = self._watermark_delogo_rect
+            self.lbl_watermark_delogo_info.setText(f"📐 Tọa độ: x={x*100:.1f}%, y={y*100:.1f}%, w={w*100:.1f}%, h={h*100:.1f}%")
+
+    def _grab_watermark_preview_rect(self):
+        """Lấy tọa độ vùng chọn từ khung Xóa Watermark trên Preview."""
+        p = self.parent()
+        if p and hasattr(p, "watermark_region_overlay"):
+            wm_ov = getattr(p, "watermark_region_overlay", None)
+            if wm_ov and hasattr(wm_ov, "get_norm_rect"):
+                rect = wm_ov.get_norm_rect()
+                if rect and len(rect) == 4 and rect[2] > 0.01:
+                    self._watermark_delogo_rect = rect
+                    self._update_watermark_delogo_label()
+                    self.chk_delogo_watermark.setChecked(True)
+                    self.watermark_delogo_container.setEnabled(True)
+
+    def _get_watermark_delogo_rect(self) -> tuple[float, float, float, float] | None:
+        if not self.chk_delogo_watermark.isChecked():
+            return None
+        return getattr(self, "_watermark_delogo_rect", (0.35, 0.49, 0.30, 0.045))
+
+    def _update_custom_delogo_label(self):
+        x = self.spin_delogo_x.value()
+        y = self.spin_delogo_y.value()
+        w = self.spin_delogo_w.value()
+        h = self.spin_delogo_h.value()
+        self.lbl_custom_delogo_info.setText(f"📐 Tọa độ vùng xóa: x={x:.1f}%, y={y:.1f}%, w={w:.1f}%, h={h:.1f}%")
+
+    def _grab_preview_rect(self):
+        """Lấy tọa độ vùng chọn từ màn hình Preview."""
+        rect = None
+        p = self.parent()
+        # Ưu tiên số 1: Khung Xóa Logo chuyên dụng (DelogoRegionOverlay)
+        if p and hasattr(p, "delogo_region_overlay"):
+            delogo_ov = getattr(p, "delogo_region_overlay", None)
+            if delogo_ov and hasattr(delogo_ov, "get_norm_rect"):
+                rect = delogo_ov.get_norm_rect()
+        # Ưu tiên số 2: Khung OCR
+        if not rect and p and hasattr(p, "ocr_region_overlay"):
+            overlay = getattr(p, "ocr_region_overlay", None)
+            if overlay and hasattr(overlay, "get_norm_rect"):
+                rect = overlay.get_norm_rect()
+        if not rect and self.blur_rect:
+            rect = self.blur_rect
+        if not rect:
+            env_rect = os.getenv("OCR_SUBTITLE_RECT", "").strip()
+            if env_rect:
+                try:
+                    parts = [float(x) for x in env_rect.split(",")]
+                    if len(parts) == 4:
+                        rect = tuple(parts)
+                except Exception:
+                    pass
+
+        if rect and len(rect) == 4:
+            rx, ry, rw, rh = rect
+            self.spin_delogo_x.setValue(round(rx * 100, 1))
+            self.spin_delogo_y.setValue(round(ry * 100, 1))
+            self.spin_delogo_w.setValue(round(rw * 100, 1))
+            self.spin_delogo_h.setValue(round(rh * 100, 1))
+            self._update_custom_delogo_label()
+
+    def _get_custom_delogo_rect(self) -> tuple[float, float, float, float] | None:
+        if not self.chk_delogo_custom.isChecked():
+            return None
+        x = round(self.spin_delogo_x.value() / 100.0, 4)
+        y = round(self.spin_delogo_y.value() / 100.0, 4)
+        w = round(self.spin_delogo_w.value() / 100.0, 4)
+        h = round(self.spin_delogo_h.value() / 100.0, 4)
+        if w > 0.01 and h > 0.01:
+            return (x, y, w, h)
+        return None
+
+    def get_delogo_settings(self) -> dict[str, Any]:
+        """Trả về cấu hình Xóa Logo & Watermark video gốc."""
+        return {
+            "delogo_bilibili": self.chk_delogo_bilibili.isChecked(),
+            "delogo_watermark": self.chk_delogo_watermark.isChecked(),
+            "delogo_watermark_rect": self._get_watermark_delogo_rect(),
+            "delogo_watermark_mode": str(self.combo_wm_delogo_mode.currentData() or "delogo"),
+            "delogo_custom": self.chk_delogo_custom.isChecked(),
+            "delogo_custom_rect": self._get_custom_delogo_rect(),
+            "delogo_custom_mode": str(self.combo_custom_delogo_mode.currentData() or "boxblur"),
+        }
 
     def get_brand_logo_settings(self) -> dict[str, Any]:
         """Trả về cấu hình Logo thương hiệu được thiết lập."""

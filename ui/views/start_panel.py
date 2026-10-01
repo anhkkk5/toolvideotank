@@ -418,7 +418,108 @@ def _build_resource_media_card(gui):
                     "voice_name": voice_name,
                     "label": label or "1 Giọng",
                 }
+        from utils.media_utils import save_media_pool_state
+        save_media_pool_state(gui)
         _render_media_pool()
+
+    def _set_dual_voice_for_paths(paths, dual_cfg, label=""):
+        if not hasattr(gui, "_video_voice_configs"):
+            gui._video_voice_configs = {}
+        for p in paths:
+            norm_p = os.path.normpath(p) if p else ""
+            if norm_p:
+                gui._video_voice_configs[norm_p] = {
+                    "voice_mode": "dual",
+                    "male_voice": dual_cfg.get("male_voice") or {},
+                    "female_voice": dual_cfg.get("female_voice") or {},
+                    "label": label or "2 Giọng (Nam/Nữ)",
+                    "speed": dual_cfg.get("speed", 1.0),
+                    "orig_volume": dual_cfg.get("orig_volume", 50),
+                    "tts_volume": dual_cfg.get("tts_volume", 100),
+                }
+        from utils.media_utils import save_media_pool_state
+        save_media_pool_state(gui)
+        _render_media_pool()
+
+    def _open_single_voice_setup_for_video(item_path):
+        from ui.dialogs.single_voice_setup_dialog import SingleVoiceSetupDialog
+        from PySide6.QtWidgets import QDialog
+        norm_p = os.path.normpath(item_path)
+        v_curr = getattr(gui, "_video_voice_configs", {}).get(norm_p, {}).get("voice_name", "")
+        init_orig = int(gui.audio_a1_volume_slider.value()) if hasattr(gui, "audio_a1_volume_slider") else 50
+        init_tts = int(gui.audio_a2_volume_slider.value()) if hasattr(gui, "audio_a2_volume_slider") else 100
+        dlg = SingleVoiceSetupDialog(
+            gui,
+            video_path=item_path,
+            blur_rect=getattr(gui, "_video_ocr_rects", {}).get(norm_p),
+            initial_orig_volume=init_orig,
+            initial_tts_volume=init_tts,
+            workspace_root=str(getattr(gui, "workspace_root", os.getcwd())),
+            initial_voice_id=v_curr or getattr(gui, "_last_single_voice_id", "adam1"),
+        )
+        if dlg.exec() == QDialog.Accepted:
+            v_sel = dlg.get_selected_voice()
+            v_short = v_sel.get("name", "").split("(")[0].replace("👩 ", "").replace("👨 ", "").replace("👑 ", "").strip()
+            _set_voice_for_paths([item_path], v_sel.get("id", ""), v_short)
+            gui._last_single_voice_id = v_sel.get("id", "adam1")
+
+            audio_mix = dlg.get_audio_mix_settings()
+            if not hasattr(gui, "_video_voice_configs"):
+                gui._video_voice_configs = {}
+            if norm_p not in gui._video_voice_configs:
+                gui._video_voice_configs[norm_p] = {}
+            gui._video_voice_configs[norm_p].update({
+                "voice_mode": "single",
+                "voice_name": v_sel.get("id", ""),
+                "label": v_short,
+                "orig_volume": int(round(audio_mix.get("original_volume", 0.5) * 100)),
+                "tts_volume": int(round(audio_mix.get("tts_volume", 1.0) * 100)),
+                "selected_voice": v_sel,
+                "sub_cfg": dlg.get_subtitle_config(),
+                "delogo_settings": dlg.get_delogo_settings(),
+            })
+            from utils.media_utils import save_media_pool_state
+            save_media_pool_state(gui)
+            _render_media_pool()
+
+            if getattr(dlg, "start_now", False) and not getattr(dlg, "save_only", False):
+                if hasattr(gui, "video_path_edit"):
+                    gui.video_path_edit.setText(item_path)
+                gui._current_video_path = os.path.abspath(item_path)
+                ctrl = getattr(gui, "queue_controller", None)
+                if ctrl and hasattr(ctrl, "start_single_voice_queue"):
+                    setup_config = {
+                        "selected_voice": v_sel,
+                        "audio_mix": audio_mix,
+                        "enable_blur": dlg.is_blur_mask_enabled(),
+                        "mask_mode": dlg.get_mask_mode(),
+                        "default_blur_rect": dlg.get_blur_rect() or getattr(gui, "_video_ocr_rects", {}).get(norm_p),
+                        "burn_subs": dlg.is_burn_subtitles_enabled(),
+                        "sub_cfg": dlg.get_subtitle_config(),
+                        "brand_logo": dlg.get_brand_logo_settings(),
+                        "watermark": dlg.get_watermark_settings(),
+                        "delogo_settings": dlg.get_delogo_settings(),
+                        "use_individual_voices": False,
+                    }
+                    ctrl.start_single_voice_queue([{"path": item_path}], setup_config)
+
+    def _open_dual_voice_setup_for_video(item_path):
+        from ui.dialogs.dual_voice_setup_dialog import DualVoiceSetupDialog
+        from PySide6.QtWidgets import QDialog
+        init_orig = int(gui.audio_a1_volume_slider.value()) if hasattr(gui, "audio_a1_volume_slider") else 50
+        init_tts = int(gui.audio_a2_volume_slider.value()) if hasattr(gui, "audio_a2_volume_slider") else 100
+        dlg = DualVoiceSetupDialog(
+            gui,
+            video_paths=[item_path],
+            workspace_root=str(getattr(gui, "workspace_root", os.getcwd())),
+            initial_orig_volume=init_orig,
+            initial_tts_volume=init_tts,
+        )
+        if dlg.exec() == QDialog.Accepted:
+            cfg = dlg.get_voice_config()
+            m_name = (cfg.get("male_voice") or {}).get("name", "Nam").split("(")[0].strip()
+            f_name = (cfg.get("female_voice") or {}).get("name", "Nữ").split("(")[0].strip()
+            _set_dual_voice_for_paths([item_path], cfg, f"{m_name} + {f_name}")
 
     def _set_ocr_for_paths(paths, rect_tuple):
         if not hasattr(gui, "_video_ocr_rects"):
@@ -437,6 +538,8 @@ def _build_resource_media_card(gui):
             ps = getattr(gui, "current_project_state", None)
             if ps and hasattr(ps, "settings"):
                 ps.settings["ocr_subtitle_rect"] = f"{rect_tuple[0]:.4f},{rect_tuple[1]:.4f},{rect_tuple[2]:.4f},{rect_tuple[3]:.4f}"
+        from utils.media_utils import save_media_pool_state
+        save_media_pool_state(gui)
         _render_media_pool()
 
     def _on_group_ocr_click():
@@ -551,6 +654,7 @@ def _build_resource_media_card(gui):
             sub_cfg = dialog.get_subtitle_config()
             brand_logo = dialog.get_brand_logo_settings()
             watermark = dialog.get_watermark_settings()
+            delogo_settings = dialog.get_delogo_settings()
             is_individual = (selected_voice.get("id") == "keep_individual")
             if not is_individual:
                 gui._last_single_voice_id = selected_voice.get("id", "adam1")
@@ -591,11 +695,13 @@ def _build_resource_media_card(gui):
                 "selected_voice": selected_voice,
                 "audio_mix": audio_mix,
                 "enable_blur": enable_blur,
+                "mask_mode": dialog.get_mask_mode(),
                 "default_blur_rect": blur_rect,
                 "burn_subs": burn_subs,
                 "sub_cfg": sub_cfg,
                 "brand_logo": brand_logo,
                 "watermark": watermark,
+                "delogo_settings": delogo_settings,
                 "use_individual_voices": is_individual,
             }
             gui.queue_controller.start_single_voice_queue(selected, setup_config)
@@ -724,6 +830,8 @@ def _build_resource_media_card(gui):
             gui.project_media_pool = [it for it in gui.project_media_pool if os.path.normpath(it.get("path", "")) != os.path.normpath(item_path)]
         if hasattr(gui, "_selected_media_paths"):
             gui._selected_media_paths.discard(os.path.normpath(item_path))
+        from utils.media_utils import save_media_pool_state
+        save_media_pool_state(gui)
         _render_media_pool()
 
     def _open_file_folder(file_path, select_file=True):
@@ -743,6 +851,28 @@ def _build_resource_media_card(gui):
     def _sync_subtitles_for_video(norm_item, item_path):
         """Đồng bộ phụ đề tiếng Việt đã dịch của video này vào Cột Phụ đề và Timeline."""
         cues = getattr(gui, "_video_translated_cues", {}).get(norm_item)
+        if not cues:
+            # 1. Kiểm tra trong _video_voice_configs (kết quả phân vai AI / kịch bản chờ duyệt)
+            v_cfg = getattr(gui, "_video_voice_configs", {}).get(norm_item, {})
+            pending_res = v_cfg.get("pending_result") or {}
+            cues = pending_res.get("rows")
+
+        if not cues:
+            # 2. Kiểm tra theo history_entry_id
+            v_cfg = getattr(gui, "_video_voice_configs", {}).get(norm_item, {})
+            h_id = v_cfg.get("history_entry_id")
+            if h_id and hasattr(gui, "_voice_gender_history"):
+                cues = getattr(gui, "_voice_gender_history", {}).get(h_id, {}).get("rows")
+
+        if not cues:
+            # 3. Tìm theo video_path trong toàn bộ bảng lịch sử nếu chưa có id
+            if hasattr(gui, "_voice_gender_history"):
+                for _hid, ventry in getattr(gui, "_voice_gender_history", {}).items():
+                    vp = os.path.normpath(ventry.get("video_path", "")) if ventry.get("video_path") else ""
+                    if vp and vp == norm_item and ventry.get("rows"):
+                        cues = ventry.get("rows")
+                        break
+
         if not cues:
             out_folder = (
                 gui.final_output_folder_edit.text().strip()
@@ -766,16 +896,22 @@ def _build_resource_media_card(gui):
                     cues = None
 
         if cues and isinstance(cues, list):
+            if not hasattr(gui, "_video_translated_cues"):
+                gui._video_translated_cues = {}
+            gui._video_translated_cues[norm_item] = cues
+
             trans_segs = []
             base_segs = []
-            for c in cues:
+            for idx, c in enumerate(cues):
                 if not isinstance(c, dict):
                     continue
                 s_s = float(c.get("start", 0.0))
                 e_s = float(c.get("end", 0.0))
-                raw_txt = str(c.get("text", "")).strip()
+                raw_txt = str(c.get("text", "") or c.get("original_text", "")).strip()
                 t_txt = str(c.get("translated_text", "") or c.get("translated", "")).strip()
-                o_txt = str(c.get("source_text", "") or c.get("original", "")).strip()
+                o_txt = str(c.get("source_text", "") or c.get("original", "") or c.get("original_text", "") or c.get("text", "")).strip()
+                speaker = str(c.get("speaker", "") or c.get("speaker_label", "") or "").strip()
+                gender = str(c.get("gender", "") or c.get("final_gender", "") or "").strip()
 
                 has_cjk_raw = bool(re.search(r"[\u4e00-\u9fff\u3400-\u4dbf]", raw_txt)) if raw_txt else False
                 if not t_txt and raw_txt and not has_cjk_raw:
@@ -783,27 +919,52 @@ def _build_resource_media_card(gui):
                 if not o_txt and raw_txt and has_cjk_raw:
                     o_txt = raw_txt
 
-                trans_segs.append({
+                seg_trans = {
+                    "id": c.get("id", idx + 1),
                     "start": s_s,
                     "end": e_s,
                     "text": t_txt or raw_txt,
                     "translated": t_txt,
                     "translated_text": t_txt,
-                    "original": o_txt,
-                    "source_text": o_txt,
-                })
-                base_segs.append({
+                    "original": o_txt or raw_txt,
+                    "source_text": o_txt or raw_txt,
+                }
+                if speaker:
+                    seg_trans["speaker"] = speaker
+                if gender:
+                    seg_trans["gender"] = gender
+
+                seg_base = {
+                    "id": c.get("id", idx + 1),
                     "start": s_s,
                     "end": e_s,
-                    "text": o_txt,
-                    "original": o_txt,
-                    "source_text": o_txt,
-                })
+                    "text": o_txt or raw_txt,
+                    "original": o_txt or raw_txt,
+                    "source_text": o_txt or raw_txt,
+                }
+                if speaker:
+                    seg_base["speaker"] = speaker
+                if gender:
+                    seg_base["gender"] = gender
+
+                trans_segs.append(seg_trans)
+                base_segs.append(seg_base)
+
             gui.current_translated_segments = trans_segs
             if base_segs:
                 gui.current_segments = base_segs
             if hasattr(gui, "timeline") and hasattr(gui.timeline, "set_segments"):
                 gui.timeline.set_segments(trans_segs)
+            if hasattr(gui, "subtitle_list_view") and hasattr(gui.subtitle_list_view, "refresh_segments"):
+                gui.subtitle_list_view.refresh_segments()
+        else:
+            # Video này chưa có phụ đề: Phải xóa sạch phụ đề cũ trên timeline và cột phụ đề!
+            gui.current_translated_segments = []
+            gui.current_segments = []
+            gui.current_segment_models = []
+            gui.current_translated_segment_models = []
+            if hasattr(gui, "timeline") and hasattr(gui.timeline, "set_segments"):
+                gui.timeline.set_segments([])
             if hasattr(gui, "subtitle_list_view") and hasattr(gui.subtitle_list_view, "refresh_segments"):
                 gui.subtitle_list_view.refresh_segments()
 
@@ -951,6 +1112,26 @@ def _build_resource_media_card(gui):
                 "border-radius: 2px; padding: 0 4px; border: none;"
             )
             name_row.addWidget(q_badge)
+        elif q_stat == "review":
+            q_badge = QLabel("📋 Chờ duyệt vai")
+            q_badge.setCursor(Qt.PointingHandCursor)
+            q_badge.setStyleSheet(
+                "background: #8B5CF6; color: #FFFFFF; font-size: 8px; font-weight: 800; "
+                "border-radius: 2px; padding: 0 4px; border: none;"
+            )
+            q_badge.setToolTip("Phân vai AI đã hoàn thành! Nhấp vào để xem lại kịch bản, kiểm tra vai Nam/Nữ và bấm 'Áp dụng & Tạo ngay'.")
+
+            def _open_review(ev, p=norm_item):
+                v_cfg = getattr(gui, "_video_voice_configs", {}).get(p, {})
+                res = v_cfg.get("pending_result")
+                h_id = v_cfg.get("history_entry_id", "")
+                if res and hasattr(gui, "_on_voice_gender_check_completed"):
+                    gui._on_voice_gender_check_completed(res, "", save_history=False, history_entry_id=h_id)
+                elif hasattr(gui, "open_voice_gender_history"):
+                    gui.open_voice_gender_history()
+
+            q_badge.mousePressEvent = _open_review
+            name_row.addWidget(q_badge)
         elif is_active:
             active_badge = QLabel("Đang sửa")
             active_badge.setStyleSheet(
@@ -973,12 +1154,19 @@ def _build_resource_media_card(gui):
         status_row = QHBoxLayout()
         status_row.setSpacing(4)
 
-        # 1. Huy hiệu Giọng đọc (Luôn là 1 Giọng)
+        # 1. Huy hiệu Giọng đọc (Hỗ trợ 1 Giọng hoặc 2 Giọng / Phân vai AI)
         v_cfg = getattr(gui, "_video_voice_configs", {}).get(norm_item, {})
+        v_mode = v_cfg.get("voice_mode", "single")
         v_label = v_cfg.get("label", "") or getattr(gui, "_queue_selected_voice_label", "Ngọc Huyền")
-        v_text = f"👤 {v_label}"
-        v_col = "#38BDF8"
-        v_tip = f"Giọng đọc: {v_label}\nNhấp để đổi giọng riêng cho video này"
+
+        if v_mode == "dual":
+            v_text = f"👥 {v_label}"
+            v_col = "#C084FC"  # Tím biểu thị 2 giọng phân vai
+            v_tip = f"Lồng tiếng: Phân vai 2 Giọng (Nam & Nữ)\n{v_label}\nNhấp để đổi giọng hoặc chuyển về 1 giọng"
+        else:
+            v_text = f"🎙️ {v_label}"
+            v_col = "#38BDF8"  # Xanh biểu thị 1 giọng
+            v_tip = f"Lồng tiếng: 1 Giọng ({v_label})\nNhấp để đổi giọng hoặc chuyển sang 2 giọng phân vai"
 
         voice_badge = QLabel(v_text)
         voice_badge.setCursor(Qt.PointingHandCursor)
@@ -989,25 +1177,19 @@ def _build_resource_media_card(gui):
         voice_badge.setToolTip(v_tip)
 
         def _on_voice_badge_click(ev):
-            from ui.dialogs.single_voice_setup_dialog import SingleVoiceSetupDialog
-            from PySide6.QtWidgets import QDialog
-            v_curr = getattr(gui, "_video_voice_configs", {}).get(norm_item, {}).get("voice_name", "")
-            init_orig = int(gui.audio_a1_volume_slider.value()) if hasattr(gui, "audio_a1_volume_slider") else 50
-            init_tts = int(gui.audio_a2_volume_slider.value()) if hasattr(gui, "audio_a2_volume_slider") else 100
-            dlg = SingleVoiceSetupDialog(
-                gui,
-                video_path=item_path,
-                blur_rect=getattr(gui, "_video_ocr_rects", {}).get(norm_item),
-                initial_orig_volume=init_orig,
-                initial_tts_volume=init_tts,
-                workspace_root=str(getattr(gui, "workspace_root", os.getcwd())),
-                initial_voice_id=v_curr or getattr(gui, "_last_single_voice_id", "adam1"),
+            m = QMenu(voice_badge)
+            m.setStyleSheet(
+                "QMenu { background: #161B24; color: #E5E7EB; border: 1px solid #2E384D; padding: 4px; font-size: 11px; } "
+                "QMenu::item:selected { background: #FF8A00; color: #fff; }"
             )
-            if dlg.exec() == QDialog.Accepted:
-                v_sel = dlg.get_selected_voice()
-                v_short = v_sel.get("name", "").split("(")[0].replace("👩 ", "").replace("👨 ", "").replace("👑 ", "").strip()
-                _set_voice_for_paths([item_path], v_sel.get("id", ""), v_short)
-                gui._last_single_voice_id = v_sel.get("id", "adam1")
+            act_s = m.addAction("🎙️ Lồng tiếng 1 giọng (Đơn vai)...")
+            act_d = m.addAction("👥 Lồng tiếng 2 giọng (Phân vai Nam/Nữ AI)...")
+            pos = ev.globalPosition().toPoint() if hasattr(ev, "globalPosition") else ev.globalPos()
+            chosen = m.exec(pos)
+            if chosen == act_s:
+                _open_single_voice_setup_for_video(item_path)
+            elif chosen == act_d:
+                _open_dual_voice_setup_for_video(item_path)
 
         voice_badge.mousePressEvent = _on_voice_badge_click
         status_row.addWidget(voice_badge)
@@ -1121,7 +1303,6 @@ def _build_resource_media_card(gui):
             if event.button() == Qt.LeftButton:
                 browse_video(gui, file_path=item_path)
                 _sync_subtitles_for_video(norm_item, item_path)
-                _render_media_pool()
             super(QFrame, card_w).mousePressEvent(event)
 
         def _on_card_dbl_click(event):
@@ -1146,7 +1327,9 @@ def _build_resource_media_card(gui):
             act_add = menu.addAction("➕ Nối vào cuối timeline")
             menu.addSeparator()
 
-            act_set_voice = menu.addAction("🎙️ Cài đặt lồng tiếng (1 giọng)...")
+            voice_menu = menu.addMenu("🎙️ Cài đặt giọng đọc video này")
+            act_set_single = voice_menu.addAction("🎙️ Lồng tiếng 1 giọng (Đơn vai)...")
+            act_set_dual = voice_menu.addAction("👥 Lồng tiếng 2 giọng (Phân vai Nam/Nữ AI)...")
 
             ocr_menu = menu.addMenu("🎯 Đặt khung OCR phụ đề")
             act_save_curr = ocr_menu.addAction("💾 Ghi nhớ khung hiện tại cho video này")
@@ -1165,30 +1348,16 @@ def _build_resource_media_card(gui):
             action = menu.exec(card_w.mapToGlobal(pos))
             if action == act_edit:
                 browse_video(gui, file_path=item_path)
+                _sync_subtitles_for_video(norm_item, item_path)
                 _render_media_pool()
             elif action == act_add:
                 append_video_to_timeline(gui, item_path)
+                _sync_subtitles_for_video(norm_item, item_path)
                 _render_media_pool()
-            elif action == act_set_voice:
-                from ui.dialogs.single_voice_setup_dialog import SingleVoiceSetupDialog
-                from PySide6.QtWidgets import QDialog
-                v_curr = getattr(gui, "_video_voice_configs", {}).get(norm_item, {}).get("voice_name", "")
-                init_orig = int(gui.audio_a1_volume_slider.value()) if hasattr(gui, "audio_a1_volume_slider") else 50
-                init_tts = int(gui.audio_a2_volume_slider.value()) if hasattr(gui, "audio_a2_volume_slider") else 100
-                dlg = SingleVoiceSetupDialog(
-                    gui,
-                    video_path=item_path,
-                    blur_rect=getattr(gui, "_video_ocr_rects", {}).get(norm_item),
-                    initial_orig_volume=init_orig,
-                    initial_tts_volume=init_tts,
-                    workspace_root=str(getattr(gui, "workspace_root", os.getcwd())),
-                    initial_voice_id=v_curr or getattr(gui, "_last_single_voice_id", "adam1"),
-                )
-                if dlg.exec() == QDialog.Accepted:
-                    v_sel = dlg.get_selected_voice()
-                    v_short = v_sel.get("name", "").split("(")[0].replace("👩 ", "").replace("👨 ", "").replace("👑 ", "").strip()
-                    _set_voice_for_paths([item_path], v_sel.get("id", ""), v_short)
-                    gui._last_single_voice_id = v_sel.get("id", "adam1")
+            elif action == act_set_single:
+                _open_single_voice_setup_for_video(item_path)
+            elif action == act_set_dual:
+                _open_dual_voice_setup_for_video(item_path)
             elif action == act_save_curr:
                 overlay = getattr(gui, "ocr_region_overlay", None)
                 if overlay and hasattr(overlay, "get_norm_rect"):
@@ -1248,8 +1417,25 @@ def _build_resource_media_card(gui):
         if not hasattr(gui, "project_media_pool"):
             gui.project_media_pool = []
 
+        # Luôn loại bỏ các file video thành phẩm export (_final_vi.mp4) khỏi Media Pool
+        gui.project_media_pool = [
+            it for it in gui.project_media_pool
+            if not str(it.get("path", "")).lower().endswith("_final_vi.mp4")
+            and not (os.path.basename(os.path.dirname(str(it.get("path", "") or ""))).lower() == "output" and "_final" in str(it.get("path", "")).lower())
+        ]
+
         cur_v = getattr(gui, "_current_video_path", "")
-        if cur_v and os.path.exists(cur_v):
+
+        # Khôi phục danh sách Media Pool nếu đang trống hoặc chỉ có 1 video
+        if len(gui.project_media_pool) <= 1:
+            from utils.media_utils import restore_media_pool_state
+            restore_media_pool_state(gui, cur_v)
+
+        is_output_video = (
+            str(cur_v).lower().endswith("_final_vi.mp4")
+            or (os.path.basename(os.path.dirname(cur_v or "")).lower() == "output" and "_final" in str(cur_v).lower())
+        )
+        if cur_v and os.path.exists(cur_v) and not is_output_video:
             if not any(os.path.normpath(it.get("path", "")) == os.path.normpath(cur_v) for it in gui.project_media_pool):
                 try:
                     dur_s, th = probe_video_duration_and_thumb(cur_v, thumb_dir)
@@ -1264,6 +1450,8 @@ def _build_resource_media_card(gui):
                     "duration_str": f"{total_s // 60:02d}:{total_s % 60:02d}",
                     "thumb_path": th,
                 })
+                from utils.media_utils import save_media_pool_state
+                save_media_pool_state(gui)
 
         if not hasattr(gui, "_seen_media_paths"):
             gui._seen_media_paths = set()

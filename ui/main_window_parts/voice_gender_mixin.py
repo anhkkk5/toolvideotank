@@ -84,7 +84,44 @@ class VoiceGenderMixin:
                     if d.get("text"):
                         existing_cues.append(d)
 
-        worker = VoiceGenderCheckWorker(video_path, existing_cues=existing_cues if existing_cues else None)
+        # Lấy khung OCR người dùng đã đặt cho video này
+        ocr_rect = None
+        preview_panel = getattr(self, "preview_panel", None)
+        if preview_panel and hasattr(preview_panel, "_norm"):
+            norm_r = preview_panel._norm
+            if norm_r and norm_r.width() > 0 and norm_r.height() > 0:
+                ocr_rect = (float(norm_r.x()), float(norm_r.y()), float(norm_r.width()), float(norm_r.height()))
+
+        if not ocr_rect and hasattr(self, "_video_ocr_rects"):
+            norm_p = os.path.normpath(video_path)
+            ocr_rect = self._video_ocr_rects.get(norm_p)
+
+        if not ocr_rect:
+            ps = getattr(self, "current_project_state", None)
+            if ps and hasattr(ps, "settings"):
+                r_str = ps.settings.get("ocr_subtitle_rect", "")
+                if r_str:
+                    try:
+                        parts = [float(p) for p in r_str.split(",")]
+                        if len(parts) == 4 and parts[2] > 0 and parts[3] > 0:
+                            ocr_rect = tuple(parts)
+                    except Exception:
+                        pass
+
+        if not ocr_rect:
+            rect_env = os.getenv("OCR_SUBTITLE_RECT", "").strip()
+            if rect_env:
+                try:
+                    parts = [float(p) for p in rect_env.split(",")]
+                    if len(parts) == 4 and parts[2] > 0 and parts[3] > 0:
+                        ocr_rect = tuple(parts)
+                except Exception:
+                    pass
+
+        if ocr_rect:
+            os.environ["OCR_SUBTITLE_RECT"] = f"{ocr_rect[0]:.4f},{ocr_rect[1]:.4f},{ocr_rect[2]:.4f},{ocr_rect[3]:.4f}"
+
+        worker = VoiceGenderCheckWorker(video_path, existing_cues=existing_cues if existing_cues else None, ocr_rect=ocr_rect)
         self._voice_gender_check_video_path = video_path
         self._voice_gender_check_worker = worker
         worker.progress.connect(self._on_voice_gender_check_progress)
@@ -222,6 +259,11 @@ class VoiceGenderMixin:
         if old_dialog is not None:
             old_dialog.close()
         dialog = QDialog(self)
+        dialog.setWindowFlags(
+            Qt.Window
+            | Qt.WindowMinMaxButtonsHint
+            | Qt.WindowCloseButtonHint
+        )
         dialog.setWindowTitle("Lịch sử kiểm tra giọng nói")
         dialog.setObjectName("voiceGenderHistoryDialog")
         dialog.setModal(False)
@@ -400,10 +442,21 @@ class VoiceGenderMixin:
                 f"Câu {int(row.get('index', 0))}: {row.get('text', '')} ({gender}{suffix})"
             )
         report_text = "\n".join(report_lines)
+        # Tự động tắt khung OCR sau khi quét xong để không che khuất màn hình video preview
+        if hasattr(self, "toggle_ocr_overlay_visibility"):
+            self.toggle_ocr_overlay_visibility(False)
+
         old_dialog = getattr(self, "_voice_gender_result_dialog", None)
         if old_dialog is not None:
             old_dialog.close()
         dialog = QDialog(self)
+        orig_v_path = result.get("video_path") or getattr(self, "_voice_gender_check_video_path", "")
+        dialog.original_video_path = orig_v_path
+        dialog.setWindowFlags(
+            Qt.Window
+            | Qt.WindowMinMaxButtonsHint
+            | Qt.WindowCloseButtonHint
+        )
         dialog.setWindowTitle("Kết quả kiểm tra giọng nói từ video gốc")
         dialog.setObjectName("voiceGenderResultDialog")
         dialog.setModal(False)
@@ -485,7 +538,7 @@ class VoiceGenderMixin:
         note.setWordWrap(True)
         layout.addWidget(note)
         table = QTableWidget(len(rows), 7)
-        table.setHorizontalHeaderLabels(["Câu", "Thời gian", "Phụ đề gốc", "Dịch tiếng Việt", "Giọng", "Đồng thuận", "Nghe / Tải Audio"])
+        table.setHorizontalHeaderLabels(["Câu", "Thời gian (Bắt đầu → Kết thúc)", "Phụ đề gốc", "Dịch tiếng Việt", "Giọng", "Đồng thuận", "Nghe / Tải Audio"])
         table.setSelectionBehavior(QAbstractItemView.SelectRows)
         table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         table.setAlternatingRowColors(True)
@@ -497,7 +550,8 @@ class VoiceGenderMixin:
             idx = int(row_data.get("index", 1))
             st = float(row_data.get("start", 0.0))
             en = float(row_data.get("end", st + 0.1))
-            dur = max(0.1, en - st)
+            # Đảm bảo padding an toàn tối thiểu 1.2s và +200ms âm đuôi để nghe trọn vẹn
+            dur = max(1.2, (en - st) + 0.2)
             v_path = result.get("video_path") or getattr(self, "_voice_gender_check_video_path", "")
             if not v_path or not os.path.isfile(v_path):
                 QMessageBox.warning(dialog, "Lỗi", "Không tìm thấy đường dẫn video gốc để trích xuất âm thanh.")
@@ -592,8 +646,11 @@ class VoiceGenderMixin:
             idx_cell.setData(int(Qt.UserRole) + 1, end)
             table.setItem(table_row, 0, idx_cell)
 
-            # Column 1: Time
-            time_cell = QTableWidgetItem(f"{int(start // 60):02d}:{start % 60:05.2f}")
+            # Column 1: Time (Bắt đầu → Kết thúc)
+            st_str = f"{int(start // 60):02d}:{start % 60:05.2f}"
+            en_str = f"{int(end // 60):02d}:{end % 60:05.2f}"
+            time_cell = QTableWidgetItem(f"{st_str} → {en_str}")
+            time_cell.setTextAlignment(Qt.AlignCenter)
             time_cell.setData(Qt.UserRole, start)
             time_cell.setData(int(Qt.UserRole) + 1, end)
             table.setItem(table_row, 1, time_cell)
@@ -722,7 +779,15 @@ class VoiceGenderMixin:
                     history_entry_id = self._save_voice_gender_history(result)
                 save_changes_btn.setEnabled(False)
                 save_changes_btn.setText("Đã lưu")
-                QTimer.singleShot(1200, lambda: save_changes_btn.setText("Lưu thay đổi"))
+                def _restore_btn():
+                    try:
+                        import shiboken6
+                        if shiboken6.isValid(save_changes_btn):
+                            save_changes_btn.setEnabled(True)
+                            save_changes_btn.setText("Lưu thay đổi")
+                    except Exception:
+                        pass
+                QTimer.singleShot(1200, _restore_btn)
             except Exception as exc:
                 QMessageBox.critical(dialog, "Không thể lưu", str(exc))
 
@@ -871,7 +936,31 @@ class VoiceGenderMixin:
             if save_changes_btn.isEnabled():
                 save_manual_changes()
             dialog.accept()
-            self.apply_voice_gender_result_to_project(rows=rows, auto_generate=auto_gen)
+
+            # Tự động tắt khung OCR sau khi áp dụng kết quả để video preview hiển thị rõ ràng
+            if hasattr(self, "toggle_ocr_overlay_visibility"):
+                self.toggle_ocr_overlay_visibility(False)
+
+            # Lưu approved_cues vào cấu hình của video
+            v_path = result.get("video_path") or getattr(self, "_voice_gender_check_video_path", "")
+            norm_vid = os.path.normpath(v_path) if v_path else ""
+            if norm_vid:
+                if not hasattr(self, "_video_voice_configs"):
+                    self._video_voice_configs = {}
+                if norm_vid not in self._video_voice_configs:
+                    self._video_voice_configs[norm_vid] = {}
+                self._video_voice_configs[norm_vid]["approved_cues"] = copy.deepcopy(rows)
+                self._video_voice_configs[norm_vid]["voice_mode"] = "dual"
+
+            queue_ctrl = getattr(self, "queue_controller", None)
+            is_queue_active = queue_ctrl and getattr(queue_ctrl, "is_running", False)
+            if auto_gen and is_queue_active and hasattr(queue_ctrl, "enqueue_approved_video") and norm_vid:
+                queue_ctrl.enqueue_approved_video(norm_vid)
+            else:
+                self.apply_voice_gender_result_to_project(rows=rows, auto_generate=False)
+                if auto_gen:
+                    from PySide6.QtCore import QTimer
+                    QTimer.singleShot(250, lambda: getattr(self, "start_pipeline_b_flow", lambda: None)())
 
         apply_to_project_btn.clicked.connect(lambda: on_apply_to_project(False))
         apply_and_create_btn.clicked.connect(lambda: on_apply_to_project(True))
@@ -902,9 +991,29 @@ class VoiceGenderMixin:
         if item is None:
             return
         position_ms = max(0, int(float(item.data(Qt.UserRole) or 0.0) * 1000.0))
-        end_ms = max(position_ms + 100, int(float(item.data(int(Qt.UserRole) + 1) or 0.0) * 1000.0))
+        raw_end_ms = int(float(item.data(int(Qt.UserRole) + 1) or 0.0) * 1000.0)
+        # Thêm padding an toàn +250ms ở đuôi và thời lượng nghe tối thiểu 1.4s để không bao giờ bị cắt cụt âm thanh
+        end_ms = max(position_ms + 1400, raw_end_ms + 250)
         try:
             self._stop_voice_gender_result_preview()
+
+            # Đảm bảo Media Player nạp đúng video gốc tiếng Trung để nghe chuẩn xác giọng nhân vật gốc
+            dialog = getattr(self, "_voice_gender_result_dialog", None)
+            v_path = getattr(dialog, "original_video_path", "") if dialog else ""
+            if not v_path:
+                v_path = getattr(self, "_voice_gender_check_video_path", "")
+            if v_path and os.path.isfile(v_path) and hasattr(self, "media_player") and self.media_player is not None:
+                current_src = ""
+                try:
+                    src_url = self.media_player.source()
+                    current_src = src_url.toLocalFile() if hasattr(src_url, "toLocalFile") else str(src_url)
+                except Exception:
+                    pass
+                if not current_src or os.path.normpath(current_src) != os.path.normpath(v_path):
+                    from PySide6.QtCore import QUrl
+                    self.media_player.setSource(QUrl.fromLocalFile(v_path))
+                    self._current_video_path = v_path
+
             self.media_player.setPosition(position_ms)
             if play:
                 self._voice_gender_preview_end_ms = end_ms
@@ -1215,6 +1324,31 @@ class VoiceGenderMixin:
             creator_config.watermark_font_size = int(watermark_settings.get("font_size", 36))
             creator_config.watermark_opacity = float(watermark_settings.get("opacity", 0.35))
             creator_config.watermark_color = str(watermark_settings.get("color", "#FFFFFF"))
+
+        # Nạp cấu hình Xóa Logo & Watermark video gốc (Delogo AI) từ QSettings (mặc định False)
+        delogo_st = QSettings("TankVideo", "TankVideoStudio")
+        creator_config.delogo_bilibili = delogo_st.value("delogo/enable_bilibili", False, type=bool)
+        creator_config.delogo_watermark = delogo_st.value("delogo/enable_watermark", False, type=bool)
+        creator_config.delogo_watermark_mode = delogo_st.value("delogo/watermark_mode", "delogo", type=str)
+        if creator_config.delogo_watermark:
+            wm_str = delogo_st.value("delogo/watermark_rect", "", type=str)
+            if wm_str:
+                try:
+                    parts = [float(p) for p in wm_str.split(",")]
+                    if len(parts) == 4:
+                        creator_config.delogo_watermark_rect = (parts[0], parts[1], parts[2], parts[3])
+                except Exception:
+                    pass
+        if delogo_st.value("delogo/enable_custom", False, type=bool):
+            cr_str = delogo_st.value("delogo/custom_rect", "", type=str)
+            if cr_str:
+                try:
+                    parts = [float(p) for p in cr_str.split(",")]
+                    if len(parts) == 4:
+                        creator_config.delogo_custom_rect = (parts[0], parts[1], parts[2], parts[3])
+                except Exception:
+                    pass
+            creator_config.delogo_custom_mode = delogo_st.value("delogo/custom_mode", "delogo", type=str)
 
         # Áp dụng cấu hình Hòa trộn âm thanh (Audio Mix) từ dialog
         if audio_mix_settings:

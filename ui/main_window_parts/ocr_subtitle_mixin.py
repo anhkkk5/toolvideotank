@@ -2018,29 +2018,30 @@ class OcrSubtitleMixin:
         if overlay is None:
             return
         try:
-            is_ocr = os.getenv("TRANSCRIPTION_ENGINE", _default_asr_engine()).strip().lower() == "ocr"
             alternate_ocr_active = bool(getattr(self, "_alternate_ocr_range_pending", None))
+            is_visible = bool(alternate_ocr_active or getattr(self, "_ocr_overlay_visible", False))
             btn = getattr(self, "ocr_region_btn", None)
             save_btn = getattr(self, "ocr_save_btn", None)
             if btn:
-                btn.setVisible(is_ocr)
+                btn.setVisible(True)
                 btn.blockSignals(True)
-                btn.setChecked(bool(getattr(self, "_ocr_overlay_visible", True)))
+                btn.setChecked(is_visible)
                 btn.blockSignals(False)
+                if is_visible:
+                    btn.setStyleSheet("QPushButton { color: #ffb450; font-weight: bold; font-size: 10px; padding: 0; border: none; }")
+                else:
+                    btn.setStyleSheet("QPushButton { color: #4ecdc4; font-weight: 700; font-size: 10px; padding: 0; border: none; }")
             if save_btn:
-                save_btn.setVisible(is_ocr)
-            if not is_ocr and not alternate_ocr_active:
+                save_btn.setVisible(is_visible)
+            if not is_visible:
                 overlay._requested_visible = False
                 overlay.hide()
                 overlay.set_editable(False)
             else:
-                overlay._requested_visible = bool(alternate_ocr_active or getattr(self, "_ocr_overlay_visible", True))
-                if bool(alternate_ocr_active or getattr(self, "_ocr_overlay_visible", True)):
-                    overlay.set_editable(True)
-                    overlay.sync_to_view()
-                else:
-                    overlay.set_editable(False)
-                    overlay.hide()
+                overlay._main_window = self
+                overlay._requested_visible = True
+                overlay.set_editable(True)
+                overlay.sync_to_view()
         except RuntimeError:
             self.ocr_region_overlay = None
         except Exception:
@@ -2051,10 +2052,20 @@ class OcrSubtitleMixin:
         self._ocr_overlay_visible = bool(checked)
         overlay = getattr(self, "ocr_region_overlay", None)
         save_btn = getattr(self, "ocr_save_btn", None)
+        btn = getattr(self, "ocr_region_btn", None)
+        if btn is not None:
+            btn.blockSignals(True)
+            btn.setChecked(bool(checked))
+            btn.blockSignals(False)
+            if not bool(checked):
+                btn.setStyleSheet("QPushButton { color: #4ecdc4; font-weight: 700; font-size: 10px; padding: 0; border: none; }")
+            else:
+                btn.setStyleSheet("QPushButton { color: #ffb450; font-weight: bold; font-size: 10px; padding: 0; border: none; }")
         if save_btn:
-            save_btn.setVisible(True)
+            save_btn.setVisible(bool(checked))
         if overlay is not None:
             try:
+                overlay._main_window = self
                 overlay._requested_visible = bool(checked)
                 overlay.set_editable(bool(checked))
                 if checked:
@@ -2069,16 +2080,74 @@ class OcrSubtitleMixin:
                 pass
         self._update_ocr_overlay()
 
+    def toggle_delogo_overlay_visibility(self, checked: bool = None):
+        """Bật / tắt hiển thị khung khoanh vùng Xóa Logo & Watermark độc lập."""
+        if checked is None:
+            checked = not bool(getattr(self, "_delogo_overlay_visible", False))
+        self._delogo_overlay_visible = bool(checked)
+        overlay = getattr(self, "delogo_region_overlay", None)
+        btn = getattr(self, "delogo_region_btn", None)
+        if btn is not None:
+            btn.blockSignals(True)
+            btn.setChecked(bool(checked))
+            btn.blockSignals(False)
+            if bool(checked):
+                btn.setStyleSheet("QPushButton { background: #2a1608; border: 1px solid #ff7b1a; border-radius: 4px; color: #ff9d42; font-weight: 700; font-size: 11px; padding: 0 4px; }")
+            else:
+                btn.setStyleSheet("QPushButton { color: #ff9d42; font-weight: 700; font-size: 11px; padding: 0 4px; border: none; }")
+        if overlay is not None:
+            try:
+                overlay._main_window = self
+                overlay._requested_visible = bool(checked)
+                overlay.set_editable(bool(checked))
+                if checked:
+                    overlay.sync_to_view()
+                    overlay.raise_()
+                    from PySide6.QtCore import QTimer
+                    QTimer.singleShot(0, overlay.sync_to_view)
+                else:
+                    overlay.hide()
+            except Exception:
+                pass
+
+    def toggle_watermark_overlay_visibility(self, checked: bool = None):
+        """Bật / tắt hiển thị khung khoanh vùng Xóa Watermark chữ mờ bản quyền."""
+        if checked is None:
+            checked = not bool(getattr(self, "_watermark_overlay_visible", False))
+        self._watermark_overlay_visible = bool(checked)
+        overlay = getattr(self, "watermark_region_overlay", None)
+        btn = getattr(self, "watermark_region_btn", None)
+        if btn is not None:
+            btn.blockSignals(True)
+            btn.setChecked(bool(checked))
+            btn.blockSignals(False)
+            if bool(checked):
+                btn.setStyleSheet("QPushButton { background: #082f49; border: 1px solid #38bdf8; border-radius: 4px; color: #38bdf8; font-weight: 700; font-size: 11px; padding: 0 4px; }")
+            else:
+                btn.setStyleSheet("QPushButton { color: #38bdf8; font-weight: 700; font-size: 11px; padding: 0 4px; border: none; }")
+        if overlay is not None:
+            try:
+                overlay._main_window = self
+                overlay._requested_visible = bool(checked)
+                overlay.set_editable(bool(checked))
+                if checked:
+                    overlay.sync_to_view()
+                    overlay.raise_()
+                    from PySide6.QtCore import QTimer
+                    QTimer.singleShot(0, overlay.sync_to_view)
+                else:
+                    overlay.hide()
+            except Exception:
+                pass
 
     def toggle_ocr_region_editing(self, checked: bool):
         overlay = getattr(self, "ocr_region_overlay", None)
         if overlay is None:
             return
-        engine = os.getenv("TRANSCRIPTION_ENGINE", _default_asr_engine())
-        if not checked or engine != "ocr":
+        if not checked:
             overlay.hide()
             overlay.set_editable(False)
-            self.ocr_region_btn.setStyleSheet("QPushButton { color: #6ee7d6; font-weight: bold; font-size: 10px; padding: 0; }")
+            self.ocr_region_btn.setStyleSheet("QPushButton { color: #4ecdc4; font-weight: 700; font-size: 10px; padding: 0; border: none; }")
             self._sync_blur_controls()
             return
         if self._blur_effect_enabled() and hasattr(self, "video_view") and hasattr(self.video_view, "set_blur_edit_enabled"):

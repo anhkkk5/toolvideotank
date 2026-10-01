@@ -158,7 +158,14 @@ class GenderService:
                 speech_ratio = 0.0
                 tag = "no_speech_in_slot"
 
-            attempts.append({"id": f"{cue_id}:vad", "start": ext_start, "end": ext_end})
+            is_confirmed_speech = (speech_dur >= 0.40 and speech_ratio >= 0.35)
+            attempts.append({
+                "id": f"{cue_id}:vad",
+                "start": ext_start,
+                "end": ext_end,
+                "skip_ast": is_confirmed_speech,
+                "is_confirmed_speech": is_confirmed_speech,
+            })
             meta_by_id[cue_id] = {
                 "speech_duration": speech_dur,
                 "speech_ratio": speech_ratio,
