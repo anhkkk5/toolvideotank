@@ -1004,7 +1004,7 @@ class VideoExportService:
 
             # 3.2. Cấu hình Mặt Nạ Che Chữ và Xác Định Vị Trí Phụ Đề
             enable_blur = getattr(request, "enable_blur_mask", True) and getattr(cfg, "enable_blur_mask", True)
-            mask_mode = str(getattr(request, "mask_mode", None) or getattr(cfg, "mask_mode", "box") or "box").strip().lower()
+            mask_mode = str(getattr(cfg, "mask_mode", None) or getattr(request, "mask_mode", None) or "blur").strip().lower()
 
             # Lấy thông tin user_rect (khung OCR hoặc khung che chữ do người dùng chỉ định)
             user_rect = request.blur_rect or getattr(cfg, "blur_rect", None)

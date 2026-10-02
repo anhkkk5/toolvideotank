@@ -840,6 +840,11 @@ class VideoCreatorService:
             else VideoExportService()
         )
 
+        sub_cfg = getattr(request.config, "subtitle_config", None)
+        eff_mask_mode = getattr(sub_cfg, "mask_mode", None) or getattr(request.config, "mask_mode", "blur")
+        eff_blur_rect = getattr(sub_cfg, "blur_rect", None) or getattr(request.config, "blur_rect", None)
+        eff_enable_blur = getattr(sub_cfg, "enable_blur_mask", True) and getattr(request.config, "enable_blur_mask", True)
+
         export_req = VideoExportRequest(
             original_video_path=request.original_video_path,
             final_audio_path=final_audio_path,
@@ -847,9 +852,9 @@ class VideoCreatorService:
             output_video_path=request.output_video_path,
             overflow_policy=request.config.overflow_policy,
             subtitle_config=request.config.subtitle_config,
-            enable_blur_mask=getattr(request.config, "enable_blur_mask", True),
-            mask_mode=getattr(request.config, "mask_mode", "box"),
-            blur_rect=getattr(request.config, "blur_rect", None),
+            enable_blur_mask=eff_enable_blur,
+            mask_mode=eff_mask_mode,
+            blur_rect=eff_blur_rect,
             enable_brand_logo=getattr(request.config, "enable_brand_logo", False),
             brand_logo_path=getattr(request.config, "brand_logo_path", ""),
             brand_logo_position=getattr(request.config, "brand_logo_position", "top_left"),

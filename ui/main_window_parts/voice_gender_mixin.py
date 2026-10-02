@@ -1286,6 +1286,9 @@ class VoiceGenderMixin:
         creator_config.enable_blur_mask = True
         if subtitle_config:
             creator_config.subtitle_config = subtitle_config
+            creator_config.mask_mode = getattr(subtitle_config, "mask_mode", "blur")
+            creator_config.blur_rect = getattr(subtitle_config, "blur_rect", None)
+            creator_config.enable_blur_mask = getattr(subtitle_config, "enable_blur_mask", True)
         if voice_config:
             creator_config.voice_config = voice_config
 
@@ -1354,6 +1357,13 @@ class VoiceGenderMixin:
                 except Exception:
                     pass
             creator_config.delogo_custom_mode = delogo_st.value("delogo/custom_mode", "delogo", type=str)
+            # Nếu người dùng đang bật Logo thương hiệu ở Top-Left mà vùng delogo custom cũng ở Top-Left,
+            # hủy bỏ delogo custom này để tránh tạo vệt mờ nhòe đè lên Logo thương hiệu
+            if creator_config.enable_brand_logo and "left" in str(creator_config.brand_logo_position).lower() and "top" in str(creator_config.brand_logo_position).lower():
+                if creator_config.delogo_custom_rect:
+                    cx, cy, cw, ch = creator_config.delogo_custom_rect
+                    if cx < 0.35 and cy < 0.25:
+                        creator_config.delogo_custom_rect = None
 
         # Áp dụng cấu hình Hòa trộn âm thanh (Audio Mix) từ dialog
         if audio_mix_settings:
