@@ -41,6 +41,7 @@ from PySide6.QtWidgets import (
     QTextEdit,
     QVBoxLayout,
     QWidget,
+    QStackedWidget,
 )
 
 from app.services.cookie_storage_service import (
@@ -59,6 +60,11 @@ from app.services.cookie_storage_service import (
 )
 from app.services.browser_profile_service import get_installed_browsers_with_profiles
 from ui.dialogs.browser_profile_dialog import BrowserProfileDialog, CookieExpiredDialog
+from app.services.hongguo_downloader_service import (
+    HongguoScanWorker,
+    HongguoDownloadWorker,
+    parse_hongguo_id,
+)
 
 
 def _sep_line(parent=None):
@@ -587,6 +593,8 @@ if not os.path.exists(_CHECK_ICON_PATH):
 class VideoDownloaderDialog(QDialog):
     """Giao diện Quét & Bóc Tách Video Đa Nền Tảng chuẩn TankVideo Pro Native."""
 
+    sig_hg_cover_ready = Signal(bytes)
+
     # Colors - TankVideo Theme
     _PRIMARY = "#ff7b1a"         # Flame Orange
     _PRIMARY_HOVER = "#ff9d42"   # Bright Orange Hover
@@ -610,11 +618,20 @@ class VideoDownloaderDialog(QDialog):
         self._scan_worker = None
         self._download_worker = None
         self._thumb_worker = None
+        self.sig_hg_cover_ready.connect(self._apply_hg_cover_data)
 
         # State
         self._selected_platform = "douyin"
         self._raw_videos: List[Dict[str, Any]] = []
         self._filtered_indices: List[int] = []
+
+        # Hongguo Drama State
+        self._hg_scan_worker = None
+        self._hg_download_worker = None
+        self._hg_drama_info = None
+        self._hg_ep_buttons = {}
+        self._hg_selected_eps = set()
+        self._hg_ep_data = {}
 
         # Browser & Profile Selection State
         self._settings = QSettings("TankVideo", "VideoDownloader")
@@ -769,6 +786,7 @@ class VideoDownloaderDialog(QDialog):
             ("kuaishou", "⚡ Kuaishou"),
             ("bilibili", "📺 Bilibili"),
             ("xiaohongshu", "📕 RED/XHS"),
+            ("hongguo", "🍎 Hongguo (红果)"),
         ]
         for i, (p_id, p_name) in enumerate(platform_list):
             btn = QPushButton(p_name)
@@ -776,7 +794,10 @@ class VideoDownloaderDialog(QDialog):
             btn.setChecked(p_id == "douyin")
             btn.setStyleSheet(self._platform_btn_style(p_id == "douyin"))
             btn.clicked.connect(lambda checked, pid=p_id: self._on_platform_selected(pid))
-            plat_grid.addWidget(btn, i // 2, i % 2)
+            if p_id == "hongguo":
+                plat_grid.addWidget(btn, 4, 0, 1, 2)
+            else:
+                plat_grid.addWidget(btn, i // 2, i % 2)
             self.plat_btns[p_id] = btn
 
         card_platforms.layout().addLayout(plat_grid)
@@ -1212,7 +1233,6 @@ class VideoDownloaderDialog(QDialog):
         row2.addWidget(btn_delete_rows)
 
         tb_box.addLayout(row2)
-        right_layout.addWidget(toolbar_card)
 
         # ---- RESULTS TABLE (QTableWidget) ----
         self.table = QTableWidget(self)
@@ -1309,8 +1329,6 @@ class VideoDownloaderDialog(QDialog):
         self.table.horizontalHeader().geometriesChanged.connect(_reposition_header_cb)
         self.table.horizontalHeader().sectionResized.connect(lambda *_: _reposition_header_cb())
 
-        right_layout.addWidget(self.table, 1)
-
         # ---- BOTTOM TABLE FOOTER ----
         footer_row = QHBoxLayout()
         footer_row.setContentsMargins(4, 2, 4, 2)
@@ -1326,12 +1344,505 @@ class VideoDownloaderDialog(QDialog):
         btn_open_folder.clicked.connect(self._on_open_download_dir)
         footer_row.addWidget(btn_open_folder)
 
-        right_layout.addLayout(footer_row)
+        # Main Right Stacked Widget (Page 0: Standard Table View, Page 1: Hongguo Drama Studio)
+        self.right_stack = QStackedWidget(self)
+
+        # PAGE 0: BẢNG VIDEO MẠNG XÃ HỘI THÔNG THƯỜNG
+        page_table = QWidget(self)
+        page_table_lay = QVBoxLayout(page_table)
+        page_table_lay.setContentsMargins(0, 0, 0, 0)
+        page_table_lay.setSpacing(10)
+        page_table_lay.addWidget(toolbar_card)
+        page_table_lay.addWidget(self.table, 1)
+        page_table_lay.addLayout(footer_row)
+        self.right_stack.addWidget(page_table)
+
+        # PAGE 1: HONGGUO DRAMA STUDIO VIEW
+        page_hongguo = self._build_hongguo_view()
+        self.right_stack.addWidget(page_hongguo)
+
+        right_layout.addWidget(self.right_stack, 1)
         splitter.addWidget(right_widget)
 
         # Splitter proportion (Left 350px, Right rest)
         splitter.setSizes([350, 930])
         root.addWidget(splitter, 1)
+
+    # ================================================================== #
+    #  Hongguo Drama Studio View (Tải Phim Ngắn Hồng Quả Pro)            #
+    # ================================================================== #
+    def _build_hongguo_view(self) -> QWidget:
+        """Xây dựng giao diện quét và tải phim ngắn Hồng Quả chuẩn Cyber Theme CapCap."""
+        page = QWidget(self)
+        page_layout = QVBoxLayout(page)
+        page_layout.setContentsMargins(0, 0, 0, 0)
+        page_layout.setSpacing(10)
+
+        # 1. TOP DRAMA INFO CARD
+        self.hg_info_card = QFrame(self)
+        self.hg_info_card.setStyleSheet(f"""
+            QFrame {{
+                background: {self._CARD};
+                border: 1px solid {self._CARD_BORDER};
+                border-radius: 8px;
+            }}
+        """)
+        ic_layout = QHBoxLayout(self.hg_info_card)
+        ic_layout.setContentsMargins(14, 12, 14, 12)
+        ic_layout.setSpacing(16)
+
+        # Poster cover
+        self.hg_cover_lbl = QLabel()
+        self.hg_cover_lbl.setFixedSize(70, 96)
+        self.hg_cover_lbl.setAlignment(Qt.AlignCenter)
+        self.hg_cover_lbl.setStyleSheet(f"""
+            QLabel {{
+                background: #0a0f1d;
+                border: 1.5px solid {self._PRIMARY};
+                border-radius: 6px;
+                color: {self._PRIMARY_HOVER};
+                font-weight: 700;
+                font-size: 11px;
+            }}
+        """)
+        self.hg_cover_lbl.setText("🎬\nHongguo")
+        ic_layout.addWidget(self.hg_cover_lbl)
+
+        # Drama details (Title, Meta, Tags)
+        dt_lay = QVBoxLayout()
+        dt_lay.setSpacing(4)
+        dt_lay.setAlignment(Qt.AlignVCenter)
+
+        self.hg_title_lbl = QLabel("Chưa quét phim")
+        self.hg_title_lbl.setStyleSheet("font-size: 16px; font-weight: 800; color: #f8fafc;")
+        dt_lay.addWidget(self.hg_title_lbl)
+
+        self.hg_meta_lbl = QLabel("Nhập liên kết phim hoặc series_id bên trái rồi bấm 'QUÉT TẬP PHIM' để bắt đầu.")
+        self.hg_meta_lbl.setStyleSheet(f"font-size: 11px; color: {self._TEXT_MUTED};")
+        dt_lay.addWidget(self.hg_meta_lbl)
+
+        self.hg_tags_lbl = QLabel("")
+        self.hg_tags_lbl.setStyleSheet(f"font-size: 11px; color: {self._PRIMARY_HOVER}; font-weight: 600;")
+        dt_lay.addWidget(self.hg_tags_lbl)
+
+        ic_layout.addLayout(dt_lay, 1)
+
+        # Right badges
+        badge_box = QVBoxLayout()
+        badge_box.setSpacing(6)
+        badge_box.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+
+        self.hg_badge_free = QLabel("🎁 Miễn phí")
+        self.hg_badge_free.setStyleSheet(f"""
+            background: #2a1608; border: 1px solid {self._PRIMARY};
+            color: {self._PRIMARY_HOVER}; font-size: 10px; font-weight: 700;
+            padding: 4px 10px; border-radius: 6px;
+        """)
+        badge_box.addWidget(self.hg_badge_free)
+
+        self.hg_badge_status = QLabel("★ Đầy đủ tập")
+        self.hg_badge_status.setStyleSheet("""
+            background: #0c233c; border: 1px solid #0284c7;
+            color: #38bdf8; font-size: 10px; font-weight: 700;
+            padding: 4px 10px; border-radius: 6px;
+        """)
+        badge_box.addWidget(self.hg_badge_status)
+        ic_layout.addLayout(badge_box)
+
+        page_layout.addWidget(self.hg_info_card)
+
+        # 2. EPISODES GRID CARD
+        ep_card = QFrame(self)
+        ep_card.setStyleSheet(f"""
+            QFrame {{
+                background: {self._CARD};
+                border: 1px solid {self._CARD_BORDER};
+                border-radius: 8px;
+            }}
+        """)
+        ep_card_lay = QVBoxLayout(ep_card)
+        ep_card_lay.setContentsMargins(14, 12, 14, 12)
+        ep_card_lay.setSpacing(10)
+
+        # Header of Episode List
+        ep_head = QHBoxLayout()
+        ep_head.setSpacing(8)
+
+        lbl_ep_title = QLabel("DANH SÁCH TẬP")
+        lbl_ep_title.setStyleSheet(f"font-size: 12px; font-weight: 800; color: {self._PRIMARY}; letter-spacing: 0.5px;")
+        ep_head.addWidget(lbl_ep_title)
+
+        ep_head.addStretch()
+
+        btn_select_all = QPushButton("✓ Chọn tất cả")
+        btn_select_all.setStyleSheet(self._secondary_btn_style())
+        btn_select_all.clicked.connect(lambda: self._set_all_hongguo_episodes_checked(True))
+        ep_head.addWidget(btn_select_all)
+
+        btn_deselect_all = QPushButton("✗ Bỏ chọn")
+        btn_deselect_all.setStyleSheet(self._secondary_btn_style())
+        btn_deselect_all.clicked.connect(lambda: self._set_all_hongguo_episodes_checked(False))
+        ep_head.addWidget(btn_deselect_all)
+
+        ep_card_lay.addLayout(ep_head)
+
+        # Scroll Area for Episode Buttons Grid
+        self.hg_ep_scroll = QScrollArea(self)
+        self.hg_ep_scroll.setWidgetResizable(True)
+        self.hg_ep_scroll.setFrameShape(QFrame.NoFrame)
+        self.hg_ep_scroll.setStyleSheet("background: transparent;")
+
+        self.hg_ep_container = QWidget()
+        self.hg_ep_grid = QGridLayout(self.hg_ep_container)
+        self.hg_ep_grid.setContentsMargins(4, 4, 4, 4)
+        self.hg_ep_grid.setSpacing(8)
+
+        # Placeholder label when no episodes loaded yet
+        self.hg_ep_empty_lbl = QLabel("Vui lòng dán link hoặc ID phim Hồng Quả và bấm 'QUÉT TẬP PHIM' để tải danh sách tập.")
+        self.hg_ep_empty_lbl.setAlignment(Qt.AlignCenter)
+        self.hg_ep_empty_lbl.setStyleSheet(f"color: {self._TEXT_MUTED}; font-size: 12px; padding: 40px;")
+        self.hg_ep_grid.addWidget(self.hg_ep_empty_lbl, 0, 0, 1, 1)
+
+        self.hg_ep_scroll.setWidget(self.hg_ep_container)
+        ep_card_lay.addWidget(self.hg_ep_scroll, 1)
+
+        page_layout.addWidget(ep_card, 1)
+
+        # 3. CONTROL & DOWNLOAD BAR
+        ctrl_card = QFrame(self)
+        ctrl_card.setStyleSheet(f"""
+            QFrame {{
+                background: {self._CARD};
+                border: 1px solid {self._CARD_BORDER};
+                border-radius: 8px;
+            }}
+        """)
+        ctrl_lay = QVBoxLayout(ctrl_card)
+        ctrl_lay.setContentsMargins(14, 10, 14, 10)
+        ctrl_lay.setSpacing(8)
+
+        # Overall progress bar
+        self.hg_progress_bar = QProgressBar(self)
+        self.hg_progress_bar.setRange(0, 100)
+        self.hg_progress_bar.setValue(0)
+        self.hg_progress_bar.setFixedHeight(6)
+        self.hg_progress_bar.setTextVisible(False)
+        self.hg_progress_bar.setStyleSheet(f"""
+            QProgressBar {{
+                background: #0a0f1d; border-radius: 3px; border: none;
+            }}
+            QProgressBar::chunk {{
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {self._PRIMARY}, stop:1 {self._PRIMARY_DARK});
+                border-radius: 3px;
+            }}
+        """)
+        self.hg_progress_bar.hide()
+        ctrl_lay.addWidget(self.hg_progress_bar)
+
+        # Bottom action row
+        b_row = QHBoxLayout()
+        b_row.setSpacing(10)
+
+        self.hg_stats_lbl = QLabel("Đã chọn 0 tập")
+        self.hg_stats_lbl.setStyleSheet(f"font-size: 12px; font-weight: 700; color: {self._PRIMARY};")
+        b_row.addWidget(self.hg_stats_lbl)
+
+        b_row.addStretch()
+
+        lbl_th = QLabel("⚡ Luồng tải:")
+        lbl_th.setStyleSheet(f"font-size: 11px; font-weight: 600; color: {self._TEXT_MUTED};")
+        b_row.addWidget(lbl_th)
+
+        self.hg_threads_spin = QSpinBox(self)
+        self.hg_threads_spin.setRange(1, 32)
+        self.hg_threads_spin.setValue(16)
+        self.hg_threads_spin.setFixedWidth(70)
+        self.hg_threads_spin.setStyleSheet(self._input_style())
+        b_row.addWidget(self.hg_threads_spin)
+
+        self.btn_hg_download = QPushButton("📥 TẢI XUỐNG")
+        self.btn_hg_download.setFixedHeight(36)
+        self.btn_hg_download.setStyleSheet(f"""
+            QPushButton {{
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {self._PRIMARY}, stop:1 {self._PRIMARY_DARK});
+                border: none; border-radius: 6px; color: white;
+                font-size: 12px; font-weight: 800; padding: 0 18px; letter-spacing: 0.5px;
+            }}
+            QPushButton:hover {{
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {self._PRIMARY_HOVER}, stop:1 {self._PRIMARY});
+            }}
+            QPushButton:disabled {{
+                background: #1e293b; color: #64748b;
+            }}
+        """)
+        self.btn_hg_download.clicked.connect(self._on_start_download_hongguo)
+        b_row.addWidget(self.btn_hg_download)
+
+        self.btn_hg_stop_download = QPushButton("🛑 DỪNG")
+        self.btn_hg_stop_download.setFixedHeight(36)
+        self.btn_hg_stop_download.setEnabled(False)
+        self.btn_hg_stop_download.setStyleSheet(self._danger_btn_style())
+        self.btn_hg_stop_download.clicked.connect(self._on_stop_download_hongguo)
+        b_row.addWidget(self.btn_hg_stop_download)
+
+        ctrl_lay.addLayout(b_row)
+        page_layout.addWidget(ctrl_card)
+
+        # 4. LOG WINDOW CARD
+        log_card = QFrame(self)
+        log_card.setStyleSheet(f"""
+            QFrame {{
+                background: {self._CARD};
+                border: 1px solid {self._CARD_BORDER};
+                border-radius: 8px;
+            }}
+        """)
+        lc_lay = QVBoxLayout(log_card)
+        lc_lay.setContentsMargins(10, 8, 10, 8)
+        lc_lay.setSpacing(4)
+
+        log_head = QHBoxLayout()
+        lbl_log = QLabel("📋 NHẬT KÝ TIẾN TRÌNH QUÉT & TẢI")
+        lbl_log.setStyleSheet(f"font-size: 10px; font-weight: 700; color: {self._TEXT_MUTED};")
+        log_head.addWidget(lbl_log)
+        log_head.addStretch()
+
+        btn_clear_log = QPushButton("Xóa log")
+        btn_clear_log.setStyleSheet(f"font-size: 9px; color: {self._TEXT_MUTED}; background: transparent; border: none;")
+        btn_clear_log.clicked.connect(lambda: self.hg_log_edit.clear())
+        log_head.addWidget(btn_clear_log)
+        lc_lay.addLayout(log_head)
+
+        self.hg_log_edit = QTextEdit(self)
+        self.hg_log_edit.setReadOnly(True)
+        self.hg_log_edit.setFixedHeight(95)
+        self.hg_log_edit.setStyleSheet(f"""
+            QTextEdit {{
+                background: #070b14; border: 1px solid #141d2e;
+                border-radius: 4px; color: #cbd5e1; font-size: 10px;
+                font-family: Consolas, monospace; line-height: 1.3;
+            }}
+        """)
+        lc_lay.addWidget(self.hg_log_edit)
+        page_layout.addWidget(log_card)
+
+        return page
+
+    def _create_episode_card(self, ep: dict) -> QPushButton:
+        """Tạo nút tập theo dạng ô số với 2 dòng text chuẩn CapCap."""
+        ep_idx = ep.get("index", 1)
+        btn = QPushButton()
+        btn.setCheckable(True)
+        btn.setChecked(True)
+        btn.setFixedSize(68, 54)
+        btn.setCursor(Qt.PointingHandCursor)
+        init_status = ep.get("status_text") or ("Sẵn sàng" if ep.get("video_url") else "Khóa Web")
+        self._update_episode_button_ui(btn, ep_idx, init_status, is_checked=True)
+        btn.clicked.connect(lambda checked, idx=ep_idx, b=btn: self._on_episode_button_clicked(idx, b))
+        return btn
+
+    def _update_episode_button_ui(
+        self,
+        btn: QPushButton,
+        ep_idx: int,
+        status_text: str = "Sẵn sàng",
+        is_checked: bool = True,
+    ):
+        """Cập nhật giao diện nút tập: hiển thị số tập to và trạng thái bên dưới."""
+        btn.setText(f"{ep_idx:02d}\n{status_text}")
+        if "Hoàn tất" in status_text or "Đã có" in status_text:
+            border = "#10b981"
+            bg = "#06291a"
+            num_color = "#34d399"
+        elif "Lỗi" in status_text:
+            border = "#ef4444"
+            bg = "#2d0a0e"
+            num_color = "#fca5a5"
+        elif "Khóa" in status_text:
+            border = "#b45309"
+            bg = "#1e1408"
+            num_color = "#fbbf24"
+        elif "Tải" in status_text or "Bóc tách" in status_text or "Đang" in status_text:
+            border = "#38bdf8"
+            bg = "#0c233c"
+            num_color = "#7dd3fc"
+        elif is_checked:
+            border = self._PRIMARY
+            bg = "#2a1608"
+            num_color = self._PRIMARY_HOVER
+        else:
+            border = "#1e293b"
+            bg = "#0a0f1d"
+            num_color = "#94a3b8"
+
+        btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {bg};
+                border: 1.5px solid {border};
+                border-radius: 6px;
+                color: {num_color};
+                font-size: 13px;
+                font-weight: 800;
+                line-height: 1.2;
+                padding-top: 4px;
+            }}
+            QPushButton:hover {{
+                border-color: {self._PRIMARY_HOVER};
+            }}
+        """)
+
+    def _render_hongguo_episodes(self, drama_info: dict):
+        """Hiển thị toàn bộ danh sách tập của bộ phim lên lưới nút bấm."""
+        self._hg_drama_info = drama_info
+        self._hg_ep_buttons.clear()
+        self._hg_selected_eps.clear()
+        self._hg_ep_data.clear()
+
+        title = drama_info.get("title", "Hongguo Drama")
+        total_ep = drama_info.get("total_episodes", 0)
+        s_id = drama_info.get("series_id", "")
+        tags = " • ".join(drama_info.get("tags", []))
+        acc_cnt = drama_info.get("accessible_episodes", 0)
+
+        self.hg_title_lbl.setText(title)
+        info_txt = f"ID: {s_id} • {total_ep} tập"
+        if acc_cnt > 0 and acc_cnt < total_ep:
+            info_txt += f" • Web xem thử {acc_cnt} tập đầu"
+        else:
+            info_txt += " • Đầy đủ tập"
+        self.hg_meta_lbl.setText(info_txt)
+
+        if tags:
+            self.hg_tags_lbl.setText(f"🏷️ {tags}")
+        else:
+            self.hg_tags_lbl.setText("")
+
+        cover_url = drama_info.get("cover_url", "")
+        if cover_url:
+            self._load_hg_cover_async(cover_url)
+
+        # Clear grid cũ
+        while self.hg_ep_grid.count():
+            item = self.hg_ep_grid.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+
+        episodes = drama_info.get("episodes", [])
+        if not episodes:
+            lbl = QLabel("Không tìm thấy danh sách tập nào.")
+            lbl.setStyleSheet(f"color: {self._RED}; font-size: 12px; padding: 20px;")
+            self.hg_ep_grid.addWidget(lbl, 0, 0)
+            return
+
+        cols = 10
+        for i, ep in enumerate(episodes):
+            ep_idx = ep.get("index", i + 1)
+            # Gán trạng thái ban đầu cho tập
+            if not ep.get("status_text"):
+                if ep.get("video_url") or (acc_cnt > 0 and ep_idx <= acc_cnt):
+                    ep["status_text"] = "Sẵn sàng"
+                else:
+                    ep["status_text"] = "Khóa Web"
+
+            self._hg_ep_data[ep_idx] = ep
+            self._hg_selected_eps.add(ep_idx)
+
+            btn = self._create_episode_card(ep)
+            self._hg_ep_buttons[ep_idx] = btn
+            row = i // cols
+            col = i % cols
+            self.hg_ep_grid.addWidget(btn, row, col)
+
+        self._update_hongguo_selected_count()
+        self._append_hongguo_log(
+            f"[{time.strftime('%H:%M:%S')}] ✅ Đã nạp {len(episodes)} tập phim '{title}'.\n"
+            f"   💡 Ghi chú: Nền tảng Web Hongguo mở xem thử các tập đầu (1-{acc_cnt or 3}). "
+            f"Các tập sau ByteDance yêu cầu mở trên App Hồng Quả."
+        )
+
+    def _load_hg_cover_async(self, url: str):
+        """Tải ảnh bìa phim ngầm và nạp qua PIL an toàn cho Qt thread."""
+        def _fetch():
+            try:
+                req = urllib.request.Request(
+                    url,
+                    headers={
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/126.0.0.0",
+                        "Referer": "https://hongguoduanju.com/",
+                    },
+                )
+                with urllib.request.urlopen(req, timeout=12) as resp:
+                    raw = resp.read()
+                if raw:
+                    self.sig_hg_cover_ready.emit(raw)
+            except Exception as exc:
+                print(f"[Hongguo] cover fetch error: {exc}")
+        threading.Thread(target=_fetch, daemon=True).start()
+
+    def _apply_hg_cover_data(self, raw_bytes: bytes):
+        """Áp dụng ảnh bìa poster lên QLabel trên Main GUI Thread."""
+        if not hasattr(self, "hg_cover_lbl") or not self.hg_cover_lbl or not raw_bytes:
+            return
+        try:
+            pm = QPixmap()
+            ok = pm.loadFromData(raw_bytes)
+            if not ok or pm.isNull():
+                from PIL import Image
+                import io
+                pil_im = Image.open(io.BytesIO(raw_bytes)).convert("RGBA")
+                data = pil_im.tobytes("raw", "RGBA")
+                qimg = QImage(data, pil_im.width, pil_im.height, QImage.Format_RGBA8888)
+                pm = QPixmap.fromImage(qimg)
+
+            if not pm.isNull():
+                target_w = self.hg_cover_lbl.width() or 70
+                target_h = self.hg_cover_lbl.height() or 96
+                scaled = pm.scaled(target_w, target_h, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+                self.hg_cover_lbl.setPixmap(scaled)
+                self.hg_cover_lbl.setScaledContents(True)
+        except Exception as exc:
+            print(f"[Hongguo] apply cover error: {exc}")
+
+    def _on_episode_button_clicked(self, ep_idx: int, btn: QPushButton):
+        if ep_idx in self._hg_selected_eps:
+            self._hg_selected_eps.remove(ep_idx)
+            is_chk = False
+        else:
+            self._hg_selected_eps.add(ep_idx)
+            is_chk = True
+        btn.setChecked(is_chk)
+        txt_lines = btn.text().split("\n")
+        st = txt_lines[1] if len(txt_lines) > 1 else "Sẵn sàng"
+        self._update_episode_button_ui(btn, ep_idx, st, is_checked=is_chk)
+        self._update_hongguo_selected_count()
+
+    def _set_all_hongguo_episodes_checked(self, checked: bool):
+        if checked:
+            self._hg_selected_eps = set(self._hg_ep_buttons.keys())
+        else:
+            self._hg_selected_eps.clear()
+
+        for ep_idx, btn in self._hg_ep_buttons.items():
+            btn.setChecked(checked)
+            txt_lines = btn.text().split("\n")
+            st = txt_lines[1] if len(txt_lines) > 1 else "Sẵn sàng"
+            self._update_episode_button_ui(btn, ep_idx, st, is_checked=checked)
+
+        self._update_hongguo_selected_count()
+
+    def _update_hongguo_selected_count(self):
+        count = len(self._hg_selected_eps)
+        total = len(self._hg_ep_buttons)
+        if hasattr(self, "hg_stats_lbl"):
+            self.hg_stats_lbl.setText(f"Đã chọn {count}/{total} tập")
+
+    def _append_hongguo_log(self, text: str):
+        if hasattr(self, "hg_log_edit") and self.hg_log_edit:
+            self.hg_log_edit.append(text)
+            sb = self.hg_log_edit.verticalScrollBar()
+            if sb:
+                sb.setValue(sb.maximum())
 
     # ================================================================== #
     #  Card & Widget Styling Helpers                                      #
@@ -1474,21 +1985,41 @@ class VideoDownloaderDialog(QDialog):
         # Update config card title
         t_lbl = self.card_config.findChild(QLabel)
         if t_lbl:
-            t_lbl.setText(f"CẤU HÌNH QUÉT VIDEO ({p_name})")
+            if platform_id == "hongguo":
+                t_lbl.setText("CẤU HÌNH PHIM HỒNG QUẢ (HONGGUO 短剧)")
+            else:
+                t_lbl.setText(f"CẤU HÌNH QUÉT VIDEO ({p_name})")
 
-        # Update input placeholder
-        if platform_id == "douyin":
+        # Switch right view stack: Hongguo Drama Studio vs Standard Table
+        if hasattr(self, "right_stack"):
+            if platform_id == "hongguo":
+                self.right_stack.setCurrentIndex(1)
+            else:
+                self.right_stack.setCurrentIndex(0)
+
+        # Update input placeholder & scan button text
+        if platform_id == "hongguo":
+            self.url_input.setPlaceholderText("Dán link phim hoặc series_id (VD: https://hongguoduanju.com/detail?series_id=7680028248540974142)...")
+            self.btn_start_scan.setText("🎬 QUÉT TẬP PHIM")
+            self.header_status_badge.setText("🍎 Hongguo 短剧")
+        elif platform_id == "douyin":
             self.url_input.setPlaceholderText("Dán link kênh Douyin (https://www.douyin.com/user/...)...")
+            self.btn_start_scan.setText("⚡ BẮT ĐẦU QUÉT NGẦM")
         elif platform_id == "tiktok":
             self.url_input.setPlaceholderText("Dán link kênh TikTok (@username hoặc link profile)...")
+            self.btn_start_scan.setText("⚡ BẮT ĐẦU QUÉT NGẦM")
         elif platform_id == "youtube":
             self.url_input.setPlaceholderText("Dán link kênh hoặc playlist YouTube...")
+            self.btn_start_scan.setText("⚡ BẮT ĐẦU QUÉT NGẦM")
         elif platform_id == "bilibili":
             self.url_input.setPlaceholderText("Dán link kênh Bilibili (https://space.bilibili.com/...)...")
+            self.btn_start_scan.setText("⚡ BẮT ĐẦU QUÉT NGẦM")
         elif platform_id in ("facebook", "reels"):
             self.url_input.setPlaceholderText("Dán link trang/kênh Facebook, Reels tab (https://www.facebook.com/...) hoặc link video...")
+            self.btn_start_scan.setText("⚡ BẮT ĐẦU QUÉT NGẦM")
         else:
             self.url_input.setPlaceholderText(f"Dán link video hoặc trang {p_name}...")
+            self.btn_start_scan.setText("⚡ BẮT ĐẦU QUÉT NGẦM")
 
         # Update cookie title & placeholder & load saved cookie for current platform
         if hasattr(self, "lbl_cookie_title"):
@@ -1627,6 +2158,11 @@ class VideoDownloaderDialog(QDialog):
     #  Scanning Logic                                                    #
     # ================================================================== #
     def _on_start_scan(self):
+        # Route to Hongguo drama scan if platform is Hongguo
+        if getattr(self, "_selected_platform", "") == "hongguo":
+            self._on_start_scan_hongguo()
+            return
+
         url = self.url_input.text().strip()
         if not url:
             QMessageBox.warning(self, "Quét Video", "Vui lòng nhập Link kênh hoặc Link video muốn quét!")
@@ -1688,6 +2224,11 @@ class VideoDownloaderDialog(QDialog):
         self._scan_worker.start()
 
     def _on_stop_scan(self):
+        # Route to Hongguo drama stop if platform is Hongguo
+        if getattr(self, "_selected_platform", "") == "hongguo":
+            self._on_stop_scan_hongguo()
+            return
+
         if self._scan_worker and self._scan_worker.isRunning():
             self._scan_worker.cancel()
             self.scan_status_lbl.setText("Đang dừng quét...")
@@ -2209,4 +2750,183 @@ class VideoDownloaderDialog(QDialog):
             )
             if res == QMessageBox.Yes:
                 self._on_open_download_dir()
+
+    # ================================================================== #
+    #  Hongguo Drama Scan & Download Handlers                             #
+    # ================================================================== #
+    def _get_hongguo_cookie_str(self) -> str:
+        """Lấy chuỗi Cookie Hồng Quả chuẩn hóa dạng name=value;..."""
+        ck_text = self.cookie_input.toPlainText().strip()
+        if ck_text:
+            return ck_text
+        raw_ck = get_saved_platform_cookies("hongguo")
+        if isinstance(raw_ck, tuple):
+            ck_list = raw_ck[0]
+            if isinstance(ck_list, list):
+                return "; ".join([f"{c['name']}={c['value']}" for c in ck_list if isinstance(c, dict) and "name" in c])
+        elif isinstance(raw_ck, str):
+            return raw_ck
+        return ""
+
+    def _on_start_scan_hongguo(self):
+        """Bắt đầu quét tập phim Hồng Quả."""
+        url = self.url_input.text().strip()
+        if not url:
+            QMessageBox.warning(self, "Quét Phim Hồng Quả", "Vui lòng dán liên kết hoặc ID phim Hồng Quả!")
+            return
+
+        series_id = parse_hongguo_id(url)
+        if not series_id:
+            QMessageBox.warning(self, "Quét Phim Hồng Quả", "Không tìm thấy series_id hợp lệ từ liên kết hoặc chuỗi nhập vào!")
+            return
+
+        ck_text = self.cookie_input.toPlainText().strip()
+        if ck_text:
+            save_platform_cookies("hongguo", ck_text)
+
+        cookies = self._get_hongguo_cookie_str() or None
+
+        self.btn_start_scan.setEnabled(False)
+        self.btn_stop_scan.setEnabled(True)
+        self.scan_progress.show()
+        self.scan_status_lbl.setText(f"Đang phân tích phim ID {series_id}...")
+        self.header_status_badge.setText("🍎 Đang quét Hồng Quả...")
+        self._append_hongguo_log(f"[{time.strftime('%H:%M:%S')}] 🔍 Bắt đầu quét phim ID: {series_id}...")
+
+        self._hg_scan_worker = HongguoScanWorker(url, cookies=cookies, parent=self)
+        self._hg_scan_worker.sig_progress.connect(self._on_hg_scan_progress)
+        self._hg_scan_worker.sig_done.connect(self._on_hg_scan_done)
+        self._hg_scan_worker.sig_error.connect(self._on_hg_scan_error)
+        self._hg_scan_worker.start()
+
+    def _on_stop_scan_hongguo(self):
+        """Dừng quét phim Hồng Quả."""
+        if self._hg_scan_worker and self._hg_scan_worker.isRunning():
+            self._hg_scan_worker.cancel()
+            self.scan_status_lbl.setText("Đang dừng quét phim...")
+            self.btn_stop_scan.setEnabled(False)
+            self._append_hongguo_log(f"[{time.strftime('%H:%M:%S')}] 🛑 Đã gửi lệnh dừng quét.")
+
+    def _on_hg_scan_progress(self, msg: str):
+        self.scan_status_lbl.setText(msg)
+        self._append_hongguo_log(f"[{time.strftime('%H:%M:%S')}] {msg}")
+
+    def _on_hg_scan_done(self, drama_info: dict):
+        self.btn_start_scan.setEnabled(True)
+        self.btn_stop_scan.setEnabled(False)
+        self.scan_progress.hide()
+        title = drama_info.get("title", "")
+        cnt = drama_info.get("total_episodes", 0)
+        self.scan_status_lbl.setText(f"Quét hoàn tất: {title} ({cnt} tập)")
+        self.header_status_badge.setText(f"🍎 Đã quét {cnt} tập")
+        self._render_hongguo_episodes(drama_info)
+
+    def _on_hg_scan_error(self, err_msg: str):
+        self.btn_start_scan.setEnabled(True)
+        self.btn_stop_scan.setEnabled(False)
+        self.scan_progress.hide()
+        self.scan_status_lbl.setText("Lỗi quét phim!")
+        self.header_status_badge.setText("⚠️ Lỗi quét")
+        self._append_hongguo_log(f"[{time.strftime('%H:%M:%S')}] ❌ Lỗi quét phim: {err_msg}")
+        QMessageBox.warning(
+            self,
+            "Lỗi Quét Phim Hồng Quả",
+            f"Không thể lấy thông tin phim:\n{err_msg}\n\n💡 Mẹo: Bạn có thể nhập Cookie Hồng Quả ở khung Cookie bên trái để truy cập đầy đủ tất cả các tập.",
+        )
+
+    def _on_start_download_hongguo(self):
+        """Bắt đầu tải các tập phim Hồng Quả đã chọn với đa luồng."""
+        if not self._hg_drama_info:
+            QMessageBox.warning(self, "Tải Phim", "Vui lòng quét thông tin phim trước khi bấm tải!")
+            return
+
+        if not self._hg_selected_eps:
+            QMessageBox.warning(self, "Tải Phim", "Bạn chưa chọn tập nào để tải! Vui lòng chọn ít nhất 1 tập.")
+            return
+
+        out_dir = self.output_dir_input.text().strip()
+        if not out_dir:
+            out_dir = os.path.join(self._workspace_root, "output", "Hongguo")
+        os.makedirs(out_dir, exist_ok=True)
+
+        selected_list = []
+        for ep_idx in sorted(self._hg_selected_eps):
+            if ep_idx in self._hg_ep_data:
+                selected_list.append(self._hg_ep_data[ep_idx])
+
+        threads = self.hg_threads_spin.value()
+        cookies = self._get_hongguo_cookie_str() or None
+
+        self.btn_hg_download.setEnabled(False)
+        self.btn_hg_stop_download.setEnabled(True)
+        self.hg_progress_bar.show()
+        self.hg_progress_bar.setValue(0)
+
+        self._hg_download_worker = HongguoDownloadWorker(
+            drama_info=self._hg_drama_info,
+            selected_episodes=selected_list,
+            output_dir=out_dir,
+            threads=threads,
+            cookies=cookies,
+            parent=self,
+        )
+        self._hg_download_worker.sig_ep_status.connect(self._on_hg_ep_status)
+        self._hg_download_worker.sig_ep_completed.connect(self._on_hg_ep_completed)
+        self._hg_download_worker.sig_ep_error.connect(self._on_hg_ep_error)
+        self._hg_download_worker.sig_overall_progress.connect(self._on_hg_overall_progress)
+        self._hg_download_worker.sig_log.connect(self._append_hongguo_log)
+        self._hg_download_worker.sig_all_done.connect(self._on_hg_all_done)
+        self._hg_download_worker.start()
+
+    def _on_stop_download_hongguo(self):
+        """Dừng tải đa luồng các tập phim Hồng Quả."""
+        if self._hg_download_worker and self._hg_download_worker.isRunning():
+            self._hg_download_worker.cancel()
+            self._append_hongguo_log(f"[{time.strftime('%H:%M:%S')}] 🛑 Đang gửi lệnh dừng tải đa luồng...")
+            self.btn_hg_stop_download.setEnabled(False)
+
+    def _on_hg_ep_status(self, ep_idx: int, status_text: str):
+        btn = self._hg_ep_buttons.get(ep_idx)
+        if btn:
+            is_chk = ep_idx in self._hg_selected_eps
+            self._update_episode_button_ui(btn, ep_idx, status_text, is_checked=is_chk)
+
+    def _on_hg_ep_completed(self, ep_idx: int, file_path: str):
+        btn = self._hg_ep_buttons.get(ep_idx)
+        if btn:
+            self._update_episode_button_ui(btn, ep_idx, "Hoàn tất ✓", is_checked=True)
+
+    def _on_hg_ep_error(self, ep_idx: int, error_msg: str):
+        btn = self._hg_ep_buttons.get(ep_idx)
+        if btn:
+            self._update_episode_button_ui(btn, ep_idx, "Lỗi", is_checked=True)
+
+    def _on_hg_overall_progress(self, completed: int, total: int, pct: int):
+        if hasattr(self, "hg_progress_bar"):
+            self.hg_progress_bar.setValue(pct)
+        if hasattr(self, "hg_stats_lbl"):
+            self.hg_stats_lbl.setText(f"Tiến độ: {completed}/{total} tập ({pct}%)")
+
+    def _on_hg_all_done(self, success_count: int, fail_count: int):
+        self.btn_hg_download.setEnabled(True)
+        self.btn_hg_stop_download.setEnabled(False)
+        self.hg_progress_bar.hide()
+        total = success_count + fail_count
+        self._update_hongguo_selected_count()
+
+        if fail_count == 0 and success_count > 0:
+            res = QMessageBox.information(
+                self,
+                "Tải Phim Hoàn Tất",
+                f"🎉 Đã tải thành công {success_count}/{total} tập phim!\n\nThư mục: {self.output_dir_input.text()}\nBạn có muốn mở thư mục không?",
+                QMessageBox.Yes | QMessageBox.No,
+            )
+            if res == QMessageBox.Yes:
+                self._on_open_download_dir()
+        else:
+            QMessageBox.information(
+                self,
+                "Kết Quả Tải Phim",
+                f"Quá trình tải phim đã kết thúc:\n- Thành công: {success_count} tập\n- Thất bại / Bị dừng: {fail_count} tập.",
+            )
 

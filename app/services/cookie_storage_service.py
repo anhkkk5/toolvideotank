@@ -165,6 +165,7 @@ PLATFORM_DOMAINS = {
     "youtube": ".youtube.com",
     "kuaishou": ".kuaishou.com",
     "xiaohongshu": ".xiaohongshu.com",
+    "hongguo": ".hongguoduanju.com",
 }
 
 PLATFORM_DISPLAY_NAMES = {
@@ -177,6 +178,7 @@ PLATFORM_DISPLAY_NAMES = {
     "youtube": "YouTube",
     "kuaishou": "Kuaishou",
     "xiaohongshu": "Xiaohongshu (RED)",
+    "hongguo": "Hongguo (红果)",
 }
 
 
@@ -187,6 +189,8 @@ def detect_cookie_platform(raw_input: str, default_platform: str = "douyin") -> 
         return default_platform
 
     # 1. Nhận diện theo domain trong ATP / link / chuỗi cookie
+    if "hongguoduanju.com" in raw or "hongguo" in raw:
+        return "hongguo"
     if "bilibili.com" in raw or "b23.tv" in raw:
         return "bilibili"
     if "douyin.com" in raw or "iesdouyin.com" in raw:
