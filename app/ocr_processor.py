@@ -872,7 +872,8 @@ def transcribe_video_ocr(video_path, *, region="bottom", fps=None, ocr_engine=No
     if seg_start is not None and seg_text_lines:
         combined = " ".join(seg_text_lines).strip()
         if combined:
-            video_duration = total_frames / video_fps if total_frames and video_fps else (total_steps * frame_interval)
+            if not video_duration or video_duration <= 0:
+                video_duration = (total_steps * frame_interval) if total_steps > 0 else (sampled_count * frame_interval)
             if end_seconds is not None:
                 video_duration = min(video_duration, float(end_seconds))
             end_ts = max(seg_start + frame_interval, video_duration)
