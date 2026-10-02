@@ -142,10 +142,13 @@ class VoiceMappingService:
             segment.voice_name = ""
             return None
 
-        # 3. Đọc final_gender (nếu rỗng hoặc unknown thì fallback sang gender)
-        raw_final = str(getattr(segment, "final_gender", "") or "").lower().strip()
-        if not raw_final or raw_final == "unknown":
-            raw_final = str(getattr(segment, "gender", "unknown") or "unknown").lower().strip()
+        # 3. Đọc giới tính (nếu người dùng sửa thủ công thì ưu tiên tuyệt đối gender do người dùng chọn)
+        if getattr(segment, "manual_override", False) or getattr(segment, "decision_mode", "") == "manual" or getattr(segment, "status", "") == "manual_override":
+            raw_final = str(getattr(segment, "gender", "") or getattr(segment, "final_gender", "") or "unknown").lower().strip()
+        else:
+            raw_final = str(getattr(segment, "final_gender", "") or "").lower().strip()
+            if not raw_final or raw_final == "unknown":
+                raw_final = str(getattr(segment, "gender", "unknown") or "unknown").lower().strip()
 
         if raw_final in ("female", "nữ", "nu"):
             final_g = "female"

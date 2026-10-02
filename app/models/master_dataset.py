@@ -51,7 +51,10 @@ class MasterDataset:
             if seg.is_noise:
                 counts["noise"] += 1
                 continue
-            g = str(getattr(seg, "final_gender", "") or getattr(seg, "gender", "") or "unknown").lower().strip()
+            if getattr(seg, "manual_override", False) or str(getattr(seg, "decision_mode", "")).lower() == "manual":
+                g = str(getattr(seg, "gender", "") or getattr(seg, "final_gender", "") or "unknown").lower().strip()
+            else:
+                g = str(getattr(seg, "final_gender", "") or getattr(seg, "gender", "") or "unknown").lower().strip()
             if g in ("female", "nữ", "nu"):
                 g = "female"
             elif g in ("male", "nam"):
@@ -86,7 +89,10 @@ class MasterDataset:
         for seg in self.segments:
             if seg.is_noise or seg.skip_tts:
                 continue
-            g = str(getattr(seg, "final_gender", "") or getattr(seg, "gender", "") or "unknown").lower().strip()
+            if getattr(seg, "manual_override", False) or str(getattr(seg, "decision_mode", "")).lower() == "manual":
+                g = str(getattr(seg, "gender", "") or getattr(seg, "final_gender", "") or "unknown").lower().strip()
+            else:
+                g = str(getattr(seg, "final_gender", "") or getattr(seg, "gender", "") or "unknown").lower().strip()
             if g in ("female", "nữ", "nu"):
                 g = "female"
             elif g in ("male", "nam"):

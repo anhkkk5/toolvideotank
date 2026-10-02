@@ -235,7 +235,8 @@ class VoiceGenderMixin:
     def _update_voice_gender_history(self, entry_id, result):
         from datetime import datetime
 
-        entries = self._load_voice_gender_history()
+        video_path = str((result or {}).get("video_path") or getattr(self, "_voice_gender_check_video_path", ""))
+        entries = self._load_voice_gender_history(video_path)
         for entry in entries:
             if str(entry.get("id", "")) == str(entry_id):
                 entry["result"] = copy.deepcopy(dict(result or {}))
@@ -243,7 +244,7 @@ class VoiceGenderMixin:
                 break
         else:
             return False
-        path = self._voice_gender_history_file()
+        path = self._voice_gender_history_file(video_path)
         temp_file = path + ".tmp"
         with open(temp_file, "w", encoding="utf-8") as handle:
             json.dump({"version": 1, "entries": entries}, handle, ensure_ascii=False, indent=2)
@@ -604,8 +605,12 @@ class VoiceGenderMixin:
         def manual_gender_changed(row_index, combo):
             if not (0 <= row_index < len(rows)):
                 return
-            rows[row_index]["gender"] = str(combo.currentData() or "unknown")
+            new_g = str(combo.currentData() or "unknown")
+            rows[row_index]["gender"] = new_g
+            rows[row_index]["final_gender"] = new_g
             rows[row_index]["confidence"] = 1.0
+            rows[row_index]["final_decision_confidence"] = 100.0
+            rows[row_index]["decision_mode"] = "manual"
             rows[row_index]["source"] = "manual"
             rows[row_index]["status"] = "manual_override"
             rows[row_index]["manual_override"] = True

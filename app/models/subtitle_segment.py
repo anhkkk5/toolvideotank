@@ -43,6 +43,7 @@ class SubtitleSegment:
     acoustic_hint: str = ""                # Gợi ý âm học kèm mức tin cậy (vd: male 52.8% (0.8s, LOW trust))
     cluster_female_ratio: float = 0.5      # Tỉ lệ nữ trong cluster
     cluster_male_ratio: float = 0.5        # Tỉ lệ nam trong cluster
+    manual_override: bool = False          # True nếu người dùng đã can thiệp chọn thủ công
 
     def to_dict(self) -> dict[str, Any]:
         """Convert segment to serializable dictionary."""
@@ -73,15 +74,24 @@ class SubtitleSegment:
         if not status or status not in {"none", "pending", "translated", "manual", "noise", "failed"}:
             status = "manual" if trans_edited else ("translated" if trans else "none")
 
-        raw_final = str(data.get("final_gender", "") or "").lower().strip()
-        if raw_final in {"nữ", "nu", "female"}:
-            final_gender = "female"
-        elif raw_final in {"nam", "male"}:
-            final_gender = "male"
-        elif raw_final == "none":
-            final_gender = "none"
-        else:
+        is_manual = bool(
+            data.get("manual_override", False)
+            or data.get("status") == "manual_override"
+            or str(data.get("decision_mode", "")).lower() == "manual"
+            or str(data.get("source", "")).lower() == "manual"
+        )
+        if is_manual and gender in {"male", "female", "none"}:
             final_gender = gender
+        else:
+            raw_final = str(data.get("final_gender", "") or "").lower().strip()
+            if raw_final in {"nữ", "nu", "female"}:
+                final_gender = "female"
+            elif raw_final in {"nam", "male"}:
+                final_gender = "male"
+            elif raw_final == "none":
+                final_gender = "none"
+            else:
+                final_gender = gender
 
         raw_g = str(data.get("raw_gender", "") or "").lower().strip()
         if raw_g in {"nữ", "nu", "female"}:
@@ -106,7 +116,7 @@ class SubtitleSegment:
             raw_gender_confidence=float(data.get("raw_gender_confidence", 0.0) or 0.0),
             final_gender=final_gender,
             final_decision_confidence=float(data.get("final_decision_confidence", 0.0) or data.get("confidence", 0.0) or 0.0),
-            decision_mode=str(data.get("decision_mode", "raw_audio") or "raw_audio"),
+            decision_mode="manual" if is_manual else str(data.get("decision_mode", "raw_audio") or "raw_audio"),
             audio_quality=str(data.get("audio_quality", "clean") or "clean"),
             speech_duration=float(data.get("speech_duration", 0.0) or 0.0),
             speech_ratio=float(data.get("speech_ratio", 0.0) or 0.0),
@@ -124,4 +134,5 @@ class SubtitleSegment:
             acoustic_hint=str(data.get("acoustic_hint", "") or "").strip(),
             cluster_female_ratio=float(data.get("cluster_female_ratio", 0.5) or 0.5),
             cluster_male_ratio=float(data.get("cluster_male_ratio", 0.5) or 0.5),
+            manual_override=is_manual,
         )
