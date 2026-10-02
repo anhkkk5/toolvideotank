@@ -1043,19 +1043,32 @@ class LauncherWindow(QDialog):
             print(f"[Launcher] Resource validation failed: {exc}")
 
         duration = _get_video_duration(self.selected_video)
-        MAX_DURATION = 7200
-        if duration > MAX_DURATION:
+        RECOMMENDED_DURATION = 7200  # 2 giờ khuyến nghị để tối ưu RAM và tốc độ
+        if duration > RECOMMENDED_DURATION:
             h = int(duration // 3600)
             m = int((duration % 3600) // 60)
             from PySide6.QtWidgets import QMessageBox
-            reply = QMessageBox.warning(
-                self, "Video quá dài",
-                f"Video này dài {h} giờ {m} phút.\nTankVideo hoạt động tối ưu nhất với video dưới 2 giờ.\n\n"
-                "Hãy dùng tính năng 'Cắt chia video' để chia nhỏ thành từng đoạn trước.",
-                QMessageBox.Ok,
+            mb = QMessageBox(self)
+            mb.setIcon(QMessageBox.Warning)
+            mb.setWindowTitle("Video có thời lượng lớn")
+            mb.setText(f"Video này dài {h} giờ {m} phút.")
+            mb.setInformativeText(
+                "Để đảm bảo ứng dụng hoạt động mượt mà, tránh tràn bộ nhớ RAM và xử lý nhanh nhất, hệ thống khuyến nghị video dưới 2 giờ.\n\n"
+                "• Bấm 'Vẫn tiếp tục' nếu bạn muốn nhập trực tiếp toàn bộ video này vào dự án.\n"
+                "• Bấm 'Cắt chia video' để chia nhỏ thành từng đoạn (sao chép luồng cực nhanh, không giảm chất lượng)."
             )
-            reply.setStyleSheet(MSG_STYLE)
-            return
+            btn_continue = mb.addButton("Vẫn tiếp tục", QMessageBox.AcceptRole)
+            btn_split = mb.addButton("Cắt chia video", QMessageBox.ActionRole)
+            btn_cancel = mb.addButton("Hủy", QMessageBox.RejectRole)
+            mb.setStyleSheet(MSG_STYLE)
+            mb.exec()
+
+            clicked = mb.clickedButton()
+            if clicked == btn_split:
+                self._on_split_clicked()
+                return
+            elif clicked == btn_cancel:
+                return
 
         self._set_selected_device(self.selected_device)
         self.loading_label.show()
