@@ -1160,6 +1160,9 @@ class VideoDownloaderService:
             "quiet": True,
             "no_warnings": True,
             "noprogress": True,
+            "retries": 15,
+            "fragment_retries": 15,
+            "http_chunk_size": 10485760,  # 10 MB chunks avoids Akamai/Bilibili CDN stream cutoff
             # No watermark tricks
             "extractor_args": {"tiktok": ["app_version=0"]},
         }
@@ -1184,8 +1187,12 @@ class VideoDownloaderService:
             _, netscape_path, ua = get_saved_platform_cookies(platform)
             if netscape_path and os.path.exists(netscape_path):
                 ydl_opts["cookiefile"] = netscape_path
-            if ua:
-                ydl_opts["http_headers"] = {"User-Agent": ua}
+            headers = {
+                "User-Agent": ua or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            }
+            if platform == "bilibili" or "bilibili.com" in url or "b23.tv" in url:
+                headers["Referer"] = "https://www.bilibili.com/"
+            ydl_opts["http_headers"] = headers
 
         result = {"success": False, "files": [], "error": "", "platform": platform}
 
@@ -1465,8 +1472,23 @@ class VideoDownloaderService:
             "quiet": True,
             "no_warnings": True,
             "noprogress": True,
+            "retries": 15,
+            "fragment_retries": 15,
+            "http_chunk_size": 10485760,  # 10 MB chunks avoids Akamai/Bilibili CDN stream cutoff
             "extractor_args": {"tiktok": ["app_version=0"]},
         }
+
+        if platform in ("tiktok", "bilibili", "youtube", "facebook", "instagram", "kuaishou"):
+            from app.services.cookie_storage_service import get_saved_platform_cookies
+            _, netscape_path, ua = get_saved_platform_cookies(platform)
+            if netscape_path and os.path.exists(netscape_path):
+                dl_opts["cookiefile"] = netscape_path
+            headers = {
+                "User-Agent": ua or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            }
+            if platform == "bilibili" or "bilibili.com" in url or "b23.tv" in url:
+                headers["Referer"] = "https://www.bilibili.com/"
+            dl_opts["http_headers"] = headers
 
         downloaded_count = 0
         for idx, entry in enumerate(entries, 1):
