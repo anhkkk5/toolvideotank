@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import threading
 import time
 from dataclasses import dataclass, field, asdict
 from typing import Any, Literal
@@ -645,6 +646,7 @@ class VideoExportRequest:
     delogo_watermark_mode: str = "delogo"  # "delogo" (Xóa sạch tàng hình, 0s), "telea", "boxblur"
     delogo_custom_rect: tuple[float, float, float, float] | None = None
     delogo_custom_mode: Literal["delogo", "boxblur", "inpaint"] = "inpaint"
+    progress_callback: Any = None
 
 
 def build_delogo_filters(
@@ -1218,15 +1220,58 @@ class VideoExportService:
             if t_audio > t_video and request.overflow_policy == "shortest":
                 cmd.append("-shortest")
 
+            progress_cb = getattr(request, "progress_callback", None)
+            if progress_cb:
+                cmd.extend(["-progress", "pipe:1"])
+
             cmd.append(request.output_video_path)
 
-            kwargs: dict[str, Any] = {"capture_output": True}
+            kwargs: dict[str, Any] = {
+                "stdout": subprocess.PIPE if progress_cb else subprocess.DEVNULL,
+                "stderr": subprocess.PIPE,
+            }
             if os.name == "nt":
                 kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
-            proc = subprocess.run(cmd, **kwargs)
+            proc = subprocess.Popen(cmd, **kwargs)
+            stderr_chunks: list[bytes] = []
+
+            def _drain_stderr():
+                try:
+                    for line in iter(proc.stderr.readline, b""):
+                        stderr_chunks.append(line)
+                except Exception:
+                    pass
+
+            t_err = threading.Thread(target=_drain_stderr, daemon=True)
+            t_err.start()
+
+            if progress_cb:
+                try:
+                    last_pct_reported = -1.0
+                    for raw_line in iter(proc.stdout.readline, b""):
+                        line = raw_line.decode("utf-8", errors="ignore").strip()
+                        if line.startswith("out_time="):
+                            t_val = line.split("=", 1)[1].strip()
+                            parts = t_val.split(":")
+                            if len(parts) == 3:
+                                try:
+                                    cur_sec = float(parts[0]) * 3600 + float(parts[1]) * 60 + float(parts[2])
+                                    ref_dur = max(1.0, float(t_video or 1.0))
+                                    pct = min(0.99, max(0.0, cur_sec / ref_dur))
+                                    if abs(pct - last_pct_reported) >= 0.005 or pct >= 0.98:
+                                        last_pct_reported = pct
+                                        progress_cb(pct, t_val)
+                                except Exception:
+                                    pass
+                except Exception:
+                    pass
+
+            proc.wait()
+            t_err.join(timeout=2.0)
+
             if proc.returncode != 0 or not os.path.isfile(request.output_video_path):
-                err_text = proc.stderr.decode("utf-8", errors="ignore") if proc.stderr else "Unknown FFmpeg error"
+                err_text = b"".join(stderr_chunks).decode("utf-8", errors="ignore") if stderr_chunks else "Unknown FFmpeg error"
                 return VideoExportResult(
                     video_duration=t_video,
                     audio_duration=t_audio,

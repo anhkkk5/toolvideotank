@@ -874,6 +874,22 @@ class VideoCreatorService:
             delogo_custom_mode=getattr(request.config, "delogo_custom_mode", "delogo"),
         )
 
+        # Chuyển tiếp tiến độ xuất bản video thời gian thực từ FFmpeg (Stage 4: 75% -> 98%)
+        def _on_export_render_progress(sub_pct: float, time_str: str):
+            if request.progress_callback:
+                orchestrator_pct = 75.0 + (sub_pct * 23.0)
+                clean_time = time_str.split(".")[0] if "." in time_str else time_str
+                p_display = int(sub_pct * 100)
+                try:
+                    request.progress_callback(
+                        orchestrator_pct,
+                        f"Đang xuất bản MP4: {clean_time} ({p_display}%)",
+                    )
+                except Exception:
+                    pass
+
+        export_req.progress_callback = _on_export_render_progress
+
         # ---------------------------------------------------------------------
         # 4. GỌI EXPORT_VIDEO VỚI EXCEPTION HANDLING TẤT ĐỊNH
         # ---------------------------------------------------------------------

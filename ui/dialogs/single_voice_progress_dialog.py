@@ -130,7 +130,18 @@ class SingleVoicePipelineWorker(QThread):
 
                 engine = EngineRuntime()
                 region = str(os.getenv("OCR_SUBTITLE_REGION", "bottom") or "bottom")
-                raw_cues = list(engine.transcribe_video_ocr(self.video_path, region=region) or [])
+
+                def _on_ocr_progress(cur, total, ocr_cnt, skip_cnt):
+                    if self._cancel_event.is_set():
+                        return
+                    if total > 0:
+                        pct = 5.0 + (cur / total) * 20.0
+                        p_int = cur * 100 // total
+                        msg = f"Đang quét OCR: Frame {cur}/{total} ({p_int}%) - Đã tìm thấy {ocr_cnt} câu..."
+                        self.progress_updated.emit(pct, msg)
+                        self.log_emitted.emit(f"[OCR] Frame {cur}/{total} ({p_int}%, OCR: {ocr_cnt}, skip: {skip_cnt})")
+
+                raw_cues = list(engine.transcribe_video_ocr(self.video_path, region=region, progress_callback=_on_ocr_progress) or [])
                 self.log_emitted.emit(f"[OCR] Quét thô hoàn tất, tìm thấy {len(raw_cues)} đoạn text.")
                 cues = SubtitleMergeService.merge_cues([dict(c) for c in raw_cues if str(c.get("text", "")).strip()])
 

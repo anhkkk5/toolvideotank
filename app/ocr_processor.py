@@ -670,7 +670,7 @@ def _iter_video_frames(video_path, target_fps, start_seconds=0.0, end_seconds=No
         cap.release()
 
 
-def transcribe_video_ocr(video_path, *, region="bottom", fps=None, ocr_engine=None, start_seconds=0.0, end_seconds=None):
+def transcribe_video_ocr(video_path, *, region="bottom", fps=None, ocr_engine=None, start_seconds=0.0, end_seconds=None, progress_callback=None, **kwargs):
     workflow_started = time.perf_counter()
     profiling = {
         "engine_init": 0.0,
@@ -813,9 +813,15 @@ def transcribe_video_ocr(video_path, *, region="bottom", fps=None, ocr_engine=No
 
         step += 1
 
-        if sampled_count % 30 == 0:
+        if sampled_count % 30 == 0 or (total_steps > 0 and sampled_count >= total_steps):
             pct = sampled_count * 100 // total_steps if total_steps > 0 else 0
-            print(f"[OCR] Frame {sampled_count}/{total_steps} ({pct}%, OCR: {ocr_count}, skip: {skip_count})")
+            msg = f"[OCR] Frame {sampled_count}/{total_steps} ({pct}%, OCR: {ocr_count}, skip: {skip_count})"
+            print(msg)
+            if progress_callback:
+                try:
+                    progress_callback(sampled_count, total_steps, ocr_count, skip_count)
+                except Exception:
+                    pass
 
         temporal_started = time.perf_counter()
         if not texts:
@@ -898,6 +904,11 @@ def transcribe_video_ocr(video_path, *, region="bottom", fps=None, ocr_engine=No
     merged = _merge_adjacent(segments, max_gap=adaptive_max_gap)
     profiling["temporal"] += time.perf_counter() - final_temporal_started
     print(f"[OCR] Extracted {len(merged)} subtitle segments from {total_steps} frames (OCR: {ocr_count}, skip: {skip_count})")
+    if progress_callback and total_steps > 0:
+        try:
+            progress_callback(total_steps, total_steps, ocr_count, skip_count)
+        except Exception:
+            pass
     inference_samples = profiling["ocr_inference_samples"]
     inference_avg_ms = (sum(inference_samples) / len(inference_samples) * 1000.0) if inference_samples else 0.0
     inference_p95_ms = float(np.percentile(inference_samples, 95) * 1000.0) if inference_samples else 0.0
